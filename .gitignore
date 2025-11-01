@@ -17,5 +17,9 @@ jsi.o
 # macOS
 .DS_Store
 
-# Hermes build directory (not in git)
+# Submodule build directories (not in git)
 vendor/hermes/build/
+vendor/ghostty/zig-out/
+vendor/ghostty/zig-cache/
+vendor/neovim/build/
+vendor/neovim/.deps/
