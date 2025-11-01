@@ -1,0 +1,91 @@
+# Makefile for Hermes+JSI demo
+# Workaround for Zig linker crash bug
+
+# Paths
+HERMES_BUILD = vendor/hermes/build
+HERMES_API = vendor/hermes/API
+ZIG_CACHE = .zig-cache/o/b15e6bd549907f8d1ab2319cbba021cc
+
+# Compiler flags
+CXX = clang++
+CXXFLAGS = -std=c++17 -fno-sanitize=all -O2
+INCLUDES = -I src \
+           -I $(HERMES_API) \
+           -I $(HERMES_API)/jsi \
+           -I vendor/hermes/public
+
+LDFLAGS = -L $(HERMES_BUILD)/API/hermes -lhermes_lean
+
+# Targets
+.PHONY: all clean test test-zig zig-hermes
+
+all: test-hermes hermesc zig-hermes
+
+# Compile C++ wrapper + JSI
+hermes_c_api.o: src/jsi/hermes_c_api.cpp src/jsi/hermes_c_api.h
+	@echo "Compiling Hermes C API wrapper..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c src/jsi/hermes_c_api.cpp -o hermes_c_api.o
+
+jsi.o: $(HERMES_API)/jsi/jsi/jsi.cpp
+	@echo "Compiling JSI implementation..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $(HERMES_API)/jsi/jsi/jsi.cpp -o jsi.o
+
+# Link C test program
+test-hermes: test_hermes.c hermes_c_api.o jsi.o
+	@echo "Linking C test program..."
+	$(CXX) -o test-hermes test_hermes.c hermes_c_api.o jsi.o $(INCLUDES) $(LDFLAGS)
+	@echo "✅ test-hermes built successfully!"
+
+# Compile Zig to object file
+test_zig_hermes.o: src/test_zig_hermes.zig hermes_c_api.o jsi.o
+	@echo "Compiling Zig source..."
+	@zig build-obj src/test_zig_hermes.zig \
+		-I src -I $(HERMES_API) -I $(HERMES_API)/jsi -I vendor/hermes/public \
+		-lc -lc++ --name test_zig_hermes
+
+# Link Zig program with Hermes
+zig-hermes: test_zig_hermes.o hermes_c_api.o jsi.o
+	@echo "Linking Zig + Hermes program..."
+	@$(CXX) -o test-zig-hermes test_zig_hermes.o hermes_c_api.o jsi.o $(LDFLAGS)
+	@echo "✅ Zig + Hermes executable built!"
+
+# Create hermesc symlink
+hermesc:
+	@ln -sf $(HERMES_BUILD)/bin/hermesc hermesc
+	@echo "✅ hermesc symlink created"
+
+# Run C test
+test: test-hermes /tmp/test.hbc
+	@echo "Running C + Hermes test..."
+	@DYLD_LIBRARY_PATH=$(HERMES_BUILD)/API/hermes:$(HERMES_BUILD)/jsi ./test-hermes
+
+# Run Zig test
+test-zig: zig-hermes /tmp/test.hbc
+	@echo "Running Zig + Hermes test..."
+	@DYLD_LIBRARY_PATH=$(HERMES_BUILD)/API/hermes:$(HERMES_BUILD)/jsi ./test-zig-hermes
+
+# Compile test bytecode
+/tmp/test.hbc: hermesc
+	@echo "2 + 2" > /tmp/test.js
+	@./hermesc -emit-binary -out /tmp/test.hbc /tmp/test.js
+	@echo "✅ Test bytecode compiled"
+
+# Clean
+clean:
+	rm -f hermes_c_api.o jsi.o test-hermes hermesc
+	rm -f test_zig_hermes.o test-zig-hermes
+	rm -f /tmp/test.js /tmp/test.hbc
+
+# Help
+help:
+	@echo "Hermes+JSI Build System"
+	@echo ""
+	@echo "Targets:"
+	@echo "  make all        - Build C test, Zig test, and hermesc"
+	@echo "  make test       - Run C + Hermes integration test"
+	@echo "  make test-zig   - Run Zig + Hermes integration test ⚡"
+	@echo "  make clean      - Remove all built files"
+	@echo "  make help       - Show this help"
+	@echo ""
+	@echo "Zig is running JavaScript via Hermes! 🚀"
+	@echo "Note: Uses hybrid build (Zig→.o, clang++ links) to avoid Zig linker bug."

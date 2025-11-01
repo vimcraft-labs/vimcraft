@@ -1,0 +1,21 @@
+# Build artifacts
+.zig-cache/
+zig-out/
+*.o
+*.o.o
+
+# Hermes build artifacts
+test-*
+hermesc
+hermes_c_api.o
+jsi.o
+
+# Temporary test files
+/tmp/*.js
+/tmp/*.hbc
+
+# macOS
+.DS_Store
+
+# Hermes build directory (not in git)
+vendor/hermes/build/
