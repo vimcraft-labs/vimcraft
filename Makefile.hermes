@@ -30,6 +30,16 @@ jsi.o: $(HERMES_API)/jsi/jsi/jsi.cpp
 	@echo "Compiling JSI implementation..."
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $(HERMES_API)/jsi/jsi/jsi.cpp -o jsi.o
 
+# Compile WebSocket server
+websocket_server.o: src/debug/websocket_server.cpp src/debug/websocket_server.h
+	@echo "Compiling WebSocket server..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c src/debug/websocket_server.cpp -o websocket_server.o
+
+# Compile CDP debugger
+cdp_debugger.o: src/debug/cdp_debugger.cpp src/debug/cdp_debugger.h hermes_c_api.o
+	@echo "Compiling CDP debugger..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c src/debug/cdp_debugger.cpp -o cdp_debugger.o
+
 # Link C test program
 test-hermes: test_hermes.c hermes_c_api.o jsi.o
 	@echo "Linking C test program..."
@@ -98,7 +108,8 @@ run-colors: demo-colors examples/demo_colors.hbc
 
 # Clean
 clean:
-	rm -f hermes_c_api.o jsi.o test-hermes hermesc
+	rm -f hermes_c_api.o jsi.o websocket_server.o cdp_debugger.o
+	rm -f test-hermes hermesc
 	rm -f test_zig_hermes.o test-zig-hermes
 	rm -f demo_jsi_colors.o demo-jsi-colors
 	rm -f examples/demo_colors.hbc

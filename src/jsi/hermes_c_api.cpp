@@ -9,9 +9,13 @@
 
 #include <jsi/jsi/jsi.h>
 #include <hermes/hermes.h>
+#include <hermes/cdp/CDPDebugAPI.h>
+#include <hermes/cdp/CDPAgent.h>
+#include <hermes/cdp/ConsoleMessage.h>
 #include <memory>
 #include <string>
 #include <cstring>
+#include <chrono>
 
 using namespace facebook;
 using namespace facebook::jsi;
@@ -435,6 +439,175 @@ bool hermes_is_bytecode(const uint8_t* data, size_t len) {
         return hermesRootAPI->isHermesBytecode(data, len);
     } catch (...) {
         return false;
+    }
+}
+
+//
+// Chrome DevTools Protocol (CDP) Implementation
+//
+
+using namespace facebook::hermes::cdp;
+using namespace facebook::hermes::debugger;
+
+struct OVCDPDebugAPI {
+    std::unique_ptr<CDPDebugAPI> cdp_debug;
+    facebook::hermes::HermesRuntime* runtime_ptr;
+
+    OVCDPDebugAPI(std::unique_ptr<CDPDebugAPI>&& debug, facebook::hermes::HermesRuntime* rt)
+        : cdp_debug(std::move(debug)), runtime_ptr(rt) {}
+};
+
+struct OVCDPAgent {
+    std::unique_ptr<CDPAgent> agent;
+    OVCDPMessageCallback message_callback;
+    void* message_context;
+
+    OVCDPAgent(
+        std::unique_ptr<CDPAgent>&& ag,
+        OVCDPMessageCallback cb,
+        void* ctx
+    ) : agent(std::move(ag)), message_callback(cb), message_context(ctx) {}
+};
+
+OVCDPDebugAPI* hermes_cdp_debug_create(OVHermesRuntime* runtime) {
+    if (!runtime || !runtime->runtime) return nullptr;
+
+    try {
+        auto cdp_debug = CDPDebugAPI::create(*runtime->runtime);
+        if (!cdp_debug) return nullptr;
+
+        return new OVCDPDebugAPI(std::move(cdp_debug), runtime->runtime.get());
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void hermes_cdp_debug_destroy(OVCDPDebugAPI* cdp_debug) {
+    if (cdp_debug) {
+        delete cdp_debug;
+    }
+}
+
+OVCDPAgent* hermes_cdp_agent_create(
+    OVCDPDebugAPI* cdp_debug,
+    int32_t execution_context_id,
+    OVCDPMessageCallback message_callback,
+    void* message_context,
+    OVCDPRuntimeTaskCallback task_callback,
+    void* task_context
+) {
+    if (!cdp_debug || !cdp_debug->cdp_debug || !message_callback) {
+        return nullptr;
+    }
+
+    try {
+        // Create message callback wrapper
+        auto outbound_func = [message_callback, message_context](const std::string& json) {
+            message_callback(json.c_str(), message_context);
+        };
+
+        // Create runtime task callback wrapper
+        // For now, we'll use a simple implementation
+        auto& runtime_ref = cdp_debug->cdp_debug->runtime();
+        auto task_func = [task_callback, task_context, &runtime_ref](facebook::hermes::debugger::RuntimeTask task) {
+            if (task_callback) {
+                // Execute the task immediately for simplicity
+                // In a full implementation, this would queue the task
+                task(runtime_ref);
+            } else {
+                // Execute immediately if no callback provided
+                task(runtime_ref);
+            }
+        };
+
+        // Create CDP agent
+        auto agent = CDPAgent::create(
+            execution_context_id,
+            *cdp_debug->cdp_debug,
+            task_func,
+            outbound_func
+        );
+
+        if (!agent) return nullptr;
+
+        return new OVCDPAgent(std::move(agent), message_callback, message_context);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void hermes_cdp_agent_destroy(OVCDPAgent* agent) {
+    if (agent) {
+        delete agent;
+    }
+}
+
+void hermes_cdp_agent_handle_command(
+    OVCDPAgent* agent,
+    const char* json_command
+) {
+    if (!agent || !agent->agent || !json_command) return;
+
+    try {
+        agent->agent->handleCommand(std::string(json_command));
+    } catch (...) {
+        // Silently ignore errors for now
+    }
+}
+
+void hermes_cdp_agent_enable_runtime(OVCDPAgent* agent) {
+    if (!agent || !agent->agent) return;
+
+    try {
+        agent->agent->enableRuntimeDomain();
+    } catch (...) {
+        // Silently ignore errors
+    }
+}
+
+void hermes_cdp_agent_enable_debugger(OVCDPAgent* agent) {
+    if (!agent || !agent->agent) return;
+
+    try {
+        agent->agent->enableDebuggerDomain();
+    } catch (...) {
+        // Silently ignore errors
+    }
+}
+
+void hermes_cdp_add_console_message(
+    OVCDPDebugAPI* cdp_debug,
+    const char* message,
+    int level
+) {
+    if (!cdp_debug || !cdp_debug->cdp_debug || !message) return;
+
+    try {
+        // Get current timestamp
+        auto now = std::chrono::system_clock::now();
+        auto duration = now.time_since_epoch();
+        double timestamp = std::chrono::duration<double, std::milli>(duration).count();
+
+        // Map level to ConsoleAPIType
+        ConsoleAPIType type;
+        switch (level) {
+            case 0: type = ConsoleAPIType::kLog; break;
+            case 1: type = ConsoleAPIType::kDebug; break;
+            case 2: type = ConsoleAPIType::kInfo; break;
+            case 3: type = ConsoleAPIType::kError; break;
+            case 4: type = ConsoleAPIType::kWarning; break;
+            default: type = ConsoleAPIType::kLog; break;
+        }
+
+        // Create console message with the message as a string argument
+        std::vector<jsi::Value> args;
+        auto& runtime = cdp_debug->cdp_debug->runtime();
+        args.push_back(jsi::String::createFromUtf8(runtime, message));
+
+        ConsoleMessage console_msg(timestamp, type, std::move(args));
+        cdp_debug->cdp_debug->addConsoleMessage(std::move(console_msg));
+    } catch (...) {
+        // Silently ignore errors
     }
 }
 

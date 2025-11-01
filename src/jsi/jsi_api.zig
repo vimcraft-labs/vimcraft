@@ -66,14 +66,7 @@ export fn zig_set_highlight(
     // Apply highlight to config
     config.setHighlight(name, hl);
 
-    std.debug.print("[JSI] Set highlight '{s}' ", .{name});
-    if (hl.bg) |bg| {
-        std.debug.print("bg=#{x:0>2}{x:0>2}{x:0>2} ", .{ bg.r, bg.g, bg.b });
-    }
-    if (hl.fg) |fg| {
-        std.debug.print("fg=#{x:0>2}{x:0>2}{x:0>2}", .{ fg.r, fg.g, fg.b });
-    }
-    std.debug.print("\n", .{});
+    // Debug messages sent to Chrome console instead of terminal
 
     return c.hermes_value_create_undefined(runtime);
 }
@@ -121,6 +114,47 @@ export fn zig_set_option(
     return c.hermes_value_create_undefined(runtime);
 }
 
+// Import CDP debugger for console.log
+const cdp_c = @cImport({
+    @cInclude("debug/cdp_debugger.h");
+});
+
+/// Zig host function: zigConsoleLog(message)
+/// Called from JavaScript: zigConsoleLog('Hello from JS')
+/// Sends message to Chrome DevTools Console (or terminal if no debugger)
+export fn zig_console_log(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.C) ?*c.OVHermesValue {
+    const rt = runtime orelse return c.hermes_value_create_undefined(runtime);
+
+    if (arg_count < 1) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Get message string from argument
+    const msg_value = args[0] orelse return c.hermes_value_create_undefined(runtime);
+
+    var msg_len: usize = 0;
+    const msg_ptr = c.hermes_value_get_string(rt, msg_value, &msg_len);
+
+    if (msg_ptr == null or msg_len == 0) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Send to Chrome debugger if available, otherwise do nothing (silent)
+    if (context) |ctx| {
+        // Context is CDPDebugger pointer - send to Chrome Console
+        const debugger_ptr: *cdp_c.CDPDebugger = @ptrCast(@alignCast(ctx));
+        cdp_c.cdp_debugger_log(debugger_ptr, msg_ptr, 0); // 0 = log level
+    }
+    // If no debugger, console.log does nothing (silent mode)
+
+    return c.hermes_value_create_undefined(runtime);
+}
+
 /// Initialize JSI runtime and register host functions
 pub fn initJSI(runtime: *c.OVHermesRuntime, config: *highlights.HighlightConfig) void {
     // Register Zig functions that JavaScript can call
@@ -139,7 +173,25 @@ pub fn initJSI(runtime: *c.OVHermesRuntime, config: *highlights.HighlightConfig)
         @ptrCast(config), // Pass config as context
     );
 
-    std.debug.print("[JSI] Registered host functions: zigSetHighlight, zigSetOption\n", .{});
+    c.hermes_register_host_function(
+        runtime,
+        "zigConsoleLog",
+        zig_console_log,
+        null, // No context needed
+    );
+
+    // JSI functions registered (silent mode)
+}
+
+/// Re-register console.log with debugger pointer
+/// This should be called after debugger is created to enable Chrome Console output
+pub fn registerConsoleWithDebugger(runtime: *c.OVHermesRuntime, debugger_ptr: *anyopaque) void {
+    c.hermes_register_host_function(
+        runtime,
+        "zigConsoleLog",
+        zig_console_log,
+        debugger_ptr, // Pass debugger as context
+    );
 }
 
 /// Compile JavaScript to Hermes bytecode using hermesc
@@ -162,11 +214,12 @@ fn compileJsToBytecode(js_path: []const u8, hbc_path: []const u8) !void {
     defer std.heap.page_allocator.free(result.stderr);
 
     if (result.term.Exited != 0) {
+        // Keep stderr errors for hermesc failures (critical)
         std.debug.print("[JSI] hermesc failed:\n{s}\n", .{result.stderr});
         return error.CompilationFailed;
     }
 
-    std.debug.print("[JSI] Compiled {s} -> {s}\n", .{ js_path, hbc_path });
+    // Compilation successful (silent mode)
 }
 
 /// Check if file needs recompilation (returns true if hbc is missing or older than js)
@@ -186,10 +239,11 @@ fn needsRecompilation(js_path: []const u8, hbc_path: []const u8) bool {
 
 /// Load and execute JavaScript configuration file (via bytecode)
 pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: std.mem.Allocator) !void {
-    std.debug.print("[JSI] Loading config: {s}\n", .{filepath});
+    // Loading config (silent mode)
 
     // Read source to wrap it with vim API
     const file = std.fs.openFileAbsolute(filepath, .{}) catch |err| {
+        // Keep critical errors
         std.debug.print("[JSI] Could not open config file: {}\n", .{err});
         return err;
     };
@@ -200,6 +254,11 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
 
     // Wrap in vim API setup
     const wrapped_source = try std.fmt.allocPrint(allocator,
+        \\// console object (for debugging)
+        \\const console = {{
+        \\  log: function(msg) {{ zigConsoleLog(String(msg)); }}
+        \\}};
+        \\
         \\// vim API object
         \\const vim = {{
         \\  highlight: function(name, opts) {{
@@ -232,10 +291,8 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
 
     // Compile if needed (check if wrapped.js is newer than hbc)
     if (needsRecompilation(temp_js_path, hbc_path)) {
-        std.debug.print("[JSI] Compiling config to bytecode...\n", .{});
+        // Compiling to bytecode (silent mode)
         try compileJsToBytecode(temp_js_path, hbc_path);
-    } else {
-        std.debug.print("[JSI] Using cached bytecode\n", .{});
     }
 
     // Load bytecode
@@ -250,10 +307,11 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
 
     if (result == null) {
         const err_msg = c.hermes_get_exception_message(runtime);
+        // Keep critical errors
         std.debug.print("[JSI] JavaScript error: {s}\n", .{err_msg});
         return error.JSError;
     }
 
     defer c.hermes_value_destroy(result);
-    std.debug.print("[JSI] Config loaded successfully\n", .{});
+    // Config loaded successfully (silent mode)
 }

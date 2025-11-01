@@ -16,10 +16,11 @@ const hermes_c = @cImport({
 });
 
 /// OpenVim - Neovim-compatible editor written in Zig
-/// Phase 1+2+3: Text display, Vim navigation, and text editing
+/// Phase 1+2+3+4: Text display, Vim navigation, text editing, and JavaScript config
 ///
 /// Modes:
 ///   openvim <file>           - Interactive editor
+///   openvim --debug <file>   - Interactive editor with Chrome DevTools debugging
 ///   openvim --test <file>    - Run test script
 ///   openvim --repl           - Interactive debugging REPL
 ///   openvim --help           - Show help
@@ -39,6 +40,13 @@ const PendingCommand = struct {
     fn get(self: *const PendingCommand) ?u8 {
         return self.char;
     }
+};
+
+/// Global debugger state (for on-demand debugging via :debug command)
+const DebuggerState = struct {
+    runtime: ?*hermes_c.OVHermesRuntime = null,
+    debugger_ptr: ?*anyopaque = null,
+    port: u16 = 9229,
 };
 
 /// Command buffer for command mode
@@ -97,6 +105,13 @@ pub fn main() !void {
     if (std.mem.eql(u8, first_arg, "--help") or std.mem.eql(u8, first_arg, "-h")) {
         printHelp();
         return;
+    } else if (std.mem.eql(u8, first_arg, "--debug")) {
+        if (args.len < 3) {
+            std.debug.print("Error: --debug requires a file\n", .{});
+            std.debug.print("Usage: openvim --debug <file>\n", .{});
+            return;
+        }
+        return try runEditorWithDebugger(allocator, args[2]);
     } else if (std.mem.eql(u8, first_arg, "--test")) {
         if (args.len < 3) {
             std.debug.print("Error: --test requires a test file\n", .{});
@@ -118,13 +133,14 @@ fn printHelp() void {
         \\OpenVim - Neovim-compatible text editor
         \\
         \\Usage:
-        \\  openvim <file>              Open file in interactive editor
-        \\  openvim --test <test_file>  Run automated test script
-        \\  openvim --repl              Interactive debugging REPL
-        \\  openvim --help              Show this help message
+        \\  openvim <file>                 Open file in interactive editor
+        \\  openvim --debug <file>         Open file with Chrome DevTools debugging
+        \\  openvim --test <test_file>     Run automated test script
+        \\  openvim --repl                 Interactive debugging REPL
+        \\  openvim --help                 Show this help message
         \\
         \\Interactive Mode:
-        \\  Normal Vim keybindings (hjkl, i/a/o, dd/dw, u, :w, :q, etc.)
+        \\  Normal Vim keybindings (hjkl, i/a/o, dd/dw, u, :w, :q, :debug, etc.)
         \\
         \\Test Mode:
         \\  Run .test files with scripted commands
@@ -146,7 +162,7 @@ fn printHelp() void {
 }
 
 /// Load configuration from ~/.config/openvim/init.js
-fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightConfig) !void {
+fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightConfig, debugger_state: *DebuggerState) !void {
     std.debug.print("\n=== OpenVim Configuration ===\n", .{});
 
     // Get config paths
@@ -172,7 +188,11 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
             return error.HermesInitFailed;
         }
         const runtime = runtime_nullable.?;
-        defer hermes_c.hermes_runtime_destroy(runtime);
+
+        // Store runtime in debugger_state (for :debug command)
+        // NOTE: Runtime will be destroyed when program exits
+        // DO NOT defer destroy here - we need it for :debug command
+        debugger_state.runtime = runtime;
 
         // Register JSI host functions (zigSetHighlight, zigSetOption)
         jsi_api.initJSI(runtime, config);
@@ -187,8 +207,6 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
             config.cursorline_enabled = true;
             return;
         };
-
-        std.debug.print("✅ Configuration loaded successfully!\n", .{});
     } else {
         std.debug.print("init.js not found, using defaults\n", .{});
         // Use defaults
@@ -214,12 +232,15 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     defer cmd_buffer.deinit();
     var pending_cmd = PendingCommand{};
 
+    // Initialize debugger state (for :debug command)
+    var debugger_state = DebuggerState{};
+
     // Initialize highlight configuration
     var highlight_config = highlights.HighlightConfig.init(allocator);
     defer highlight_config.deinit();
 
     // Load configuration from init.js (Phase 4!)
-    try loadConfigFromJs(allocator, &highlight_config);
+    try loadConfigFromJs(allocator, &highlight_config, &debugger_state);
 
     // Load file
     buffer.loadFile(filepath) catch |err| {
@@ -247,7 +268,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var running = true;
     while (running) {
         // Handle input (blocking - waits for user input)
-        running = try handleInput(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, allocator);
+        running = try handleInput(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, allocator, &debugger_state);
 
         // Render after input (something changed)
         const status = if (mode_manager.isCommand())
@@ -273,6 +294,177 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     try display.moveCursor(0, 0);
 }
 
+/// Launch Chrome DevTools automatically (like React Native does)
+fn launchChromeDevTools(port: u16) !void {
+    const allocator = std.heap.page_allocator;
+
+    // Build the DevTools URL
+    const url = try std.fmt.allocPrint(
+        allocator,
+        "devtools://devtools/bundled/inspector.html?ws=localhost:{d}",
+        .{port},
+    );
+    defer allocator.free(url);
+
+    // Platform-specific Chrome launch commands
+    const builtin = @import("builtin");
+    const os = builtin.os.tag;
+
+    var argv: []const []const u8 = undefined;
+
+    if (os == .macos) {
+        // macOS: use 'open' command
+        argv = &[_][]const u8{ "open", "-a", "Google Chrome", url };
+    } else if (os == .linux) {
+        // Linux: try common Chrome executables
+        argv = &[_][]const u8{ "google-chrome", url };
+    } else if (os == .windows) {
+        // Windows: use 'start' command
+        argv = &[_][]const u8{ "cmd", "/c", "start", "chrome", url };
+    } else {
+        return error.UnsupportedPlatform;
+    }
+
+    // Launch Chrome in background (don't wait for it to close)
+    var child = std.process.Child.init(argv, allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+
+    try child.spawn();
+
+    // Don't wait for Chrome to exit - let it run independently
+    // (calling wait() would block until Chrome closes)
+}
+
+/// Run the interactive editor with Chrome DevTools debugging enabled
+fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !void {
+    const Debugger = @import("debug/debugger.zig").Debugger;
+
+    // Initialize components
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    var display = try Display.init(allocator);
+    defer display.deinit();
+    var mode_manager = ModeManager.init();
+    var cmd_buffer = CommandBuffer.init(allocator);
+    defer cmd_buffer.deinit();
+    var pending_cmd = PendingCommand{};
+
+    // Initialize debugger state (already have debugger running)
+    var debugger_state = DebuggerState{};
+
+    // Initialize highlight configuration
+    var highlight_config = highlights.HighlightConfig.init(allocator);
+    defer highlight_config.deinit();
+
+    // Get config paths
+    var paths = try ConfigPaths.init(allocator);
+    defer paths.deinit();
+    try paths.ensureConfigDir();
+    try paths.createDefaultInitJs();
+
+    // Create Hermes runtime (must stay alive for debugger)
+    const runtime_nullable = hermes_c.hermes_runtime_create();
+    if (runtime_nullable == null) {
+        std.debug.print("ERROR: Failed to create Hermes runtime\n", .{});
+        return error.HermesInitFailed;
+    }
+    const runtime = runtime_nullable.?;
+    defer hermes_c.hermes_runtime_destroy(runtime);
+
+    // Register JSI host functions
+    jsi_api.initJSI(runtime, &highlight_config);
+
+    // Create and start CDP debugger BEFORE loading config
+    // This allows Chrome to see console.log from init.js
+    var debugger = try Debugger.init(runtime, 9229);
+    defer debugger.deinit();
+
+    try debugger.start();
+
+    // Re-register console.log with debugger pointer so messages go to Chrome Console
+    jsi_api.registerConsoleWithDebugger(runtime, debugger.handle);
+
+    // Auto-launch Chrome DevTools (silently)
+    launchChromeDevTools(9229) catch {};
+
+    // Wait up to 5 seconds for debugger to connect (silently)
+    var wait_count: usize = 0;
+    while (wait_count < 50 and !debugger.isConnected()) {
+        std.time.sleep(100 * std.time.ns_per_ms);
+        wait_count += 1;
+    }
+
+    // Load configuration from init.js
+    if (paths.initJsExists()) {
+        debugger.log("OpenVim: Loading init.js...", .info);
+
+        jsi_api.loadConfig(runtime, paths.init_js_path, allocator) catch |err| {
+            const msg = try std.fmt.allocPrint(allocator, "Failed to load init.js: {}", .{err});
+            defer allocator.free(msg);
+            debugger.log(msg, .err);
+
+            std.debug.print("WARNING: Failed to load init.js: {}\n", .{err});
+            // Fall back to defaults
+            const cursorline_bg = try highlights.Color.fromHex("#2b2b2b");
+            highlight_config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
+            highlight_config.cursorline_enabled = true;
+        };
+    }
+
+    // Load file
+    buffer.loadFile(filepath) catch |err| {
+        std.debug.print("Error loading file: {}\n", .{err});
+        return;
+    };
+
+    // Enter raw terminal mode
+    try display.enterRawMode();
+    defer display.exitRawMode();
+
+    // Get terminal size
+    try display.getTerminalSize();
+
+    // Initial render
+    {
+        const status = try allocator.dupe(u8, mode_manager.getModeString());
+        defer allocator.free(status);
+        try display.render(&buffer, status, &highlight_config);
+        try display.setCursorBlock();
+        try display.flush();
+    }
+
+    // Main event loop
+    var running = true;
+    while (running) {
+        running = try handleInput(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, allocator, &debugger_state);
+
+        const status = if (mode_manager.isCommand())
+            try std.fmt.allocPrint(allocator, ":{s}", .{cmd_buffer.getString()})
+        else
+            try allocator.dupe(u8, mode_manager.getModeString());
+        defer allocator.free(status);
+
+        try display.render(&buffer, status, &highlight_config);
+
+        if (mode_manager.isInsert()) {
+            try display.setCursorBar();
+        } else {
+            try display.setCursorBlock();
+        }
+
+        try display.flush();
+    }
+
+    // Clean exit
+    try display.clearScreen();
+    try display.moveCursor(0, 0);
+
+    std.debug.print("\n🐛 Debugger shutting down...\n", .{});
+}
+
 /// Handle keyboard input
 /// Returns false to quit
 fn handleInput(
@@ -282,6 +474,7 @@ fn handleInput(
     cmd_buffer: *CommandBuffer,
     pending_cmd: *PendingCommand,
     allocator: std.mem.Allocator,
+    debugger_state: *DebuggerState,
 ) !bool {
     const stdin = std.io.getStdIn();
     var buf: [16]u8 = undefined;
@@ -303,7 +496,7 @@ fn handleInput(
     } else if (mode_manager.isVisual()) {
         return try handleVisualMode(buffer, mode_manager, input);
     } else if (mode_manager.isCommand()) {
-        return try handleCommandMode(buffer, mode_manager, cmd_buffer, allocator, input);
+        return try handleCommandMode(buffer, mode_manager, cmd_buffer, allocator, input, debugger_state);
     }
 
     return true;
@@ -573,6 +766,7 @@ fn handleCommandMode(
     cmd_buffer: *CommandBuffer,
     allocator: std.mem.Allocator,
     input: []const u8,
+    debugger_state: ?*DebuggerState,
 ) !bool {
     if (input.len != 1) return true;
 
@@ -603,9 +797,33 @@ fn handleCommandMode(
                     std.debug.print("Error saving file: {}\n", .{err});
                 };
                 return false;
+            } else if (std.mem.eql(u8, cmd, "debug")) {
+                // Launch Chrome DevTools debugging
+                if (debugger_state) |state| {
+                    if (state.debugger_ptr == null and state.runtime != null) {
+                        // Create debugger on-demand (allocate on heap for persistence)
+                        const Debugger = @import("debug/debugger.zig").Debugger;
+                        const debugger_heap = try allocator.create(Debugger);
+                        debugger_heap.* = try Debugger.init(state.runtime.?, state.port);
+
+                        // Start the debugger
+                        try debugger_heap.start();
+
+                        // Re-register console.log with debugger so messages go to Chrome Console
+                        jsi_api.registerConsoleWithDebugger(state.runtime.?, debugger_heap.handle);
+
+                        // Launch Chrome (silently)
+                        launchChromeDevTools(state.port) catch {};
+
+                        // Store the debugger pointer
+                        state.debugger_ptr = debugger_heap;
+                    } else if (state.debugger_ptr != null) {
+                        // Already debugging - just relaunch Chrome
+                        launchChromeDevTools(state.port) catch {};
+                    }
+                }
             } else {
                 // Unknown command - just ignore for now
-                _ = allocator;
             }
 
             cmd_buffer.clear();

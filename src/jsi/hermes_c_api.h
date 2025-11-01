@@ -233,6 +233,113 @@ const char* hermes_get_version(void);
  */
 bool hermes_is_bytecode(const uint8_t* data, size_t len);
 
+//
+// Chrome DevTools Protocol (CDP) Support
+//
+
+// Opaque types for CDP
+typedef struct OVCDPDebugAPI OVCDPDebugAPI;
+typedef struct OVCDPAgent OVCDPAgent;
+
+/**
+ * Callback for outbound CDP messages (responses and events)
+ * This is called when Hermes wants to send a CDP message to the debugger
+ *
+ * @param json_message CDP message as JSON string (null-terminated)
+ * @param context User context
+ */
+typedef void (*OVCDPMessageCallback)(
+    const char* json_message,
+    void* context
+);
+
+/**
+ * Callback for runtime tasks
+ * CDP agent needs to enqueue tasks that run on the runtime thread
+ *
+ * @param task Opaque task pointer
+ * @param context User context
+ */
+typedef void (*OVCDPRuntimeTaskCallback)(
+    void* task,
+    void* context
+);
+
+/**
+ * Create a CDP debug session for a runtime
+ * This must be called before creating any CDP agents
+ *
+ * @param runtime The Hermes runtime to debug
+ * @return CDP debug API instance, or NULL on failure
+ */
+OVCDPDebugAPI* hermes_cdp_debug_create(OVHermesRuntime* runtime);
+
+/**
+ * Destroy a CDP debug session
+ */
+void hermes_cdp_debug_destroy(OVCDPDebugAPI* cdp_debug);
+
+/**
+ * Create a CDP agent for handling protocol messages
+ *
+ * @param cdp_debug The CDP debug session
+ * @param execution_context_id Unique ID for this execution context (use 1)
+ * @param message_callback Callback for outbound CDP messages
+ * @param message_context User context for message callback
+ * @param task_callback Callback for runtime tasks (can be NULL for now)
+ * @param task_context User context for task callback
+ * @return CDP agent instance, or NULL on failure
+ */
+OVCDPAgent* hermes_cdp_agent_create(
+    OVCDPDebugAPI* cdp_debug,
+    int32_t execution_context_id,
+    OVCDPMessageCallback message_callback,
+    void* message_context,
+    OVCDPRuntimeTaskCallback task_callback,
+    void* task_context
+);
+
+/**
+ * Destroy a CDP agent
+ */
+void hermes_cdp_agent_destroy(OVCDPAgent* agent);
+
+/**
+ * Handle an incoming CDP command (from Chrome DevTools)
+ *
+ * @param agent The CDP agent
+ * @param json_command CDP command as JSON string (null-terminated)
+ */
+void hermes_cdp_agent_handle_command(
+    OVCDPAgent* agent,
+    const char* json_command
+);
+
+/**
+ * Enable the Runtime domain (required for console.log)
+ * Call this after creating the agent
+ */
+void hermes_cdp_agent_enable_runtime(OVCDPAgent* agent);
+
+/**
+ * Enable the Debugger domain (required for breakpoints)
+ * Call this after creating the agent
+ */
+void hermes_cdp_agent_enable_debugger(OVCDPAgent* agent);
+
+/**
+ * Add a console message (for console.log from native code)
+ *
+ * @param cdp_debug The CDP debug session
+ * @param message The message text
+ * @param level Message level: 0=log, 1=debug, 2=info, 3=error, 4=warning
+ */
+void hermes_cdp_add_console_message(
+    OVCDPDebugAPI* cdp_debug,
+    const char* message,
+    int level
+);
+
 #ifdef __cplusplus
 }
 #endif

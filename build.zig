@@ -49,6 +49,23 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Add CDP debugger files
+    hermes_lib.addCSourceFile(.{
+        .file = b.path("src/debug/websocket_server.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    hermes_lib.addCSourceFile(.{
+        .file = b.path("src/debug/cdp_debugger.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
     // Add include paths for Hermes
     hermes_lib.addIncludePath(b.path("src"));
     hermes_lib.addIncludePath(b.path("vendor/hermes/API"));
@@ -85,8 +102,9 @@ pub fn build(b: *std.Build) void {
     // Link Hermes static library
     exe.linkLibrary(hermes_lib);
 
-    // Link Hermes runtime libraries
-    // Note: addLibraryPath automatically adds rpath on macOS, so no need for explicit addRPath
+    // Link Hermes dynamic library (includes CDP debugger support)
+    // The libhermes_lean.dylib contains all Hermes runtime + CDP API
+    // Note: addLibraryPath automatically sets rpath for dynamic library loading
     exe.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
     exe.addLibraryPath(b.path("vendor/hermes/build/jsi"));
     exe.linkSystemLibrary("hermes_lean");
