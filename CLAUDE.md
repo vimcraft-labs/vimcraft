@@ -4,9 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OpenVim is a Vim-inspired text editor written in Zig that uses Hermes JavaScript engine for plugin support via JSI (JavaScript Interface). The core innovation is enabling zero-copy bidirectional communication between Zig (editor core) and JavaScript (plugins).
+OpenVim is a Neovim-compatible text editor written in Zig with Hermes JavaScript engine for plugin support via JSI (JavaScript Interface). The core innovation is enabling zero-copy bidirectional communication between Zig (editor core) and JavaScript (plugins).
 
-**Status**: Core integration working - Zig executes JavaScript and JavaScript calls Zig functions.
+**Current Status**: Phase 1+2 Complete ✅
+- Text display and file loading working
+- Full Vim navigation (hjkl, w/b/e, gg/G, 0/$, Ctrl+D/U)
+- Mode system (Normal/Insert/Visual)
+- Terminal rendering with ANSI codes
+- Hermes+JSI integration (demos working, not yet in main editor)
 
 ## Reference Codebases
 
@@ -18,11 +23,41 @@ Three local forks provide reference implementations:
 
 ## Architecture
 
-### Three-Layer Design
+### Current Implementation (Phase 1+2)
 
-1. **Hermes C++ Engine** (`vendor/hermes/`) - Facebook's JavaScript engine (v0.12.0), managed as git submodule
-2. **C API Wrapper** (`src/jsi/hermes_c_api.{h,cpp}`) - Exposes Hermes C++ APIs to C using opaque pointers (OVHermesRuntime, OVHermesValue)
-3. **Zig Integration** (`src/*.zig`) - Zig code imports C API via `@cImport` and `@cInclude`
+```
+openvim/
+├── src/
+│   ├── main.zig              # Entry point, event loop
+│   ├── buffer/
+│   │   └── buffer.zig        # Text storage (ArrayList-based)
+│   ├── display/
+│   │   └── display.zig       # Terminal rendering (ANSI codes)
+│   ├── mode/
+│   │   └── mode.zig          # Mode state machine (N/I/V/C)
+│   ├── movement/
+│   │   └── movement.zig      # Vim movement primitives
+│   └── jsi/                  # Hermes C++ wrapper (for Phase 4)
+│       ├── hermes_c_api.h
+│       ├── hermes_c_api.cpp
+│       └── hermes.zig
+├── examples/                  # Hermes+JSI demos
+│   ├── test_zig_hermes.zig   # Zig runs JavaScript
+│   └── test_jsi_bridge.zig   # JavaScript calls Zig
+├── vendor/                    # Git submodules
+│   ├── hermes/               # Hermes JS engine (v0.12.0)
+│   ├── ghostty/              # Reference for terminal code
+│   └── neovim/               # Reference for C libraries
+├── build.zig                 # Zig build system (main editor)
+├── Makefile.hermes          # Hermes+JSI build (C++ hybrid)
+└── CLAUDE.md                # This file
+```
+
+### Three-Layer Design (Full Vision)
+
+1. **Editor Core (Zig)** - Buffer management, rendering, input handling
+2. **JSI Bridge (C++)** - Zero-copy interface between Zig and JavaScript
+3. **Plugin Layer (JavaScript)** - Extensions, LSP, configurations via Hermes
 
 ### JSI Bridge (Zero-Copy Communication)
 
@@ -43,36 +78,39 @@ This is **not a workaround** - it's the proper solution given current Zig limita
 
 ## Build Commands
 
-### Hermes Integration (Primary Workflow)
+### Main Editor (Phase 1+2)
 
 ```bash
-# Build everything (Zig + Hermes integration)
-make -f Makefile.hermes all
-
-# Run Zig executing JavaScript demo
-make -f Makefile.hermes test-zig
-
-# Run JSI bridge demo (JS calling Zig)
-make -f Makefile.hermes test-jsi
-
-# Clean all build artifacts
-make -f Makefile.hermes clean
-
-# See available targets
-make -f Makefile.hermes help
-```
-
-### Zig-Only Builds
-
-```bash
-# Build main editor (when src/main.zig exists)
+# Build OpenVim
 zig build
+
+# Run with file
+./zig-out/bin/openvim <filename>
+
+# Example
+./zig-out/bin/openvim README.md
 
 # Run tests
 zig build test
 
 # Format code (use Zig convention: 4 spaces)
 zig fmt src/
+```
+
+### Hermes+JSI Demos (Separate Build)
+
+```bash
+# Build Hermes integration demos
+make -f Makefile.hermes all
+
+# Run Zig→JavaScript demo
+make -f Makefile.hermes test-zig
+
+# Run JavaScript→Zig demo
+make -f Makefile.hermes test-jsi
+
+# Clean
+make -f Makefile.hermes clean
 ```
 
 ### Working with Bytecode
@@ -92,10 +130,18 @@ zig fmt src/
 - `src/jsi/hermes_c_api.cpp` - C++ implementation wrapping Hermes JSI
 - `Makefile.hermes` - Hybrid build system (Zig→.o, clang++→exe)
 
-### Demos
+### Core Modules
 
-- `src/test_zig_hermes.zig` - Shows Zig loading and executing JavaScript bytecode
-- `src/test_jsi_bridge.zig` - Shows JavaScript calling Zig functions with zero-copy
+- `src/main.zig` - Entry point, event loop, input handling
+- `src/buffer/buffer.zig` - Text storage with line indexing and cursor management
+- `src/display/display.zig` - Terminal rendering with ANSI escape codes
+- `src/mode/mode.zig` - Mode state machine (Normal/Insert/Visual/Command)
+- `src/movement/movement.zig` - Vim movement primitives
+
+### Hermes+JSI Demos
+
+- `examples/test_zig_hermes.zig` - Shows Zig loading and executing JavaScript bytecode
+- `examples/test_jsi_bridge.zig` - Shows JavaScript calling Zig functions with zero-copy
 
 ### Configuration
 
@@ -136,6 +182,40 @@ All C types use `OV` prefix to avoid collisions with Hermes C++ types:
 ### Zig Formatting
 
 Follow Zig convention: 4 spaces for indentation. Run `zig fmt src/` before committing.
+
+## Navigation Commands (Phase 1+2)
+
+### Character Movement
+- `h` - Move left
+- `j` - Move down
+- `k` - Move up
+- `l` - Move right
+
+### Line Movement
+- `0` - Move to start of line
+- `$` - Move to end of line
+- `^` - Move to first non-blank character
+
+### Word Movement
+- `w` - Move forward to next word start
+- `b` - Move backward to previous word start
+- `e` - Move forward to word end
+
+### File Movement
+- `gg` - Move to file start (first line, column 0)
+- `G` - Move to file end (last line)
+- `Ctrl+D` - Scroll half page down
+- `Ctrl+U` - Scroll half page up
+
+### Mode Switching
+- `i` - Enter insert mode before cursor
+- `a` - Enter insert mode after cursor
+- `I` - Enter insert mode at line start
+- `A` - Enter insert mode at line end
+- `o` - Open new line below (TODO: Phase 3)
+- `O` - Open new line above (TODO: Phase 3)
+- `ESC` - Return to normal mode from any mode
+- `q` - Quit editor (normal mode only)
 
 ## Development Workflow
 
@@ -186,16 +266,22 @@ This builds ~40 libraries (~287MB). Build artifacts are gitignored.
 
 ## Common Issues
 
-### "Library not loaded: @rpath/libjsi.dylib"
+### Terminal Not Restored After Crash
 
-Set `DYLD_LIBRARY_PATH` to include both Hermes directories:
+If OpenVim crashes and terminal is stuck in raw mode:
 ```bash
-DYLD_LIBRARY_PATH=vendor/hermes/build/API/hermes:vendor/hermes/build/jsi
+reset
+# or
+stty sane
 ```
 
-### Zig Linker Crash
+### Build Fails with "posix not found"
 
-Don't use `zig build` for Hermes integration. Use `make -f Makefile.hermes` instead. See Architecture section for why.
+You're using an older Zig version. OpenVim requires Zig 0.13+ where `std.os.*` moved to `std.posix.*`.
+
+### Cursor Movement Not Working
+
+Check that terminal supports ANSI escape codes. Most modern terminals do, but some minimal terminals may not.
 
 ### Submodule Not Initialized
 
@@ -203,10 +289,71 @@ Don't use `zig build` for Hermes integration. Use `make -f Makefile.hermes` inst
 git submodule update --init
 ```
 
-## Project Goals
+### Hermes+JSI: "Library not loaded: @rpath/libjsi.dylib"
 
-The end goal is a Vim-like editor where:
+When running Hermes demos, set `DYLD_LIBRARY_PATH`:
+```bash
+DYLD_LIBRARY_PATH=vendor/hermes/build/API/hermes:vendor/hermes/build/jsi
+```
+
+The Makefile handles this automatically.
+
+## Project Goals & Roadmap
+
+### Vision
+
+A Neovim-compatible editor where:
 - Core editor (buffers, windows, rendering) written in Zig
 - Plugins and configuration written in JavaScript/TypeScript
 - Zero-copy JSI bridge for high performance
 - Hermes bytecode for fast startup and small memory footprint
+
+### Development Phases
+
+**Phase 1+2: Text Display & Navigation** ✅ COMPLETE
+- Buffer management (ArrayList-based)
+- Terminal rendering (ANSI codes)
+- Full Vim navigation (hjkl, w/b/e, gg/G, 0/$, Ctrl+D/U)
+- Mode system (Normal/Insert)
+- Status line
+
+**Phase 3: Text Editing** (Next - 4-6 weeks)
+- Insert mode operations (character insertion/deletion)
+- Delete operators (x, dd, dw, etc.)
+- Change operators (c, cc, cw, etc.)
+- Yank/paste (y, yy, p, P)
+- Visual mode (character, line, block selection)
+- Undo/redo tree
+- Transaction system (change tracking)
+- Basic registers
+
+**Phase 4: Plugin System** (6-8 weeks)
+- Integrate Hermes+JSI into main binary
+- Plugin loader (bytecode execution)
+- Expose editor API to JavaScript
+- Event hooks (buffer change, mode change, etc.)
+- Configuration file (~/.config/openvim/init.js)
+- Plugin API documentation
+
+**Phase 5: Advanced Features** (8-12 weeks)
+- Tree-sitter syntax highlighting
+- LSP integration (via plugins)
+- Search and replace (/,  ?, :s)
+- Command mode (: commands)
+- Split windows (horizontal/vertical)
+- Tab pages
+- Macros (q, @)
+
+**Phase 6: Performance & Polish** (Ongoing)
+- Rope data structure (replace ArrayList)
+- Incremental rendering
+- Large file handling (>100MB)
+- Memory optimization
+- Benchmark suite
+
+**Phase 7: Neovim Compatibility** (Ongoing)
+- Ex commands (:w, :q, :e, etc.)
+- Options (:set number, etc.)
+- Neovim API compatibility layer
+- Remote plugin support
+- Vimscript subset (if needed)

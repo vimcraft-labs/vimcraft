@@ -10,6 +10,20 @@ pub const Cursor = struct {
     }
 };
 
+/// Change type for undo/redo
+pub const Change = struct {
+    offset: usize, // Byte offset in buffer
+    deleted_text: []const u8, // Text that was deleted (owned, must free)
+    inserted_text: []const u8, // Text that was inserted (owned, must free)
+    cursor_before: Cursor, // Cursor position before change
+    cursor_after: Cursor, // Cursor position after change
+
+    pub fn deinit(self: *Change, allocator: std.mem.Allocator) void {
+        allocator.free(self.deleted_text);
+        allocator.free(self.inserted_text);
+    }
+};
+
 /// Simple text buffer implementation using ArrayList
 /// This is a minimal implementation - will be replaced with rope later for performance
 pub const Buffer = struct {
@@ -20,6 +34,10 @@ pub const Buffer = struct {
     filepath: ?[]const u8,
     modified: bool,
 
+    // Undo/redo
+    undo_stack: std.ArrayList(Change),
+    redo_stack: std.ArrayList(Change),
+
     pub fn init(allocator: std.mem.Allocator) Buffer {
         return .{
             .allocator = allocator,
@@ -28,6 +46,8 @@ pub const Buffer = struct {
             .cursor = Cursor.init(),
             .filepath = null,
             .modified = false,
+            .undo_stack = std.ArrayList(Change).init(allocator),
+            .redo_stack = std.ArrayList(Change).init(allocator),
         };
     }
 
@@ -37,6 +57,17 @@ pub const Buffer = struct {
         if (self.filepath) |path| {
             self.allocator.free(path);
         }
+
+        // Clean up undo/redo stacks
+        for (self.undo_stack.items) |*change| {
+            change.deinit(self.allocator);
+        }
+        self.undo_stack.deinit();
+
+        for (self.redo_stack.items) |*change| {
+            change.deinit(self.allocator);
+        }
+        self.redo_stack.deinit();
     }
 
     /// Load file from path
@@ -79,23 +110,33 @@ pub const Buffer = struct {
     }
 
     /// Get line by index (0-based)
-    /// Returns slice pointing into buffer content
+    /// Returns slice pointing into buffer content (includes newline if present)
     pub fn getLine(self: *const Buffer, line_num: usize) ?[]const u8 {
         if (line_num >= self.lineCount()) return null;
 
         const start = self.line_starts.items[line_num];
         const end = if (line_num + 1 < self.line_starts.items.len)
-            self.line_starts.items[line_num + 1] - 1 // Exclude newline
+            self.line_starts.items[line_num + 1] // Include up to start of next line
         else
             self.content.items.len;
 
         return self.content.items[start..end];
     }
 
-    /// Get line length (in bytes)
+    /// Get line length (in bytes, includes newline if present)
     pub fn getLineLength(self: *const Buffer, line_num: usize) usize {
         const line = self.getLine(line_num) orelse return 0;
         return line.len;
+    }
+
+    /// Get visual line length (excludes newline)
+    pub fn getLineLengthVisual(self: *const Buffer, line_num: usize) usize {
+        const line = self.getLine(line_num) orelse return 0;
+        // Exclude newline for visual length
+        return if (line.len > 0 and line[line.len - 1] == '\n')
+            line.len - 1
+        else
+            line.len;
     }
 
     /// Move cursor to position, clamping to valid range
@@ -149,6 +190,320 @@ pub const Buffer = struct {
     /// Check if buffer is empty
     pub fn isEmpty(self: *const Buffer) bool {
         return self.content.items.len == 0;
+    }
+
+    // ===== Text Modification Functions =====
+
+    /// Record a change for undo/redo
+    fn recordChange(self: *Buffer, change: Change) !void {
+        try self.undo_stack.append(change);
+        // Clear redo stack when new change is made
+        for (self.redo_stack.items) |*c| {
+            c.deinit(self.allocator);
+        }
+        self.redo_stack.clearRetainingCapacity();
+    }
+
+    /// Insert character at cursor position
+    pub fn insertChar(self: *Buffer, char: u8) !void {
+        const offset = self.getCursorOffset();
+        const cursor_before = self.cursor;
+
+        // Insert character
+        try self.content.insert(offset, char);
+
+        // Rebuild line index after insertion (offsets have shifted)
+        try self.buildLineIndex();
+
+        // Update cursor position
+        if (char == '\n') {
+            // Newline - move to next line, col 0
+            self.cursor.row += 1;
+            self.cursor.col = 0;
+        } else {
+            // Regular character - move cursor forward
+            self.cursor.col += 1;
+        }
+
+        // Record change for undo
+        const change = Change{
+            .offset = offset,
+            .deleted_text = try self.allocator.alloc(u8, 0), // Empty - nothing deleted
+            .inserted_text = try self.allocator.dupe(u8, &[_]u8{char}),
+            .cursor_before = cursor_before,
+            .cursor_after = self.cursor,
+        };
+        try self.recordChange(change);
+
+        self.modified = true;
+    }
+
+    /// Delete character at cursor (like 'x' in Vim)
+    pub fn deleteChar(self: *Buffer) !void {
+        const offset = self.getCursorOffset();
+        if (offset >= self.content.items.len) return; // Nothing to delete
+
+        const cursor_before = self.cursor;
+        const deleted_char = self.content.items[offset];
+
+        // Delete character
+        _ = self.content.orderedRemove(offset);
+
+        // Rebuild line index if newline was deleted
+        if (deleted_char == '\n') {
+            try self.buildLineIndex();
+            // Cursor stays at same position
+        } else {
+            // Clamp cursor to line length
+            const line_len = self.getLineLength(self.cursor.row);
+            if (line_len > 0 and self.cursor.col >= line_len) {
+                self.cursor.col = line_len - 1;
+            }
+        }
+
+        // Record change for undo
+        const change = Change{
+            .offset = offset,
+            .deleted_text = try self.allocator.dupe(u8, &[_]u8{deleted_char}),
+            .inserted_text = try self.allocator.alloc(u8, 0), // Empty - nothing inserted
+            .cursor_before = cursor_before,
+            .cursor_after = self.cursor,
+        };
+        try self.recordChange(change);
+
+        self.modified = true;
+    }
+
+    /// Delete character before cursor (backspace)
+    pub fn deleteCharBefore(self: *Buffer) !void {
+        if (self.cursor.col == 0 and self.cursor.row == 0) return; // Nothing to delete
+
+        const cursor_before = self.cursor;
+
+        // Move cursor back
+        if (self.cursor.col > 0) {
+            self.cursor.col -= 1;
+        } else {
+            // At start of line - join with previous line
+            self.cursor.row -= 1;
+            self.cursor.col = self.getLineLengthVisual(self.cursor.row);
+        }
+
+        const offset = self.getCursorOffset();
+        const deleted_char = self.content.items[offset];
+
+        // Delete character
+        _ = self.content.orderedRemove(offset);
+
+        // Rebuild line index after deletion (offsets have shifted)
+        try self.buildLineIndex();
+
+        // Record change for undo
+        const change = Change{
+            .offset = offset,
+            .deleted_text = try self.allocator.dupe(u8, &[_]u8{deleted_char}),
+            .inserted_text = try self.allocator.alloc(u8, 0),
+            .cursor_before = cursor_before,
+            .cursor_after = self.cursor,
+        };
+        try self.recordChange(change);
+
+        self.modified = true;
+    }
+
+    /// Undo last change
+    pub fn undo(self: *Buffer) !void {
+        if (self.undo_stack.items.len == 0) return; // Nothing to undo
+
+        const change = self.undo_stack.pop().?; // Safe - we checked length above
+
+        // Reverse the change
+        if (change.inserted_text.len > 0) {
+            // Remove inserted text
+            for (0..change.inserted_text.len) |_| {
+                _ = self.content.orderedRemove(change.offset);
+            }
+        }
+
+        if (change.deleted_text.len > 0) {
+            // Re-insert deleted text
+            try self.content.insertSlice(change.offset, change.deleted_text);
+        }
+
+        // Restore cursor position
+        self.cursor = change.cursor_before;
+
+        // Rebuild line index
+        try self.buildLineIndex();
+
+        // Move change to redo stack
+        try self.redo_stack.append(change);
+    }
+
+    /// Redo last undone change
+    pub fn redo(self: *Buffer) !void {
+        if (self.redo_stack.items.len == 0) return; // Nothing to redo
+
+        const change = self.redo_stack.pop().?; // Safe - we checked length above
+
+        // Reapply the change
+        if (change.deleted_text.len > 0) {
+            // Remove text again
+            for (0..change.deleted_text.len) |_| {
+                _ = self.content.orderedRemove(change.offset);
+            }
+        }
+
+        if (change.inserted_text.len > 0) {
+            // Re-insert text
+            try self.content.insertSlice(change.offset, change.inserted_text);
+        }
+
+        // Restore cursor position
+        self.cursor = change.cursor_after;
+
+        // Rebuild line index
+        try self.buildLineIndex();
+
+        // Move change back to undo stack
+        try self.undo_stack.append(change);
+    }
+
+    /// Delete entire line (dd)
+    pub fn deleteLine(self: *Buffer) !void {
+        if (self.lineCount() == 0) return;
+
+        const cursor_before = self.cursor;
+        const line_num = self.cursor.row;
+
+        // Get line start and end positions
+        const line_start = self.line_starts.items[line_num];
+        const line_end = if (line_num + 1 < self.line_starts.items.len)
+            self.line_starts.items[line_num + 1]
+        else
+            self.content.items.len;
+
+        // Save deleted text
+        const deleted_text = try self.allocator.dupe(u8, self.content.items[line_start..line_end]);
+
+        // Delete the line (including newline)
+        var i: usize = line_end;
+        while (i > line_start) {
+            i -= 1;
+            _ = self.content.orderedRemove(line_start);
+        }
+
+        // Rebuild line index
+        try self.buildLineIndex();
+
+        // Move cursor to start of current line (or previous line if we deleted last line)
+        if (self.lineCount() > 0) {
+            if (line_num >= self.lineCount()) {
+                self.cursor.row = self.lineCount() - 1;
+            } else {
+                self.cursor.row = line_num;
+            }
+            self.cursor.col = 0;
+        } else {
+            self.cursor.row = 0;
+            self.cursor.col = 0;
+        }
+
+        // Record change
+        const change = Change{
+            .offset = line_start,
+            .deleted_text = deleted_text,
+            .inserted_text = try self.allocator.alloc(u8, 0),
+            .cursor_before = cursor_before,
+            .cursor_after = self.cursor,
+        };
+        try self.recordChange(change);
+
+        self.modified = true;
+    }
+
+    /// Delete word forward (dw)
+    pub fn deleteWord(self: *Buffer) !void {
+        const line = self.getLine(self.cursor.row) orelse return;
+        const cursor_before = self.cursor;
+        const start_offset = self.getCursorOffset();
+
+        var col = self.cursor.col;
+
+        // Skip current word
+        while (col < line.len and isWordChar(line[col])) {
+            col += 1;
+        }
+
+        // Skip whitespace
+        while (col < line.len and !isWordChar(line[col]) and line[col] != '\n') {
+            col += 1;
+        }
+
+        // If we didn't move, delete to end of line
+        if (col == self.cursor.col) {
+            const line_len = self.getLineLength(self.cursor.row);
+            col = line_len;
+        }
+
+        const end_offset = self.line_starts.items[self.cursor.row] + col;
+        const delete_count = end_offset - start_offset;
+
+        if (delete_count == 0) return;
+
+        // Save deleted text
+        const deleted_text = try self.allocator.dupe(u8, self.content.items[start_offset..end_offset]);
+
+        // Delete characters
+        for (0..delete_count) |_| {
+            _ = self.content.orderedRemove(start_offset);
+        }
+
+        // Rebuild line index if needed
+        for (deleted_text) |c| {
+            if (c == '\n') {
+                try self.buildLineIndex();
+                break;
+            }
+        }
+
+        // Cursor stays at same position
+        // Clamp to line length
+        const new_line_len = self.getLineLength(self.cursor.row);
+        if (new_line_len > 0 and self.cursor.col >= new_line_len) {
+            self.cursor.col = new_line_len - 1;
+        }
+
+        // Record change
+        const change = Change{
+            .offset = start_offset,
+            .deleted_text = deleted_text,
+            .inserted_text = try self.allocator.alloc(u8, 0),
+            .cursor_before = cursor_before,
+            .cursor_after = self.cursor,
+        };
+        try self.recordChange(change);
+
+        self.modified = true;
+    }
+
+    /// Check if character is word constituent (helper for deleteWord)
+    fn isWordChar(c: u8) bool {
+        return (c >= 'a' and c <= 'z') or
+            (c >= 'A' and c <= 'Z') or
+            (c >= '0' and c <= '9') or
+            c == '_';
+    }
+
+    /// Save buffer to file
+    pub fn saveFile(self: *Buffer) !void {
+        const path = self.filepath orelse return error.NoFilepath;
+
+        const file = try std.fs.cwd().createFile(path, .{});
+        defer file.close();
+
+        try file.writeAll(self.content.items);
+        self.modified = false;
     }
 };
 

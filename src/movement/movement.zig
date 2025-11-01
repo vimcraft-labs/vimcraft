@@ -50,9 +50,19 @@ pub fn moveToLineStart(buffer: *Buffer) void {
 
 /// Move to end of line ($)
 pub fn moveToLineEnd(buffer: *Buffer) void {
-    const line_len = buffer.getLineLength(buffer.cursor.row);
-    if (line_len > 0) {
-        buffer.cursor.col = line_len - 1;
+    const line = buffer.getLine(buffer.cursor.row) orelse {
+        buffer.cursor.col = 0;
+        return;
+    };
+
+    // Get visual length (exclude newline)
+    const visual_len = if (line.len > 0 and line[line.len - 1] == '\n')
+        line.len - 1
+    else
+        line.len;
+
+    if (visual_len > 0) {
+        buffer.cursor.col = visual_len - 1;
     } else {
         buffer.cursor.col = 0;
     }

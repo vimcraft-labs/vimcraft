@@ -1,0 +1,23 @@
+# Simple test - insert at end of line
+
+LOAD /tmp/test_openvim.txt
+DUMP
+
+# Go to line 2
+CMD j
+DUMP
+
+# Move to end of line
+CMD $
+DUMP
+
+# Enter insert mode
+CMD i
+DUMP
+
+# Type one character
+CMD X
+DUMP
+
+# Show display
+DISPLAY 80
