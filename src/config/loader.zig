@@ -61,6 +61,9 @@ pub const ConfigPaths = struct {
             \\// OpenVim Configuration (JavaScript via Hermes+JSI)
             \\// This file is executed on startup
             \\
+            \\// Set normal text background and foreground
+            \\vim.highlight('Normal', { bg: '#1e1e1e', fg: '#d4d4d4' });
+            \\
             \\// Set cursor line background color
             \\vim.highlight('CursorLine', { bg: '#2b2b2b' });
             \\
@@ -68,10 +71,10 @@ pub const ConfigPaths = struct {
             \\vim.opt.cursorline = true;
             \\
             \\// More configuration examples:
-            \\// vim.highlight('CursorLine', { bg: '#3a3a3a' });  // lighter gray
-            \\// vim.highlight('CursorLine', { bg: '#2a2a4a' });  // blue tint
-            \\// vim.highlight('CursorLine', { bg: '#2a3a2a' });  // green tint
-            \\// vim.opt.cursorline = false;  // disable cursor line
+            \\// vim.highlight('Normal', { bg: '#282828', fg: '#ebdbb2' });     // Gruvbox dark
+            \\// vim.highlight('Normal', { bg: '#282a36', fg: '#f8f8f2' });     // Dracula
+            \\// vim.highlight('CursorLine', { bg: '#3a3a3a' });                // lighter gray
+            \\// vim.opt.cursorline = false;                                    // disable cursor line
             \\
         ;
 

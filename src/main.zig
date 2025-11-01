@@ -7,6 +7,13 @@ const movement = @import("movement/movement.zig");
 const debug_log = @import("debug/log.zig");
 const TestHarness = @import("test/harness.zig").TestHarness;
 const highlights = @import("config/highlights.zig");
+const ConfigPaths = @import("config/loader.zig").ConfigPaths;
+const jsi_api = @import("jsi/jsi_api.zig");
+
+// Import Hermes C API (use hermes_c namespace to avoid shadowing)
+const hermes_c = @cImport({
+    @cInclude("jsi/hermes_c_api.h");
+});
 
 /// OpenVim - Neovim-compatible editor written in Zig
 /// Phase 1+2+3: Text display, Vim navigation, and text editing
@@ -138,6 +145,61 @@ fn printHelp() void {
     std.debug.print("{s}", .{help});
 }
 
+/// Load configuration from ~/.config/openvim/init.js
+fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightConfig) !void {
+    std.debug.print("\n=== OpenVim Configuration ===\n", .{});
+
+    // Get config paths
+    var paths = try ConfigPaths.init(allocator);
+    defer paths.deinit();
+
+    // Ensure config directory exists
+    try paths.ensureConfigDir();
+
+    // Create default init.js if it doesn't exist
+    try paths.createDefaultInitJs();
+
+    std.debug.print("Config dir: {s}\n", .{paths.config_dir});
+    std.debug.print("init.js: {s}\n", .{paths.init_js_path});
+
+    if (paths.initJsExists()) {
+        std.debug.print("Loading init.js...\n", .{});
+
+        // Create Hermes runtime
+        const runtime_nullable = hermes_c.hermes_runtime_create();
+        if (runtime_nullable == null) {
+            std.debug.print("ERROR: Failed to create Hermes runtime\n", .{});
+            return error.HermesInitFailed;
+        }
+        const runtime = runtime_nullable.?;
+        defer hermes_c.hermes_runtime_destroy(runtime);
+
+        // Register JSI host functions (zigSetHighlight, zigSetOption)
+        jsi_api.initJSI(runtime, config);
+
+        // Load and execute init.js
+        jsi_api.loadConfig(runtime, paths.init_js_path, allocator) catch |err| {
+            std.debug.print("WARNING: Failed to load init.js: {}\n", .{err});
+            std.debug.print("Using default configuration\n", .{});
+            // Fall back to defaults
+            const cursorline_bg = try highlights.Color.fromHex("#2b2b2b");
+            config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
+            config.cursorline_enabled = true;
+            return;
+        };
+
+        std.debug.print("✅ Configuration loaded successfully!\n", .{});
+    } else {
+        std.debug.print("init.js not found, using defaults\n", .{});
+        // Use defaults
+        const cursorline_bg = try highlights.Color.fromHex("#2b2b2b");
+        config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
+        config.cursorline_enabled = true;
+    }
+
+    std.debug.print("=============================\n\n", .{});
+}
+
 /// Run the interactive editor (normal mode)
 fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
@@ -156,11 +218,8 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var highlight_config = highlights.HighlightConfig.init(allocator);
     defer highlight_config.deinit();
 
-    // Set default cursorline (like init.js would do via JSI)
-    // TODO: Load from init.js via Hermes in Phase 4
-    const cursorline_bg = try highlights.Color.fromHex("#2b2b2b");
-    highlight_config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
-    highlight_config.cursorline_enabled = true;
+    // Load configuration from init.js (Phase 4!)
+    try loadConfigFromJs(allocator, &highlight_config);
 
     // Load file
     buffer.loadFile(filepath) catch |err| {
@@ -330,6 +389,7 @@ fn handleNormalMode(
             },
             'A' => {
                 movement.moveToLineEnd(buffer);
+                movement.moveRight(buffer); // Move one more to be AFTER last char
                 mode_manager.enterInsert();
             },
             'I' => {

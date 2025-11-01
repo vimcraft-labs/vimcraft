@@ -246,15 +246,20 @@ pub const Display = struct {
                 const start_col = @min(h_offset, line_without_newline.len);
                 const remaining = line_without_newline[start_col..];
 
-                // Apply cursor line background
+                // Apply background colors: Normal -> CursorLine (if on cursor line)
                 const is_cursor_line = (line_num == buffer.cursor.row);
-                const bg_color = if (is_cursor_line and config.cursorline_enabled and config.cursorline != null)
-                    config.cursorline.?.bg
-                else
-                    null;
+
+                // Default to Normal highlight colors
+                const fg_color = if (config.normal) |n| n.fg else null;
+                var bg_color = if (config.normal) |n| n.bg else null;
+
+                // Override with CursorLine if applicable
+                if (is_cursor_line and config.cursorline_enabled and config.cursorline != null) {
+                    bg_color = config.cursorline.?.bg;
+                }
 
                 // Write line to grid and get actual ending column
-                const end_col = self.grid.setString(row, 0, remaining, null, bg_color);
+                const end_col = self.grid.setString(row, 0, remaining, fg_color, bg_color);
 
                 // Fill rest of line from where text ended (either with cursor bg or clear it)
                 // This ensures old background colors are properly cleared

@@ -23,6 +23,43 @@ pub fn build(b: *std.Build) void {
     // For now, skip it.
 
     // ============================================================================
+    // Hermes+JSI Integration (C++ Static Library)
+    // ============================================================================
+    // Build C++ wrapper as a static library
+    const hermes_lib = b.addStaticLibrary(.{
+        .name = "hermes_jsi",
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add C++ source files
+    hermes_lib.addCSourceFile(.{
+        .file = b.path("src/jsi/hermes_c_api.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    hermes_lib.addCSourceFile(.{
+        .file = b.path("vendor/hermes/API/jsi/jsi/jsi.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    // Add include paths for Hermes
+    hermes_lib.addIncludePath(b.path("src"));
+    hermes_lib.addIncludePath(b.path("vendor/hermes/API"));
+    hermes_lib.addIncludePath(b.path("vendor/hermes/API/jsi"));
+    hermes_lib.addIncludePath(b.path("vendor/hermes/public"));
+
+    // Link C and C++ (but NO rpath here - will be added in exe only)
+    hermes_lib.linkLibC();
+    hermes_lib.linkLibCpp();
+
+    // ============================================================================
     // Main OpenVim executable
     // ============================================================================
     const exe = b.addExecutable(.{
@@ -32,16 +69,28 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Link C libraries
+    // Link C and C++
     exe.linkLibC();
+    exe.linkLibCpp(); // Required for Hermes C++ runtime
 
     // Ghostty components (referenced directly from submodule)
     exe.addIncludePath(b.path("vendor/ghostty/src"));
 
-    // Tree-sitter (use system library if available, otherwise skip for now)
-    // TODO: Later we can build tree-sitter from Neovim's cmake.deps or as separate dep
-    // For now, comment out until we need it:
-    // exe.linkSystemLibrary("tree-sitter");
+    // Hermes include paths (for Zig @cImport)
+    exe.addIncludePath(b.path("src"));
+    exe.addIncludePath(b.path("vendor/hermes/API"));
+    exe.addIncludePath(b.path("vendor/hermes/API/jsi"));
+    exe.addIncludePath(b.path("vendor/hermes/public"));
+
+    // Link Hermes static library
+    exe.linkLibrary(hermes_lib);
+
+    // Link Hermes runtime libraries
+    // Note: addLibraryPath automatically adds rpath on macOS, so no need for explicit addRPath
+    exe.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
+    exe.addLibraryPath(b.path("vendor/hermes/build/jsi"));
+    exe.linkSystemLibrary("hermes_lean");
+    exe.linkSystemLibrary("jsi");
 
     b.installArtifact(exe);
 
@@ -68,7 +117,21 @@ pub fn build(b: *std.Build) void {
     });
 
     unit_tests.linkLibC();
+    unit_tests.linkLibCpp();
     unit_tests.addIncludePath(b.path("vendor/ghostty/src"));
+
+    // Hermes include paths for tests
+    unit_tests.addIncludePath(b.path("src"));
+    unit_tests.addIncludePath(b.path("vendor/hermes/API"));
+    unit_tests.addIncludePath(b.path("vendor/hermes/API/jsi"));
+    unit_tests.addIncludePath(b.path("vendor/hermes/public"));
+
+    // Link Hermes for tests (addLibraryPath handles rpath automatically)
+    unit_tests.linkLibrary(hermes_lib);
+    unit_tests.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
+    unit_tests.addLibraryPath(b.path("vendor/hermes/build/jsi"));
+    unit_tests.linkSystemLibrary("hermes_lean");
+    unit_tests.linkSystemLibrary("jsi");
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
@@ -78,13 +141,10 @@ pub fn build(b: *std.Build) void {
     // ============================================================================
     // NOTE: Hermes+JSI Integration
     // ============================================================================
-    // Hermes C++ integration is still built using Makefile.hermes due to
-    // Zig linker bug with C++ exception handling metadata.
+    // Hermes is now fully integrated into the main build system!
     //
-    // To build Hermes demos:
-    //   make -f Makefile.hermes all
-    //   make -f Makefile.hermes test-zig
+    // The previous Makefile.hermes workaround is no longer needed for the main
+    // executable. It remains available for standalone demos/testing.
     //
-    // The JSI bridge will be integrated into the main executable later,
-    // once we have the core editor functionality working.
+    // JavaScript configuration is loaded from ~/.config/openvim/init.js
 }

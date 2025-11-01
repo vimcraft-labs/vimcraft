@@ -47,6 +47,7 @@ pub const Highlight = struct {
 
 /// Global highlight configuration
 pub const HighlightConfig = struct {
+    normal: ?Highlight = null,      // Normal text (background/foreground)
     cursorline: ?Highlight = null,
     visual: ?Highlight = null,
     line_nr: ?Highlight = null,
@@ -69,7 +70,9 @@ pub const HighlightConfig = struct {
 
     /// Set a highlight by name
     pub fn setHighlight(self: *HighlightConfig, name: []const u8, hl: Highlight) void {
-        if (std.mem.eql(u8, name, "CursorLine")) {
+        if (std.mem.eql(u8, name, "Normal")) {
+            self.normal = hl;
+        } else if (std.mem.eql(u8, name, "CursorLine")) {
             self.cursorline = hl;
         } else if (std.mem.eql(u8, name, "Visual")) {
             self.visual = hl;
@@ -81,7 +84,9 @@ pub const HighlightConfig = struct {
 
     /// Get highlight for a specific group
     pub fn getHighlight(self: *const HighlightConfig, name: []const u8) ?Highlight {
-        if (std.mem.eql(u8, name, "CursorLine")) {
+        if (std.mem.eql(u8, name, "Normal")) {
+            return self.normal;
+        } else if (std.mem.eql(u8, name, "CursorLine")) {
             return self.cursorline;
         } else if (std.mem.eql(u8, name, "Visual")) {
             return self.visual;

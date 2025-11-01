@@ -313,9 +313,7 @@ pub const Buffer = struct {
 
     /// Undo last change
     pub fn undo(self: *Buffer) !void {
-        if (self.undo_stack.items.len == 0) return; // Nothing to undo
-
-        const change = self.undo_stack.pop().?; // Safe - we checked length above
+        const change = self.undo_stack.pop() orelse return; // Nothing to undo
 
         // Reverse the change
         if (change.inserted_text.len > 0) {
@@ -342,9 +340,7 @@ pub const Buffer = struct {
 
     /// Redo last undone change
     pub fn redo(self: *Buffer) !void {
-        if (self.redo_stack.items.len == 0) return; // Nothing to redo
-
-        const change = self.redo_stack.pop().?; // Safe - we checked length above
+        const change = self.redo_stack.pop() orelse return; // Nothing to redo
 
         // Reapply the change
         if (change.deleted_text.len > 0) {

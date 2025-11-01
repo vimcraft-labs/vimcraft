@@ -53,6 +53,7 @@ struct OVHermesString {
 //
 
 struct OVHostFunctionContext {
+    OVHermesRuntime* runtime;
     OVHermesHostFunction callback;
     void* user_context;
 };
@@ -230,6 +231,7 @@ void hermes_register_host_function(
 
         // Store context in global map
         g_host_function_contexts[func_name] = OVHostFunctionContext{
+            .runtime = runtime,
             .callback = callback,
             .user_context = context
         };
@@ -258,7 +260,7 @@ void hermes_register_host_function(
 
                 // Call user callback
                 OVHermesValue* result = ctx.callback(
-                    nullptr, // runtime wrapper (we could pass this)
+                    ctx.runtime, // Pass the runtime wrapper
                     ctx.user_context,
                     arg_wrappers.data(),
                     count
