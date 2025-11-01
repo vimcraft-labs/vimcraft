@@ -6,6 +6,7 @@ const ModeManager = @import("mode/mode.zig").ModeManager;
 const movement = @import("movement/movement.zig");
 const debug_log = @import("debug/log.zig");
 const TestHarness = @import("test/harness.zig").TestHarness;
+const highlights = @import("config/highlights.zig");
 
 /// OpenVim - Neovim-compatible editor written in Zig
 /// Phase 1+2+3: Text display, Vim navigation, and text editing
@@ -144,11 +145,22 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    var display = Display.init();
+    var display = try Display.init(allocator);
+    defer display.deinit();
     var mode_manager = ModeManager.init();
     var cmd_buffer = CommandBuffer.init(allocator);
     defer cmd_buffer.deinit();
     var pending_cmd = PendingCommand{};
+
+    // Initialize highlight configuration
+    var highlight_config = highlights.HighlightConfig.init(allocator);
+    defer highlight_config.deinit();
+
+    // Set default cursorline (like init.js would do via JSI)
+    // TODO: Load from init.js via Hermes in Phase 4
+    const cursorline_bg = try highlights.Color.fromHex("#2b2b2b");
+    highlight_config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
+    highlight_config.cursorline_enabled = true;
 
     // Load file
     buffer.loadFile(filepath) catch |err| {
@@ -167,7 +179,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     {
         const status = try allocator.dupe(u8, mode_manager.getModeString());
         defer allocator.free(status);
-        try display.render(&buffer, status);
+        try display.render(&buffer, status, &highlight_config);
         try display.setCursorBlock(); // Start in normal mode with block cursor
         try display.flush();
     }
@@ -185,7 +197,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
             try allocator.dupe(u8, mode_manager.getModeString());
         defer allocator.free(status);
 
-        try display.render(&buffer, status);
+        try display.render(&buffer, status, &highlight_config);
 
         // Set cursor shape based on mode
         if (mode_manager.isInsert()) {
@@ -561,7 +573,8 @@ fn runTestMode(allocator: std.mem.Allocator, test_file_path: []const u8) !void {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    var display = Display.init();
+    var display = try Display.init(allocator);
+    defer display.deinit();
     var mode_manager = ModeManager.init();
     var harness = TestHarness.init(allocator, &buffer, &display, &mode_manager, stdout);
 
@@ -639,7 +652,8 @@ fn runREPL(allocator: std.mem.Allocator) !void {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    var display = Display.init();
+    var display = try Display.init(allocator);
+    defer display.deinit();
     var mode_manager = ModeManager.init();
     var harness = TestHarness.init(allocator, &buffer, &display, &mode_manager, stdout);
 

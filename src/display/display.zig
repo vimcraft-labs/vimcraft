@@ -1,24 +1,43 @@
 const std = @import("std");
 const Buffer = @import("../buffer/buffer.zig").Buffer;
 const debug_log = @import("../debug/log.zig");
+const highlights = @import("../config/highlights.zig");
+const ScreenGrid = @import("screen_grid.zig").ScreenGrid;
+const Cell = @import("screen_grid.zig").Cell;
+const Update = @import("screen_grid.zig").Update;
 
 /// Terminal display manager
 /// Handles rendering buffer content to terminal using ANSI escape codes
+/// Now uses grid-based rendering (Neovim-style) with Helix optimizations
 pub const Display = struct {
+    allocator: std.mem.Allocator,
     stdout: std.fs.File.Writer,
     terminal_rows: usize,
     terminal_cols: usize,
     viewport_top: usize, // First visible line number
     viewport_left: usize, // Horizontal scroll offset for current line
 
-    pub fn init() Display {
+    // Grid-based rendering
+    grid: ScreenGrid,
+    output_buf: std.ArrayList(u8), // Batch output (Neovim + Helix pattern)
+
+    pub fn init(allocator: std.mem.Allocator) !Display {
+        const grid = try ScreenGrid.init(allocator, 80, 24);
         return .{
+            .allocator = allocator,
             .stdout = std.io.getStdOut().writer(),
             .terminal_rows = 24, // Default, will be updated by getTerminalSize
             .terminal_cols = 80,
             .viewport_top = 0,
             .viewport_left = 0,
+            .grid = grid,
+            .output_buf = std.ArrayList(u8).init(allocator),
         };
+    }
+
+    pub fn deinit(self: *Display) void {
+        self.grid.deinit();
+        self.output_buf.deinit();
     }
 
     /// Enter raw terminal mode (disable line buffering, echo)
@@ -120,7 +139,7 @@ pub const Display = struct {
         try self.stdout.writeAll("\x1b[4 q");
     }
 
-    /// Get terminal size (uses TIOCGWINSZ ioctl)
+    /// Get terminal size (uses TIOCGWINSZ ioctl) and resize grid if needed
     pub fn getTerminalSize(self: *Display) !void {
         const stdout = std.io.getStdOut();
         const builtin = @import("builtin");
@@ -135,8 +154,15 @@ pub const Display = struct {
                 const result = std.posix.system.ioctl(stdout.handle, TIOCGWINSZ, @intFromPtr(&winsize));
 
                 if (result == 0 and winsize.row > 0 and winsize.col > 0) {
-                    self.terminal_rows = winsize.row;
-                    self.terminal_cols = winsize.col;
+                    const new_rows = winsize.row;
+                    const new_cols = winsize.col;
+
+                    // Resize grid if terminal size changed
+                    if (new_rows != self.terminal_rows or new_cols != self.terminal_cols) {
+                        try self.grid.resize(new_cols, new_rows);
+                        self.terminal_rows = new_rows;
+                        self.terminal_cols = new_cols;
+                    }
                 }
                 // If ioctl fails or returns invalid size, keep defaults (24x80)
             }
@@ -144,81 +170,43 @@ pub const Display = struct {
         }
     }
 
-    /// Render buffer content to screen
-    pub fn render(self: *Display, buffer: *const Buffer, status: []const u8) !void {
+    /// Render buffer content to screen using grid-based rendering
+    /// This is the main rendering function following Neovim's architecture
+    pub fn render(self: *Display, buffer: *const Buffer, status: []const u8, config: *const highlights.HighlightConfig) !void {
         // Update terminal size (handles resize and ensures correct dimensions)
         try self.getTerminalSize();
 
-        debug_log.log("=== RENDER START ===", .{});
+        debug_log.log("=== RENDER START (Grid-based) ===", .{});
         debug_log.log("Terminal size: {}x{}", .{ self.terminal_rows, self.terminal_cols });
-        debug_log.log("Buffer cursor: row={}, col={}", .{ buffer.cursor.row, buffer.cursor.col });
 
+        // Hide cursor during render
         try self.hideCursor();
         defer self.showCursor() catch {};
-
-        // Clear screen and reset cursor
-        try self.clearScreen();
-        try self.moveCursor(0, 0);
 
         // Adjust viewport to keep cursor visible
         self.adjustViewport(buffer);
 
         // Adjust horizontal scroll for cursor line
         if (buffer.cursor.col >= self.viewport_left + self.terminal_cols) {
-            // Cursor is off right edge, scroll right
             self.viewport_left = buffer.cursor.col - self.terminal_cols + 1;
         } else if (buffer.cursor.col < self.viewport_left) {
-            // Cursor is off left edge, scroll left
             self.viewport_left = buffer.cursor.col;
         }
 
-        // Calculate visible area (reserve last line for status)
-        const text_rows = if (self.terminal_rows > 1) self.terminal_rows - 1 else 1;
+        // STEP 1: Update grid from buffer content (render to memory)
+        try self.updateGridFromBuffer(buffer, status, config);
 
-        // Render visible lines
-        var row: usize = 0;
-        debug_log.log("Rendering {} text rows", .{text_rows});
-        while (row < text_rows) : (row += 1) {
-            const line_num = self.viewport_top + row;
+        // STEP 2: Compute diff (what changed since last frame)
+        const updates = try self.grid.diff(self.allocator);
+        defer self.allocator.free(updates);
 
-            try self.moveCursor(row, 0);
+        debug_log.log("Diff found {} changed cells", .{updates.len});
 
-            if (line_num < buffer.lineCount()) {
-                const line = buffer.getLine(line_num).?;
-                debug_log.log("Line {}: raw_len={}, content=[{s}]", .{ line_num, line.len, line });
+        // STEP 3: Render only changed cells with optimizations
+        try self.renderUpdates(updates);
 
-                // Strip trailing newline (we render it by moving to next row, not by printing \n)
-                const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
-                    line[0 .. line.len - 1]
-                else
-                    line;
-
-                debug_log.log("Line {}: after strip len={}, content=[{s}]", .{ line_num, line_without_newline.len, line_without_newline });
-
-                // Apply horizontal scroll only to the cursor line
-                const h_offset = if (line_num == buffer.cursor.row) self.viewport_left else 0;
-                const start_col = @min(h_offset, line_without_newline.len);
-                const remaining = line_without_newline[start_col..];
-
-                // Truncate to terminal width to prevent terminal from wrapping
-                const visible_line = if (remaining.len > self.terminal_cols)
-                    remaining[0..self.terminal_cols]
-                else
-                    remaining;
-
-                debug_log.log("Line {}: visible_len={}, will render=[{s}]", .{ line_num, visible_line.len, visible_line });
-                try self.stdout.writeAll(visible_line);
-            } else {
-                // Empty line indicator (Vim-style ~)
-                try self.stdout.writeAll("~");
-            }
-
-            // Clear to end of line
-            try self.stdout.writeAll("\x1b[K");
-        }
-
-        // Render status line
-        try self.renderStatusLine(buffer, status);
+        // STEP 4: Swap buffers (current becomes previous for next frame)
+        self.grid.swapBuffers();
 
         // Position cursor at buffer cursor location
         const screen_row = if (buffer.cursor.row >= self.viewport_top)
@@ -226,15 +214,199 @@ pub const Display = struct {
         else
             0;
 
-        // Adjust cursor column for horizontal scroll
         const screen_col = if (buffer.cursor.col >= self.viewport_left)
             buffer.cursor.col - self.viewport_left
         else
             0;
 
-        // Clamp to terminal width to prevent wrapping
         const clamped_col = @min(screen_col, self.terminal_cols - 1);
         try self.moveCursor(screen_row, clamped_col);
+    }
+
+    /// Update grid from buffer content (Step 1: logical → grid)
+    fn updateGridFromBuffer(self: *Display, buffer: *const Buffer, status: []const u8, config: *const highlights.HighlightConfig) !void {
+        const text_rows = if (self.terminal_rows > 1) self.terminal_rows - 1 else 1;
+
+        // Render text lines to grid
+        var row: usize = 0;
+        while (row < text_rows) : (row += 1) {
+            const line_num = self.viewport_top + row;
+
+            if (line_num < buffer.lineCount()) {
+                const line = buffer.getLine(line_num).?;
+
+                // Strip trailing newline
+                const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
+                    line[0 .. line.len - 1]
+                else
+                    line;
+
+                // Apply horizontal scroll only to cursor line
+                const h_offset = if (line_num == buffer.cursor.row) self.viewport_left else 0;
+                const start_col = @min(h_offset, line_without_newline.len);
+                const remaining = line_without_newline[start_col..];
+
+                // Apply cursor line background
+                const is_cursor_line = (line_num == buffer.cursor.row);
+                const bg_color = if (is_cursor_line and config.cursorline_enabled and config.cursorline != null)
+                    config.cursorline.?.bg
+                else
+                    null;
+
+                // Write line to grid and get actual ending column
+                const end_col = self.grid.setString(row, 0, remaining, null, bg_color);
+
+                // Fill rest of line from where text ended (either with cursor bg or clear it)
+                // This ensures old background colors are properly cleared
+                for (end_col..self.terminal_cols) |col| {
+                    self.grid.setCell(row, col, .{ .char = ' ', .bg = bg_color });
+                }
+            } else {
+                // Empty line indicator (Vim-style ~) - no background
+                self.grid.setCell(row, 0, .{ .char = '~', .bg = null });
+                // Clear rest of line - explicitly set no background
+                for (1..self.terminal_cols) |col| {
+                    self.grid.setCell(row, col, .{ .char = ' ', .bg = null });
+                }
+            }
+        }
+
+        // Render status line to grid
+        const status_row = self.terminal_rows - 1;
+        try self.updateStatusLineInGrid(status_row, buffer, status);
+    }
+
+    /// Update status line in grid
+    fn updateStatusLineInGrid(self: *Display, row: usize, buffer: *const Buffer, status: []const u8) !void {
+        const filename = buffer.filepath orelse "[No Name]";
+        const modified = if (buffer.modified) " [+]" else "";
+
+        const position = try std.fmt.allocPrint(
+            self.allocator,
+            " {s}{s} | {s} | {d},{d}",
+            .{ filename, modified, status, buffer.cursor.row + 1, buffer.cursor.col + 1 },
+        );
+        defer self.allocator.free(position);
+
+        // Status line uses inverted colors (Neovim-style)
+        // We'll implement this by setting all cells with a special attribute
+        // For now, just render the text
+        for (0..self.terminal_cols) |col| {
+            if (col < position.len) {
+                const char = position[col];
+                self.grid.setCell(row, col, .{ .char = char });
+            } else {
+                self.grid.setCell(row, col, .{ .char = ' ' });
+            }
+        }
+    }
+
+    /// Render updates to terminal (Step 3: optimized output)
+    /// This implements Helix's optimizations: adjacent cell skipping and attribute tracking
+    fn renderUpdates(self: *Display, updates: []const Update) !void {
+        if (updates.len == 0) return;
+
+        // Clear output buffer
+        self.output_buf.clearRetainingCapacity();
+        const writer = self.output_buf.writer();
+
+        // Track state to minimize ANSI codes (Helix optimization)
+        var current_fg: ?highlights.Color = null;
+        var current_bg: ?highlights.Color = null;
+        var current_bold: bool = false;
+        var current_italic: bool = false;
+        var current_underline: bool = false;
+        var last_pos: ?struct { row: usize, col: usize } = null;
+
+        for (updates) |update| {
+            // HELIX OPTIMIZATION 1: Skip cursor movement if adjacent
+            // If we're printing at (last_col + 1, same_row), terminal auto-advances
+            const is_adjacent = if (last_pos) |pos|
+                (update.row == pos.row and update.col == pos.col + 1)
+            else
+                false;
+
+            if (!is_adjacent) {
+                // Move cursor to position
+                try writer.print("\x1b[{d};{d}H", .{ update.row + 1, update.col + 1 });
+            }
+
+            // HELIX OPTIMIZATION 2: Only send attribute changes
+            // Foreground color
+            if (update.cell.fg) |fg| {
+                if (current_fg == null or !colorEql(current_fg.?, fg)) {
+                    var buf: [32]u8 = undefined;
+                    const fg_code = try fg.toAnsiFg(&buf);
+                    try writer.writeAll(fg_code);
+                    current_fg = fg;
+                }
+            } else if (current_fg != null) {
+                try writer.writeAll("\x1b[39m"); // Reset FG
+                current_fg = null;
+            }
+
+            // Background color
+            if (update.cell.bg) |bg| {
+                if (current_bg == null or !colorEql(current_bg.?, bg)) {
+                    var buf: [32]u8 = undefined;
+                    const bg_code = try bg.toAnsiBg(&buf);
+                    try writer.writeAll(bg_code);
+                    current_bg = bg;
+                }
+            } else if (current_bg != null) {
+                try writer.writeAll("\x1b[49m"); // Reset BG
+                current_bg = null;
+            }
+
+            // Bold
+            if (update.cell.bold != current_bold) {
+                if (update.cell.bold) {
+                    try writer.writeAll("\x1b[1m");
+                } else {
+                    try writer.writeAll("\x1b[22m");
+                }
+                current_bold = update.cell.bold;
+            }
+
+            // Italic
+            if (update.cell.italic != current_italic) {
+                if (update.cell.italic) {
+                    try writer.writeAll("\x1b[3m");
+                } else {
+                    try writer.writeAll("\x1b[23m");
+                }
+                current_italic = update.cell.italic;
+            }
+
+            // Underline
+            if (update.cell.underline != current_underline) {
+                if (update.cell.underline) {
+                    try writer.writeAll("\x1b[4m");
+                } else {
+                    try writer.writeAll("\x1b[24m");
+                }
+                current_underline = update.cell.underline;
+            }
+
+            // Write the character
+            var buf: [4]u8 = undefined;
+            const len = std.unicode.utf8Encode(update.cell.char, &buf) catch 1;
+            try writer.writeAll(buf[0..len]);
+
+            // Track position for adjacent detection
+            last_pos = .{ .row = update.row, .col = update.col };
+        }
+
+        // Reset all attributes at end
+        try writer.writeAll("\x1b[0m");
+
+        // NEOVIM + HELIX PATTERN: Single flush (batched output)
+        try self.stdout.writeAll(self.output_buf.items);
+    }
+
+    /// Helper: Compare two colors
+    fn colorEql(a: highlights.Color, b: highlights.Color) bool {
+        return a.r == b.r and a.g == b.g and a.b == b.b;
     }
 
     /// Render status line at bottom of screen

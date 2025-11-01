@@ -17,9 +17,9 @@ INCLUDES = -I src \
 LDFLAGS = -L $(HERMES_BUILD)/API/hermes -lhermes_lean
 
 # Targets
-.PHONY: all clean test test-zig zig-hermes
+.PHONY: all clean test test-zig zig-hermes demo-colors
 
-all: test-hermes hermesc zig-hermes
+all: test-hermes hermesc zig-hermes demo-colors
 
 # Compile C++ wrapper + JSI
 hermes_c_api.o: src/jsi/hermes_c_api.cpp src/jsi/hermes_c_api.h
@@ -64,6 +64,32 @@ test-zig: zig-hermes /tmp/test.hbc
 	@echo "Running Zig + Hermes test..."
 	@DYLD_LIBRARY_PATH=$(HERMES_BUILD)/API/hermes:$(HERMES_BUILD)/jsi ./test-zig-hermes
 
+# Compile JSI Colors Demo
+demo_jsi_colors.o: examples/demo_jsi_colors.zig hermes_c_api.o jsi.o
+	@echo "Compiling JSI Colors Demo..."
+	@zig build-obj examples/demo_jsi_colors.zig \
+		-I src -I $(HERMES_API) -I $(HERMES_API)/jsi -I vendor/hermes/public \
+		-lc -lc++ --name demo_jsi_colors
+
+# Link JSI Colors Demo
+demo-colors: demo_jsi_colors.o hermes_c_api.o jsi.o
+	@echo "Linking JSI Colors Demo..."
+	@$(CXX) -o demo-jsi-colors demo_jsi_colors.o hermes_c_api.o jsi.o $(LDFLAGS)
+	@echo "✅ JSI Colors Demo built!"
+
+# Compile colors demo JavaScript to bytecode
+examples/demo_colors.hbc: hermesc examples/demo_colors.js
+	@echo "Compiling demo_colors.js → bytecode..."
+	@./hermesc -emit-binary -out examples/demo_colors.hbc examples/demo_colors.js
+	@echo "✅ demo_colors.hbc created"
+
+# Run colors demo
+run-colors: demo-colors examples/demo_colors.hbc
+	@echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "  Running: JavaScript → JSI → Colored Terminal Output"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+	@DYLD_LIBRARY_PATH=$(HERMES_BUILD)/API/hermes:$(HERMES_BUILD)/jsi ./demo-jsi-colors
+
 # Compile test bytecode
 /tmp/test.hbc: hermesc
 	@echo "2 + 2" > /tmp/test.js
@@ -74,6 +100,8 @@ test-zig: zig-hermes /tmp/test.hbc
 clean:
 	rm -f hermes_c_api.o jsi.o test-hermes hermesc
 	rm -f test_zig_hermes.o test-zig-hermes
+	rm -f demo_jsi_colors.o demo-jsi-colors
+	rm -f examples/demo_colors.hbc
 	rm -f /tmp/test.js /tmp/test.hbc
 
 # Help
@@ -81,11 +109,15 @@ help:
 	@echo "Hermes+JSI Build System"
 	@echo ""
 	@echo "Targets:"
-	@echo "  make all        - Build C test, Zig test, and hermesc"
-	@echo "  make test       - Run C + Hermes integration test"
-	@echo "  make test-zig   - Run Zig + Hermes integration test ⚡"
-	@echo "  make clean      - Remove all built files"
-	@echo "  make help       - Show this help"
+	@echo "  make all         - Build all tests and demos"
+	@echo "  make test        - Run C + Hermes integration test"
+	@echo "  make test-zig    - Run Zig + Hermes integration test ⚡"
+	@echo "  make run-colors  - Run JSI Colors Demo (JavaScript customizes line colors) 🎨"
+	@echo "  make clean       - Remove all built files"
+	@echo "  make help        - Show this help"
+	@echo ""
+	@echo "Demos:"
+	@echo "  demo-jsi-colors  - Shows JavaScript → JSI → Colored Terminal Output"
 	@echo ""
 	@echo "Zig is running JavaScript via Hermes! 🚀"
 	@echo "Note: Uses hybrid build (Zig→.o, clang++ links) to avoid Zig linker bug."
