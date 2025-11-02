@@ -8,6 +8,7 @@ const debug_log = @import("debug/log.zig");
 const TestHarness = @import("test/harness.zig").TestHarness;
 const highlights = @import("config/highlights.zig");
 const ConfigPaths = @import("config/loader.zig").ConfigPaths;
+const ConfigWatcher = @import("config/watcher.zig").ConfigWatcher;
 const jsi_api = @import("jsi/jsi_api.zig");
 const event_loop = @import("event_loop/libuv.zig");
 
@@ -59,6 +60,41 @@ const DebuggerState = struct {
                 alloc.destroy(debugger);
             }
         }
+    }
+};
+
+/// State for configuration hot reload
+const ReloadState = struct {
+    highlight_config: *highlights.HighlightConfig,
+    debugger_state: *DebuggerState,
+    allocator: std.mem.Allocator,
+    needs_reload: bool = false,
+    config_path: []const u8,
+
+    fn markForReload(self: *ReloadState) void {
+        self.needs_reload = true;
+    }
+
+    fn reload(self: *ReloadState) !void {
+        if (!self.needs_reload) return;
+
+        // Re-execute the configuration file
+        if (self.debugger_state.runtime) |runtime| {
+            // Re-register console.log with debugger before reloading
+            // This ensures console.log works in the reloaded config
+            if (self.debugger_state.debugger_ptr) |debugger_ptr| {
+                jsi_api.registerConsoleWithDebugger(runtime, debugger_ptr);
+            }
+
+            jsi_api.loadConfig(runtime, self.config_path, self.allocator) catch |err| {
+                const stderr = std.io.getStdErr().writer();
+                stderr.print("Reload failed: {}\n", .{err}) catch {};
+                self.needs_reload = false;
+                return err;
+            };
+        }
+
+        self.needs_reload = false;
     }
 };
 
@@ -380,6 +416,14 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     try paths.ensureConfigDir();
     try paths.createDefaultInitJs();
 
+    // Set up hot reload state
+    var reload_state = ReloadState{
+        .highlight_config = &highlight_config,
+        .debugger_state = &debugger_state,
+        .allocator = allocator,
+        .config_path = paths.init_js_path,
+    };
+
     // Create Hermes runtime (must stay alive for debugger)
     const runtime_nullable = hermes_c.hermes_runtime_create();
     if (runtime_nullable == null) {
@@ -388,6 +432,9 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     }
     const runtime = runtime_nullable.?;
     defer hermes_c.hermes_runtime_destroy(runtime);
+
+    // Store runtime in debugger state for hot reload
+    debugger_state.runtime = runtime;
 
     // Register JSI host functions
     // Timer system is also initialized here
@@ -444,6 +491,39 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     // Get terminal size
     try display.getTerminalSize();
 
+    // Set up hot reload watcher AFTER entering raw mode
+    const reloadCallback = struct {
+        fn callback(user_data: ?*anyopaque) void {
+            const state: *ReloadState = @ptrCast(@alignCast(user_data.?));
+            state.markForReload();
+        }
+    }.callback;
+
+    var watcher: ?*ConfigWatcher = null;
+    if (paths.initJsExists()) {
+        if (ConfigWatcher.init(
+            allocator,
+            paths.init_js_path,
+            reloadCallback,
+            &reload_state,
+        )) |w| {
+            if (w.start()) {
+                watcher = w; // Successfully started
+            } else |_| {
+                // Cleanup failed watcher - even though start() failed,
+                // the fs_event handle was initialized, so we need to close it properly
+                w.close();
+                // Run event loop briefly to process the close callback
+                var i: u8 = 0;
+                while (i < 5) : (i += 1) {
+                    _ = event_loop.runOnce();
+                }
+            }
+        } else |_| {}
+    }
+    // NOTE: watcher cleanup uses uv_close() callback for proper libuv handle cleanup
+    // We call close() and run the event loop to process the callback before other cleanup
+
     // Initial render
     {
         const status = try allocator.dupe(u8, mode_manager.getModeString());
@@ -458,6 +538,9 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     while (running) {
         // Run libuv event loop to process timers and async events (non-blocking)
         _ = event_loop.runOnce();
+
+        // Check if config needs reload (triggered by file watcher)
+        reload_state.reload() catch {};
 
         // Handle input with short timeout to keep UI responsive
         // libuv handles timer firing, so we just need to poll for input
@@ -483,6 +566,19 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     // Clean exit
     try display.clearScreen();
     try display.moveCursor(0, 0);
+
+    // CRITICAL: Close the file watcher and let event loop process the close callback
+    // This properly cleans up the libuv handle and frees all memory without leaks
+    if (watcher) |w| {
+        w.close();
+
+        // Run event loop a few times to ensure close callback is processed
+        // The close callback will free all memory and destroy the struct
+        var i: u8 = 0;
+        while (i < 10) : (i += 1) {
+            _ = event_loop.runOnce();
+        }
+    }
 
     std.debug.print("\n🐛 Debugger shutting down...\n", .{});
 }
