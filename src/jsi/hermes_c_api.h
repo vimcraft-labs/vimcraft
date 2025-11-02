@@ -363,6 +363,26 @@ void hermes_cdp_add_console_message(
     int level
 );
 
+/**
+ * Add a console message with JavaScript values (React Native approach)
+ *
+ * This passes raw JavaScript values to Chrome DevTools, letting it handle
+ * the formatting. This properly displays objects, arrays, etc.
+ *
+ * @param runtime The Hermes runtime
+ * @param cdp_debug The CDP debug session
+ * @param values Array of JavaScript values to log
+ * @param value_count Number of values
+ * @param level Message level: 0=log, 1=debug, 2=info, 3=error, 4=warning
+ */
+void hermes_cdp_add_console_message_values(
+    OVHermesRuntime* runtime,
+    OVCDPDebugAPI* cdp_debug,
+    OVHermesValue** values,
+    size_t value_count,
+    int level
+);
+
 #ifdef __cplusplus
 }
 #endif

@@ -677,4 +677,58 @@ void hermes_cdp_add_console_message(
     }
 }
 
+void hermes_cdp_add_console_message_values(
+    OVHermesRuntime* ov_runtime,
+    OVCDPDebugAPI* cdp_debug,
+    OVHermesValue** values,
+    size_t value_count,
+    int level
+) {
+    if (!ov_runtime || !cdp_debug || !cdp_debug->cdp_debug || !values) return;
+
+    try {
+        // Get the JSI runtime
+        auto& runtime = cdp_debug->cdp_debug->runtime();
+
+        // Get current timestamp
+        auto now = std::chrono::system_clock::now();
+        auto duration = now.time_since_epoch();
+        double timestamp = std::chrono::duration<double, std::milli>(duration).count();
+
+        // Map level to ConsoleAPIType
+        ConsoleAPIType type;
+        switch (level) {
+            case 0: type = ConsoleAPIType::kLog; break;
+            case 1: type = ConsoleAPIType::kDebug; break;
+            case 2: type = ConsoleAPIType::kInfo; break;
+            case 3: type = ConsoleAPIType::kError; break;
+            case 4: type = ConsoleAPIType::kWarning; break;
+            default: type = ConsoleAPIType::kLog; break;
+        }
+
+        // Convert OVHermesValue* to jsi::Value
+        std::vector<jsi::Value> args;
+        args.reserve(value_count);
+
+        for (size_t i = 0; i < value_count; i++) {
+            if (!values[i]) {
+                args.push_back(jsi::Value::undefined());
+                continue;
+            }
+
+            OVHermesValue* ov_value = values[i];
+
+            // Clone the value using the copy constructor
+            // This properly handles all value types (primitives, objects, arrays, etc.)
+            args.push_back(jsi::Value(runtime, ov_value->value));
+        }
+
+        // Create and dispatch console message
+        ConsoleMessage console_msg(timestamp, type, std::move(args));
+        cdp_debug->cdp_debug->addConsoleMessage(std::move(console_msg));
+    } catch (...) {
+        // Silently ignore errors
+    }
+}
+
 } // extern "C"

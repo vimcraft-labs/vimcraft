@@ -60,6 +60,24 @@ bool cdp_debugger_is_connected(CDPDebugger* debugger);
 void cdp_debugger_log(CDPDebugger* debugger, const char* message, int level);
 
 /**
+ * Send console log with JavaScript values (React Native approach)
+ *
+ * This passes raw JavaScript values to Chrome DevTools for proper formatting
+ * of objects, arrays, and other complex types.
+ *
+ * @param debugger The debugger instance
+ * @param values Array of JavaScript values to log
+ * @param value_count Number of values
+ * @param level 0=log, 1=debug, 2=info, 3=error, 4=warning
+ */
+void cdp_debugger_log_values(
+    CDPDebugger* debugger,
+    OVHermesValue** values,
+    size_t value_count,
+    int level
+);
+
+/**
  * Stop the CDP debugger
  *
  * @param debugger The debugger instance

@@ -119,40 +119,32 @@ const cdp_c = @cImport({
     @cInclude("debug/cdp_debugger.h");
 });
 
-/// Zig host function: zigConsoleLog(message)
-/// Called from JavaScript: zigConsoleLog('Hello from JS')
-/// Sends message to Chrome DevTools Console (or terminal if no debugger)
+/// Zig host function: zigConsoleLog(...args)
+/// Called from JavaScript: zigConsoleLog('Hello', 42, {foo: 'bar'})
+/// Sends JavaScript values directly to Chrome DevTools Console
+/// This follows React Native's approach - pass raw values and let Chrome format them
 export fn zig_console_log(
-    runtime: ?*c.OVHermesRuntime,
+    runtime_nullable: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
     arg_count: usize,
 ) callconv(.C) ?*c.OVHermesValue {
-    const rt = runtime orelse return c.hermes_value_create_undefined(runtime);
-
     if (arg_count < 1) {
-        return c.hermes_value_create_undefined(runtime);
+        return c.hermes_value_create_undefined(runtime_nullable);
     }
 
-    // Get message string from argument
-    const msg_value = args[0] orelse return c.hermes_value_create_undefined(runtime);
-
-    var msg_len: usize = 0;
-    const msg_ptr = c.hermes_value_get_string(rt, msg_value, &msg_len);
-
-    if (msg_ptr == null or msg_len == 0) {
-        return c.hermes_value_create_undefined(runtime);
-    }
-
-    // Send to Chrome debugger if available, otherwise do nothing (silent)
+    // Send to Chrome debugger if available
     if (context) |ctx| {
-        // Context is CDPDebugger pointer - send to Chrome Console
+        // Context is CDPDebugger pointer
         const debugger_ptr: *cdp_c.CDPDebugger = @ptrCast(@alignCast(ctx));
-        cdp_c.cdp_debugger_log(debugger_ptr, msg_ptr, 0); // 0 = log level
+
+        // Pass JavaScript values directly to CDP - let Chrome DevTools format them
+        // This properly displays objects, arrays, and all other types
+        cdp_c.cdp_debugger_log_values(debugger_ptr, args, arg_count, 0); // 0 = log level
     }
     // If no debugger, console.log does nothing (silent mode)
 
-    return c.hermes_value_create_undefined(runtime);
+    return c.hermes_value_create_undefined(runtime_nullable);
 }
 
 // ============================================================================
@@ -577,7 +569,7 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
     const wrapped_source = try std.fmt.allocPrint(allocator,
         \\// console object (for debugging)
         \\const console = {{
-        \\  log: function(msg) {{ zigConsoleLog(String(msg)); }}
+        \\  log: function(...args) {{ zigConsoleLog(...args); }}
         \\}};
         \\
         \\// Timer functions (setTimeout, setInterval, clearTimeout, clearInterval)

@@ -143,6 +143,23 @@ void cdp_debugger_log(CDPDebugger* debugger, const char* message, int level) {
     hermes_cdp_add_console_message(debugger->cdp_debug, message, level);
 }
 
+void cdp_debugger_log_values(
+    CDPDebugger* debugger,
+    OVHermesValue** values,
+    size_t value_count,
+    int level
+) {
+    if (!debugger || !debugger->runtime || !debugger->cdp_debug || !values) return;
+
+    hermes_cdp_add_console_message_values(
+        debugger->runtime,
+        debugger->cdp_debug,
+        values,
+        value_count,
+        level
+    );
+}
+
 void cdp_debugger_stop(CDPDebugger* debugger) {
     if (!debugger) return;
 
