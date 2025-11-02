@@ -24,3 +24,6 @@ vendor/ghostty/zig-cache/
 vendor/neovim/build/
 vendor/neovim/.deps/
 vendor/libuv/build/
+
+.yarn
+node_modules

@@ -1,0 +1,31 @@
+{
+  "name": "openvim",
+  "version": "1.0.0",
+  "description": "**Status**: ✅ Zig executes JavaScript via Hermes + JSI bridge working",
+  "main": "init.js",
+  "directories": {
+    "example": "examples",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build:config": "tsc --project tsconfig.json",
+    "watch:config": "tsc --project tsconfig.json --watch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fluctlight-kayaba/openvim.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/fluctlight-kayaba/openvim/issues"
+  },
+  "homepage": "https://github.com/fluctlight-kayaba/openvim#readme",
+  "devDependencies": {
+    "@openvim/types": "file:packages/types"
+  },
+  "packageManager": "yarn@4.10.3"
+}

@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "module": "commonjs",
+    "lib": ["ES2017"],
+    "outDir": "/Users/le/.config/openvim",
+    "rootDir": "./",
+    "strict": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "typeRoots": ["./node_modules/@types", "./packages/types/src"],
+    "moduleResolution": "node"
+  },
+  "include": ["init.ts"],
+  "exclude": ["node_modules", "dist", "vendor", "zig-out", "zig-cache"]
+}

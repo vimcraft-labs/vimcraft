@@ -1,0 +1,28 @@
+{
+  "name": "@openvim/types",
+  "version": "0.1.0",
+  "description": "TypeScript type definitions for OpenVim configuration API",
+  "main": "src/index.d.ts",
+  "types": "src/index.d.ts",
+  "files": [
+    "src/index.d.ts"
+  ],
+  "keywords": [
+    "openvim",
+    "vim",
+    "neovim",
+    "types",
+    "typescript",
+    "text-editor"
+  ],
+  "author": "OpenVim Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/openvim.git",
+    "directory": "packages/types"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

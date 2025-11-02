@@ -1,0 +1,61 @@
+/// <reference types="@openvim/types" />
+
+const colors = {
+  bg: '#1e1e1e',
+  bgAlt: '#252526',
+  bgHighlight: '#2b2b2b',
+
+  fg: '#d4d4d4',
+  fgAlt: '#808080',
+
+  red: '#e06c75',
+  green: '#98c379',
+  yellow: '#e5c07b',
+  blue: '#61afef',
+  purple: '#c678dd',
+  cyan: '#56b6c2',
+  gray: '#5c6370',
+};
+
+// Highlight groups configuration
+const highlights = {
+  CursorLine: {
+    bg: colors.bgHighlight,
+  },
+  LineNr: {
+    fg: colors.fgAlt,
+  },
+  Comment: {
+    fg: colors.gray,
+    italic: true,
+  },
+  String: {
+    fg: colors.green,
+  },
+  Keyword: {
+    fg: colors.purple,
+    bold: true,
+  },
+  Function: {
+    fg: colors.blue,
+  },
+  Type: {
+    fg: colors.yellow,
+  },
+  Constant: {
+    fg: colors.cyan,
+  },
+};
+
+// Apply all highlights
+for (const [name, opts] of Object.entries(highlights)) {
+  vim.highlight(name, opts);
+}
+
+vim.opt.cursorline = true;
+
+setTimeout(() => {
+  console.log('✅ OpenVim ready!');
+}, 100);
+
+console.log('📝 Config loaded successfully!');
