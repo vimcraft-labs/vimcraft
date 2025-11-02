@@ -110,6 +110,13 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("hermes_lean");
     exe.linkSystemLibrary("jsi");
 
+    // ============================================================================
+    // libuv (Event Loop & Async I/O)
+    // ============================================================================
+    exe.addIncludePath(b.path("vendor/libuv/include"));
+    exe.addLibraryPath(b.path("vendor/libuv/build"));
+    exe.linkSystemLibrary("uv");
+
     b.installArtifact(exe);
 
     // ============================================================================
@@ -147,6 +154,11 @@ pub fn build(b: *std.Build) void {
     // Link Hermes for tests (addLibraryPath handles rpath automatically)
     unit_tests.linkLibrary(hermes_lib);
     unit_tests.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
+
+    // libuv for tests
+    unit_tests.addIncludePath(b.path("vendor/libuv/include"));
+    unit_tests.addLibraryPath(b.path("vendor/libuv/build"));
+    unit_tests.linkSystemLibrary("uv");
     unit_tests.addLibraryPath(b.path("vendor/hermes/build/jsi"));
     unit_tests.linkSystemLibrary("hermes_lean");
     unit_tests.linkSystemLibrary("jsi");

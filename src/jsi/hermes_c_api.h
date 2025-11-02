@@ -151,6 +151,29 @@ bool hermes_value_is_boolean(OVHermesValue* value);
 bool hermes_value_is_number(OVHermesValue* value);
 bool hermes_value_is_string(OVHermesValue* value);
 bool hermes_value_is_object(OVHermesValue* value);
+bool hermes_value_is_function(OVHermesRuntime* runtime, OVHermesValue* value);
+
+/**
+ * Call a JavaScript function
+ *
+ * @param runtime The Hermes runtime
+ * @param function The function value to call
+ * @param args Array of argument values (can be NULL if arg_count is 0)
+ * @param arg_count Number of arguments
+ * @return The return value from the function call (or NULL on error)
+ */
+OVHermesValue* hermes_call_function(
+    OVHermesRuntime* runtime,
+    OVHermesValue* function,
+    OVHermesValue** args,
+    size_t arg_count
+);
+
+/**
+ * Clone a value (creates a new independent copy)
+ * The returned value must be freed with hermes_value_destroy()
+ */
+OVHermesValue* hermes_value_clone(OVHermesRuntime* runtime, OVHermesValue* value);
 
 /**
  * Extract values (these fail if type is wrong)

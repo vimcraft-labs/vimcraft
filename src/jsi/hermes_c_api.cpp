@@ -339,6 +339,72 @@ bool hermes_value_is_object(OVHermesValue* value) {
     return value && value->value.isObject();
 }
 
+bool hermes_value_is_function(OVHermesRuntime* runtime, OVHermesValue* value) {
+    if (!runtime || !value || !value->value.isObject()) {
+        return false;
+    }
+    try {
+        return value->value.asObject(*runtime->runtime).isFunction(*runtime->runtime);
+    } catch (...) {
+        return false;
+    }
+}
+
+OVHermesValue* hermes_call_function(
+    OVHermesRuntime* runtime,
+    OVHermesValue* function,
+    OVHermesValue** args,
+    size_t arg_count
+) {
+    if (!runtime || !function) {
+        return nullptr;
+    }
+
+    try {
+        Runtime& rt = *runtime->runtime;
+
+        // Convert function value to Function object
+        if (!function->value.isObject() || !function->value.asObject(rt).isFunction(rt)) {
+            return nullptr;
+        }
+
+        Function func = function->value.asObject(rt).getFunction(rt);
+
+        // Convert arguments
+        std::vector<Value> argValues;
+        if (args && arg_count > 0) {
+            argValues.reserve(arg_count);
+            for (size_t i = 0; i < arg_count; i++) {
+                if (args[i]) {
+                    argValues.push_back(Value(rt, args[i]->value));
+                } else {
+                    argValues.push_back(Value::undefined());
+                }
+            }
+        }
+
+        // Call the function
+        Value result = func.call(rt, (const Value*)argValues.data(), argValues.size());
+
+        return new OVHermesValue(std::move(result));
+    } catch (const facebook::jsi::JSIException& e) {
+        runtime->last_exception_message = e.what();
+        return nullptr;
+    } catch (...) {
+        runtime->last_exception_message = "Unknown error calling function";
+        return nullptr;
+    }
+}
+
+OVHermesValue* hermes_value_clone(OVHermesRuntime* runtime, OVHermesValue* value) {
+    if (!runtime || !value) {
+        return nullptr;
+    }
+
+    // Create a new Value by copying from the existing one
+    return new OVHermesValue(Value(*runtime->runtime, value->value));
+}
+
 bool hermes_value_get_boolean(OVHermesValue* value) {
     if (!value || !value->value.isBool()) return false;
     return value->value.getBool();

@@ -7,3 +7,6 @@
 [submodule "vendor/neovim"]
 	path = vendor/neovim
 	url = https://github.com/neovim/neovim.git
+[submodule "vendor/libuv"]
+	path = vendor/libuv
+	url = https://github.com/libuv/libuv.git

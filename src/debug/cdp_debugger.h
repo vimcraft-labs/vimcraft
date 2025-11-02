@@ -77,7 +77,7 @@ void cdp_debugger_destroy(CDPDebugger* debugger);
  * Get the Chrome DevTools URL
  *
  * @param debugger The debugger instance
- * @return URL like "devtools://devtools/bundled/inspector.html?panel=console&ws=localhost:9229"
+ * @return URL like "devtools://devtools/bundled/inspector.html?ws=localhost:9229"
  */
 const char* cdp_debugger_get_url(CDPDebugger* debugger);
 

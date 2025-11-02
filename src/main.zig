@@ -9,6 +9,7 @@ const TestHarness = @import("test/harness.zig").TestHarness;
 const highlights = @import("config/highlights.zig");
 const ConfigPaths = @import("config/loader.zig").ConfigPaths;
 const jsi_api = @import("jsi/jsi_api.zig");
+const event_loop = @import("event_loop/libuv.zig");
 
 // Import Hermes C API (use hermes_c namespace to avoid shadowing)
 const hermes_c = @cImport({
@@ -47,6 +48,18 @@ const DebuggerState = struct {
     runtime: ?*hermes_c.OVHermesRuntime = null,
     debugger_ptr: ?*anyopaque = null,
     port: u16 = 9229,
+    allocator: ?std.mem.Allocator = null,
+
+    fn deinit(self: *DebuggerState) void {
+        if (self.debugger_ptr) |ptr| {
+            if (self.allocator) |alloc| {
+                const Debugger = @import("debug/debugger.zig").Debugger;
+                const debugger = @as(*Debugger, @ptrCast(@alignCast(ptr)));
+                debugger.deinit();
+                alloc.destroy(debugger);
+            }
+        }
+    }
 };
 
 /// Command buffer for command mode
@@ -84,6 +97,10 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    // Initialize libuv event loop
+    try event_loop.init();
+    defer event_loop.deinit();
 
     // Initialize debug logging
     try debug_log.init();
@@ -163,8 +180,6 @@ fn printHelp() void {
 
 /// Load configuration from ~/.config/openvim/init.js
 fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightConfig, debugger_state: *DebuggerState) !void {
-    std.debug.print("\n=== OpenVim Configuration ===\n", .{});
-
     // Get config paths
     var paths = try ConfigPaths.init(allocator);
     defer paths.deinit();
@@ -175,11 +190,7 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
     // Create default init.js if it doesn't exist
     try paths.createDefaultInitJs();
 
-    std.debug.print("Config dir: {s}\n", .{paths.config_dir});
-    std.debug.print("init.js: {s}\n", .{paths.init_js_path});
-
     if (paths.initJsExists()) {
-        std.debug.print("Loading init.js...\n", .{});
 
         // Create Hermes runtime
         const runtime_nullable = hermes_c.hermes_runtime_create();
@@ -195,7 +206,8 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
         debugger_state.runtime = runtime;
 
         // Register JSI host functions (zigSetHighlight, zigSetOption)
-        jsi_api.initJSI(runtime, config);
+        // Timer system is also initialized here
+        jsi_api.initJSI(allocator, runtime, config);
 
         // Load and execute init.js
         jsi_api.loadConfig(runtime, paths.init_js_path, allocator) catch |err| {
@@ -208,14 +220,11 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
             return;
         };
     } else {
-        std.debug.print("init.js not found, using defaults\n", .{});
         // Use defaults
         const cursorline_bg = try highlights.Color.fromHex("#2b2b2b");
         config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
         config.cursorline_enabled = true;
     }
-
-    std.debug.print("=============================\n\n", .{});
 }
 
 /// Run the interactive editor (normal mode)
@@ -233,7 +242,8 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var pending_cmd = PendingCommand{};
 
     // Initialize debugger state (for :debug command)
-    var debugger_state = DebuggerState{};
+    var debugger_state = DebuggerState{ .allocator = allocator };
+    defer debugger_state.deinit();
 
     // Initialize highlight configuration
     var highlight_config = highlights.HighlightConfig.init(allocator);
@@ -241,6 +251,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
     // Load configuration from init.js (Phase 4!)
     try loadConfigFromJs(allocator, &highlight_config, &debugger_state);
+    defer jsi_api.deinitTimers(); // Clean up timers on exit (even on error)
 
     // Load file
     buffer.loadFile(filepath) catch |err| {
@@ -267,8 +278,12 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     // Main event loop - render only after state changes
     var running = true;
     while (running) {
-        // Handle input (blocking - waits for user input)
-        running = try handleInput(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, allocator, &debugger_state);
+        // Run libuv event loop to process timers and async events (non-blocking)
+        _ = event_loop.runOnce();
+
+        // Handle input with short timeout to keep UI responsive
+        // libuv handles timer firing, so we just need to poll for input
+        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, allocator, &debugger_state, 10);
 
         // Render after input (something changed)
         const status = if (mode_manager.isCommand())
@@ -375,7 +390,9 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     defer hermes_c.hermes_runtime_destroy(runtime);
 
     // Register JSI host functions
-    jsi_api.initJSI(runtime, &highlight_config);
+    // Timer system is also initialized here
+    jsi_api.initJSI(allocator, runtime, &highlight_config);
+    defer jsi_api.deinitTimers(); // Clean up timers on exit (even on error)
 
     // Create and start CDP debugger BEFORE loading config
     // This allows Chrome to see console.log from init.js
@@ -439,7 +456,12 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     // Main event loop
     var running = true;
     while (running) {
-        running = try handleInput(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, allocator, &debugger_state);
+        // Run libuv event loop to process timers and async events (non-blocking)
+        _ = event_loop.runOnce();
+
+        // Handle input with short timeout to keep UI responsive
+        // libuv handles timer firing, so we just need to poll for input
+        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, allocator, &debugger_state, 10);
 
         const status = if (mode_manager.isCommand())
             try std.fmt.allocPrint(allocator, ":{s}", .{cmd_buffer.getString()})
@@ -465,9 +487,9 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     std.debug.print("\n🐛 Debugger shutting down...\n", .{});
 }
 
-/// Handle keyboard input
+/// Handle keyboard input with timeout (for timer support)
 /// Returns false to quit
-fn handleInput(
+fn handleInputWithTimeout(
     buffer: *Buffer,
     display: *Display,
     mode_manager: *ModeManager,
@@ -475,14 +497,38 @@ fn handleInput(
     pending_cmd: *PendingCommand,
     allocator: std.mem.Allocator,
     debugger_state: *DebuggerState,
+    timeout_ms: ?i64,
 ) !bool {
     const stdin = std.io.getStdIn();
     var buf: [16]u8 = undefined;
 
-    // Read input (blocking - will wait for input)
+    // Use poll() to wait for input with timeout
+    const posix = std.posix;
+    var poll_fds = [_]posix.pollfd{
+        .{
+            .fd = stdin.handle,
+            .events = posix.POLL.IN,
+            .revents = 0,
+        },
+    };
+
+    // Convert timeout to milliseconds for poll()
+    // If no timers, use 100ms default to avoid busy-waiting
+    const poll_timeout: i32 = if (timeout_ms) |t|
+        @intCast(@min(t, std.math.maxInt(i32)))
+    else
+        100;
+
+    const poll_result = try posix.poll(&poll_fds, poll_timeout);
+
+    // If no input available (timeout or no data), return true (continue)
+    if (poll_result == 0 or poll_fds[0].revents == 0) {
+        return true;
+    }
+
+    // Read input (non-blocking)
     const bytes_read = try stdin.read(&buf);
     if (bytes_read == 0) {
-        // Should never happen with blocking read, but handle gracefully
         return true;
     }
 

@@ -155,8 +155,307 @@ export fn zig_console_log(
     return c.hermes_value_create_undefined(runtime);
 }
 
+// ============================================================================
+// Timer System (setTimeout, setInterval) - libuv based
+// ============================================================================
+
+// Import libuv
+const uv = @cImport({
+    @cInclude("uv.h");
+});
+
+// Import event loop module
+const event_loop = @import("../event_loop/libuv.zig");
+
+/// Timer handle data
+const TimerData = struct {
+    timer: uv.uv_timer_t,
+    callback: *c.OVHermesValue, // Cloned JavaScript function
+    runtime: *c.OVHermesRuntime,
+    is_repeat: bool,
+    allocator: std.mem.Allocator,
+};
+
+var timer_allocator: std.mem.Allocator = undefined;
+var timer_runtime: ?*c.OVHermesRuntime = null;
+var timer_initialized = false;
+
+/// Track active timers for cleanup
+var active_timers: std.ArrayList(*TimerData) = undefined;
+var timers_list_initialized = false;
+
+/// Initialize timer system
+pub fn initTimers(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime) void {
+    timer_allocator = allocator;
+    timer_runtime = runtime;
+    timer_initialized = true;
+
+    if (!timers_list_initialized) {
+        active_timers = std.ArrayList(*TimerData).init(allocator);
+        timers_list_initialized = true;
+    }
+}
+
+/// Deinitialize timer system
+pub fn deinitTimers() void {
+    if (!timer_initialized) return;
+
+    // Close all active timers
+    for (active_timers.items) |timer_data| {
+        _ = uv.uv_timer_stop(&timer_data.timer);
+        uv.uv_close(@ptrCast(&timer_data.timer), onTimerClose);
+    }
+
+    // Run event loop to process close callbacks
+    const loop = event_loop.getLoop();
+    if (loop) |l| {
+        // Process all pending close callbacks
+        while (uv.uv_loop_alive(l) != 0) {
+            _ = uv.uv_run(l, uv.UV_RUN_ONCE);
+        }
+    }
+
+    active_timers.clearAndFree();
+    timer_initialized = false;
+    timer_runtime = null;
+}
+
+/// libuv timer callback - called when timer fires
+fn onTimerFire(handle: [*c]uv.uv_timer_t) callconv(.C) void {
+    // Get our timer data from the handle
+    const timer_data = @as(*TimerData, @ptrCast(@alignCast(handle.*.data)));
+
+    // Call JavaScript callback
+    const result = c.hermes_call_function(timer_data.runtime, timer_data.callback, null, 0);
+    if (result != null) {
+        c.hermes_value_destroy(result);
+    }
+
+    // If this is a one-shot timeout (not interval), clean up
+    if (!timer_data.is_repeat) {
+        _ = uv.uv_timer_stop(handle);
+        uv.uv_close(@ptrCast(handle), onTimerClose);
+    }
+}
+
+/// libuv close callback - called when timer handle is closed
+fn onTimerClose(handle: [*c]uv.uv_handle_t) callconv(.C) void {
+    // Get our timer data
+    const timer_data = @as(*TimerData, @ptrCast(@alignCast(handle.*.data)));
+
+    // Remove from active timers list
+    if (timers_list_initialized) {
+        for (active_timers.items, 0..) |item, i| {
+            if (item == timer_data) {
+                _ = active_timers.swapRemove(i);
+                break;
+            }
+        }
+    }
+
+    // Destroy cloned callback
+    c.hermes_value_destroy(timer_data.callback);
+
+    // Free timer data
+    timer_data.allocator.destroy(timer_data);
+}
+
+/// Zig host function: setTimeout(callback, delay)
+export fn zig_set_timeout(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.C) ?*c.OVHermesValue {
+    _ = context;
+    const rt = runtime orelse return c.hermes_value_create_undefined(runtime);
+
+    if (arg_count < 2) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 0: callback function
+    const callback_value = args[0] orelse return c.hermes_value_create_undefined(runtime);
+    if (!c.hermes_value_is_function(rt, callback_value)) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 1: delay in milliseconds
+    const delay_value = args[1] orelse return c.hermes_value_create_undefined(runtime);
+    const delay_ms = c.hermes_value_get_number(delay_value);
+
+    if (!timer_initialized) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    const loop = event_loop.getLoop() orelse return c.hermes_value_create_undefined(runtime);
+
+    // Clone the callback to create a persistent reference
+    const cloned_callback = c.hermes_value_clone(rt, callback_value) orelse {
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    // Allocate timer data
+    const timer_data = timer_allocator.create(TimerData) catch {
+        c.hermes_value_destroy(cloned_callback);
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    timer_data.* = TimerData{
+        .timer = undefined,
+        .callback = cloned_callback,
+        .runtime = rt,
+        .is_repeat = false,
+        .allocator = timer_allocator,
+    };
+
+    // Initialize libuv timer
+    const init_result = uv.uv_timer_init(loop, &timer_data.timer);
+    if (init_result != 0) {
+        c.hermes_value_destroy(cloned_callback);
+        timer_allocator.destroy(timer_data);
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Set timer data as user data
+    timer_data.timer.data = timer_data;
+
+    // Start the timer (one-shot: repeat = 0)
+    const delay = @as(u64, @intFromFloat(@max(0, delay_ms)));
+    const start_result = uv.uv_timer_start(&timer_data.timer, onTimerFire, delay, 0);
+    if (start_result != 0) {
+        uv.uv_close(@ptrCast(&timer_data.timer), onTimerClose);
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Track timer for cleanup
+    active_timers.append(timer_data) catch {
+        // If we can't track it, close it
+        uv.uv_close(@ptrCast(&timer_data.timer), onTimerClose);
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    // Return timer handle as number (for clearTimeout)
+    const handle_addr = @intFromPtr(&timer_data.timer);
+    return c.hermes_value_create_number(rt, @floatFromInt(handle_addr));
+}
+
+/// Zig host function: setInterval(callback, delay)
+export fn zig_set_interval(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.C) ?*c.OVHermesValue {
+    _ = context;
+    const rt = runtime orelse return c.hermes_value_create_undefined(runtime);
+
+    if (arg_count < 2) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 0: callback function
+    const callback_value = args[0] orelse return c.hermes_value_create_undefined(runtime);
+    if (!c.hermes_value_is_function(rt, callback_value)) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 1: delay in milliseconds
+    const delay_value = args[1] orelse return c.hermes_value_create_undefined(runtime);
+    const delay_ms = c.hermes_value_get_number(delay_value);
+
+    if (!timer_initialized) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Get libuv event loop
+    const loop = event_loop.getLoop() orelse return c.hermes_value_create_undefined(runtime);
+
+    // Clone the callback to create a persistent reference
+    const cloned_callback = c.hermes_value_clone(rt, callback_value) orelse {
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    // Allocate timer data on heap
+    const timer_data = timer_allocator.create(TimerData) catch {
+        c.hermes_value_destroy(cloned_callback);
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    timer_data.* = TimerData{
+        .timer = undefined,
+        .callback = cloned_callback,
+        .runtime = rt,
+        .is_repeat = true, // This is an interval timer
+        .allocator = timer_allocator,
+    };
+
+    // Initialize libuv timer handle
+    const init_result = uv.uv_timer_init(loop, &timer_data.timer);
+    if (init_result != 0) {
+        c.hermes_value_destroy(cloned_callback);
+        timer_allocator.destroy(timer_data);
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Store timer_data pointer in handle's data field for callback access
+    timer_data.timer.data = timer_data;
+
+    // Start the timer with repeat (interval mode)
+    // For setInterval: pass delay as both timeout AND repeat parameter
+    const delay = @as(u64, @intFromFloat(@max(0, delay_ms)));
+    const start_result = uv.uv_timer_start(&timer_data.timer, onTimerFire, delay, delay);
+    if (start_result != 0) {
+        uv.uv_close(@ptrCast(&timer_data.timer), onTimerClose);
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Track timer for cleanup
+    active_timers.append(timer_data) catch {
+        // If we can't track it, close it
+        uv.uv_close(@ptrCast(&timer_data.timer), onTimerClose);
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    // Return timer handle address as ID
+    const handle_addr = @intFromPtr(&timer_data.timer);
+    return c.hermes_value_create_number(rt, @floatFromInt(handle_addr));
+}
+
+/// Zig host function: clearTimeout(id) / clearInterval(id)
+export fn zig_clear_timer(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.C) ?*c.OVHermesValue {
+    _ = context;
+
+    if (arg_count < 1 or !timer_initialized) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 0: timer ID (handle address)
+    const id_value = args[0] orelse return c.hermes_value_create_undefined(runtime);
+    const handle_addr = @as(usize, @intFromFloat(c.hermes_value_get_number(id_value)));
+
+    // Convert address back to timer handle pointer
+    const timer_handle = @as(*uv.uv_timer_t, @ptrFromInt(handle_addr));
+
+    // Stop the timer
+    _ = uv.uv_timer_stop(timer_handle);
+
+    // Close the handle (will trigger onTimerClose callback for cleanup)
+    uv.uv_close(@ptrCast(timer_handle), onTimerClose);
+
+    return c.hermes_value_create_undefined(runtime);
+}
+
 /// Initialize JSI runtime and register host functions
-pub fn initJSI(runtime: *c.OVHermesRuntime, config: *highlights.HighlightConfig) void {
+pub fn initJSI(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, config: *highlights.HighlightConfig) void {
+    // Initialize timer system with libuv
+    initTimers(allocator, runtime);
+
     // Register Zig functions that JavaScript can call
     // Pass config pointer as context so host functions can access it
     c.hermes_register_host_function(
@@ -178,6 +477,28 @@ pub fn initJSI(runtime: *c.OVHermesRuntime, config: *highlights.HighlightConfig)
         "zigConsoleLog",
         zig_console_log,
         null, // No context needed
+    );
+
+    // Register timer functions
+    c.hermes_register_host_function(
+        runtime,
+        "zigSetTimeout",
+        zig_set_timeout,
+        null,
+    );
+
+    c.hermes_register_host_function(
+        runtime,
+        "zigSetInterval",
+        zig_set_interval,
+        null,
+    );
+
+    c.hermes_register_host_function(
+        runtime,
+        "zigClearTimer",
+        zig_clear_timer,
+        null,
     );
 
     // JSI functions registered (silent mode)
@@ -258,6 +579,23 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
         \\const console = {{
         \\  log: function(msg) {{ zigConsoleLog(String(msg)); }}
         \\}};
+        \\
+        \\// Timer functions (setTimeout, setInterval, clearTimeout, clearInterval)
+        \\function setTimeout(callback, delay) {{
+        \\  return zigSetTimeout(callback, delay || 0);
+        \\}}
+        \\
+        \\function setInterval(callback, delay) {{
+        \\  return zigSetInterval(callback, delay || 0);
+        \\}}
+        \\
+        \\function clearTimeout(id) {{
+        \\  zigClearTimer(id);
+        \\}}
+        \\
+        \\function clearInterval(id) {{
+        \\  zigClearTimer(id);
+        \\}}
         \\
         \\// vim API object
         \\const vim = {{

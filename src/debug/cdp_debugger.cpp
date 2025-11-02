@@ -112,9 +112,9 @@ CDPDebugger* cdp_debugger_create(OVHermesRuntime* runtime, uint16_t port) {
         return NULL;
     }
 
-    // Create Chrome DevTools URL (open directly to Console panel)
+    // Create Chrome DevTools URL
     snprintf(debugger->devtools_url, sizeof(debugger->devtools_url),
-             "devtools://devtools/bundled/inspector.html?panel=console&ws=localhost:%d", port);
+             "devtools://devtools/bundled/inspector.html?ws=localhost:%d", port);
 
     return debugger;
 }
