@@ -78,6 +78,10 @@ const ReloadState = struct {
     fn reload(self: *ReloadState) !void {
         if (!self.needs_reload) return;
 
+        // Clear all active timers (setInterval, setTimeout) before reloading
+        // This prevents duplicate timers from accumulating across reloads
+        jsi_api.clearAllTimers();
+
         // Re-execute the configuration file
         if (self.debugger_state.runtime) |runtime| {
             // Re-register console.log with debugger before reloading

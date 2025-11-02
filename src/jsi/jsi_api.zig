@@ -188,12 +188,17 @@ pub fn initTimers(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime) voi
     }
 }
 
-/// Deinitialize timer system
-pub fn deinitTimers() void {
-    if (!timer_initialized) return;
+/// Clear all active timers (for hot reload)
+/// Unlike deinitTimers(), this keeps the timer system initialized
+pub fn clearAllTimers() void {
+    if (!timer_initialized or !timers_list_initialized) return;
 
-    // Close all active timers
-    for (active_timers.items) |timer_data| {
+    // Stop and close all active timers
+    // Make a copy of the list because onTimerClose will modify active_timers
+    const timers_copy = active_timers.clone() catch return;
+    defer timers_copy.deinit();
+
+    for (timers_copy.items) |timer_data| {
         _ = uv.uv_timer_stop(&timer_data.timer);
         uv.uv_close(@ptrCast(&timer_data.timer), onTimerClose);
     }
@@ -201,12 +206,21 @@ pub fn deinitTimers() void {
     // Run event loop to process close callbacks
     const loop = event_loop.getLoop();
     if (loop) |l| {
-        // Process all pending close callbacks
-        while (uv.uv_loop_alive(l) != 0) {
-            _ = uv.uv_run(l, uv.UV_RUN_ONCE);
+        var i: u8 = 0;
+        while (i < 10) : (i += 1) {
+            _ = uv.uv_run(l, uv.UV_RUN_NOWAIT);
         }
     }
+}
 
+/// Deinitialize timer system
+pub fn deinitTimers() void {
+    if (!timer_initialized) return;
+
+    // Clear all active timers first
+    clearAllTimers();
+
+    // Now deinitialize the timer system
     active_timers.clearAndFree();
     timer_initialized = false;
     timer_runtime = null;
