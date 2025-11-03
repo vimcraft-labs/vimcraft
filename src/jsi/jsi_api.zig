@@ -72,7 +72,7 @@ export fn zig_set_highlight(
 }
 
 /// Zig host function: zigSetOption(name, value)
-/// Called from JavaScript: zigSetOption('cursorline', true)
+/// Called from JavaScript: zigSetOption('cursorLine', true)
 export fn zig_set_option(
     runtime_nullable: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
@@ -106,7 +106,8 @@ export fn zig_set_option(
     const name = name_buf[0..name_len];
 
     // Arg 1: value (boolean, number, string, etc.)
-    if (std.mem.eql(u8, name, "cursorline")) {
+    // Support both camelCase (cursorLine) and lowercase (cursorline) for backwards compatibility
+    if (std.mem.eql(u8, name, "cursorLine") or std.mem.eql(u8, name, "cursorline")) {
         const value = c.hermes_value_get_boolean(args[1]);
         config.cursorline_enabled = value;
     }
@@ -611,8 +612,8 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
         \\    zigSetHighlight(name, bg, fg);
         \\  }},
         \\  opt: {{
-        \\    set cursorline(value) {{ zigSetOption('cursorline', value); }},
-        \\    get cursorline() {{ return true; }}
+        \\    set cursorLine(value) {{ zigSetOption('cursorLine', value); }},
+        \\    get cursorLine() {{ return true; }}
         \\  }}
         \\}};
         \\

@@ -52,7 +52,8 @@ for (const [name, opts] of Object.entries(highlights)) {
   vim.highlight(name, opts);
 }
 
-vim.opt.cursorline = true;
+// Editor options (using camelCase)
+vim.opt.cursorLine = true;
 
 setTimeout(() => {
   console.log('✅ OpenVim ready!');
