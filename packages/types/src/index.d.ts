@@ -1,5 +1,28 @@
 // OpenVim TypeScript Type Definitions
-// Version: 0.1.0
+// Version: 0.3.0 - Neovim-Compatible API
+// Based on Neovim 0.12.0 API analysis
+
+// ============================================================================
+// Type Aliases & Utility Types
+// ============================================================================
+
+/** Buffer handle (0 = current buffer, positive integers for specific buffers) */
+export type Buffer = number;
+
+/** Window handle (0 = current window, positive integers for specific windows) */
+export type Window = number;
+
+/** Tabpage handle (0 = current tabpage, positive integers for specific tabpages) */
+export type Tabpage = number;
+
+/** Namespace ID for highlights, extmarks, diagnostics */
+export type Namespace = number;
+
+/** Autocommand ID returned by nvim_create_autocmd */
+export type AutocmdID = number;
+
+/** User command ID */
+export type CommandID = number;
 
 /**
  * RGB color representation
@@ -10,6 +33,10 @@ export interface Color {
   b: number;
 }
 
+// ============================================================================
+// Highlight System
+// ============================================================================
+
 /**
  * Highlight group styling options
  */
@@ -18,7 +45,7 @@ export interface HighlightOpts {
   bg?: string | null;
   /** Foreground color (hex string like '#00ff00' or null) */
   fg?: string | null;
-  /** Special color for UI elements */
+  /** Special color for undercurl/underline */
   sp?: string | null;
   /** Color blend value (0-100) */
   blend?: number;
@@ -42,108 +69,10 @@ export interface HighlightOpts {
   reverse?: boolean;
   /** Standout mode */
   standout?: boolean;
-}
-
-/**
- * Editor options (vim.opt)
- * All option names use camelCase
- */
-export interface VimOptions {
-  // === Display Options ===
-
-  /** Show line numbers */
-  number?: boolean;
-  /** Show relative line numbers */
-  relativeNumber?: boolean;
-  /** Highlight the screen line of the cursor */
-  cursorLine?: boolean;
-  /** Highlight the screen column of the cursor */
-  cursorColumn?: boolean;
-  /** Show sign column (for diagnostics, git, etc.) */
-  signColumn?: 'yes' | 'no' | 'auto' | 'number';
-  /** Color column at specific positions */
-  colorColumn?: string;
-  /** Number of columns to scroll horizontally */
-  scrollOff?: number;
-  /** Number of columns to keep to the left and right of the cursor */
-  sidescrollOff?: number;
-  /** Always show the status line */
-  lastStatus?: 0 | 1 | 2 | 3;
-  /** Show command in the last line */
-  showCmd?: boolean;
-  /** Show current mode in command line */
-  showMode?: boolean;
-  /** Wrap long lines */
-  wrap?: boolean;
-  /** Line break at word boundaries */
-  lineBreak?: boolean;
-
-  // === Indentation Options ===
-
-  /** Number of spaces a <Tab> counts for */
-  tabStop?: number;
-  /** Number of spaces for each indent step */
-  shiftWidth?: number;
-  /** Use spaces instead of tabs */
-  expandTab?: boolean;
-  /** Smart autoindenting */
-  smartIndent?: boolean;
-  /** Copy indent from current line when starting a new line */
-  autoIndent?: boolean;
-
-  // === Search Options ===
-
-  /** Ignore case in search patterns */
-  ignoreCase?: boolean;
-  /** Override ignoreCase if pattern contains uppercase */
-  smartCase?: boolean;
-  /** Highlight all matches of search pattern */
-  hlSearch?: boolean;
-  /** Show search matches as you type */
-  incSearch?: boolean;
-
-  // === Edit Options ===
-
-  /** Enable mouse support */
-  mouse?: 'a' | 'n' | 'v' | 'i' | 'c' | '';
-  /** Time in ms to wait for a mapped sequence */
-  timeoutLen?: number;
-  /** Allow backspacing over everything in insert mode */
-  backspace?: string;
-  /** Characters that form pairs */
-  matchPairs?: string;
-
-  // === Window Options ===
-
-  /** Splitting a window will put the new window below */
-  splitBelow?: boolean;
-  /** Splitting a window will put the new window right */
-  splitRight?: boolean;
-
-  // === File Options ===
-
-  /** Automatically read file when changed outside of vim */
-  autoRead?: boolean;
-  /** Automatically write file when moving to another buffer */
-  autoWrite?: boolean;
-  /** File encoding */
-  fileEncoding?: string;
-
-  // === Completion Options ===
-
-  /** Enable command-line completion */
-  wildMenu?: boolean;
-  /** Completion mode for wildmenu */
-  wildMode?: string;
-  /** Completion options */
-  completeOpt?: string;
-
-  // === Performance Options ===
-
-  /** Faster scrolling */
-  lazyRedraw?: boolean;
-  /** Time in ms to wait before triggering events */
-  updateTime?: number;
+  /** Highlight priority (0-10000, default: varies by type) */
+  priority?: number;
+  /** Link to another highlight group */
+  link?: string;
 }
 
 /**
@@ -152,104 +81,159 @@ export interface VimOptions {
  */
 export type HighlightGroup =
   // === Editor UI ===
-  | 'Normal'          // Normal text
-  | 'NormalFloat'     // Normal text in floating windows
-  | 'NormalNC'        // Normal text in non-current windows
-  | 'CursorLine'      // Screen line of the cursor
-  | 'CursorColumn'    // Screen column of the cursor
-  | 'ColorColumn'     // Color column
-  | 'LineNr'          // Line number
-  | 'CursorLineNr'    // Line number for cursor line
-  | 'SignColumn'      // Column where signs are displayed
-  | 'FoldColumn'      // Fold column
-  | 'Folded'          // Line used for closed folds
-  | 'VertSplit'       // Vertical split separator
-  | 'StatusLine'      // Status line of current window
-  | 'StatusLineNC'    // Status line of non-current windows
-  | 'TabLine'         // Tab pages line
-  | 'TabLineFill'     // Tab pages line filler
-  | 'TabLineSel'      // Tab pages line selected tab
-  | 'WinSeparator'    // Window separator
-  | 'Pmenu'           // Popup menu
-  | 'PmenuSel'        // Popup menu selected item
-  | 'PmenuSbar'       // Popup menu scrollbar
-  | 'PmenuThumb'      // Popup menu scrollbar thumb
+  | 'Normal' | 'NormalFloat' | 'NormalNC'
+  | 'CursorLine' | 'CursorColumn' | 'ColorColumn'
+  | 'LineNr' | 'CursorLineNr' | 'SignColumn'
+  | 'FoldColumn' | 'Folded' | 'VertSplit'
+  | 'StatusLine' | 'StatusLineNC'
+  | 'TabLine' | 'TabLineFill' | 'TabLineSel'
+  | 'WinSeparator' | 'WinBar' | 'WinBarNC'
+  | 'Pmenu' | 'PmenuSel' | 'PmenuSbar' | 'PmenuThumb'
 
   // === Syntax Highlighting ===
-  | 'Comment'         // Comments
-  | 'Constant'        // Constants
-  | 'String'          // String constants
-  | 'Character'       // Character constants
-  | 'Number'          // Number constants
-  | 'Boolean'         // Boolean constants
-  | 'Float'           // Floating point constants
-  | 'Identifier'      // Variable names
-  | 'Function'        // Function names
-  | 'Statement'       // Statements
-  | 'Conditional'     // if, then, else, etc.
-  | 'Repeat'          // for, while, etc.
-  | 'Label'           // Labels
-  | 'Operator'        // Operators
-  | 'Keyword'         // Keywords
-  | 'Exception'       // try, catch, throw
-  | 'PreProc'         // Preprocessor
-  | 'Include'         // Include directives
-  | 'Define'          // Define directives
-  | 'Macro'           // Macros
-  | 'PreCondit'       // Preprocessor conditionals
-  | 'Type'            // Types
-  | 'StorageClass'    // Storage class (static, etc.)
-  | 'Structure'       // Structures
-  | 'Typedef'         // Typedefs
-  | 'Special'         // Special symbols
-  | 'SpecialChar'     // Special characters
-  | 'Tag'             // Tags
-  | 'Delimiter'       // Delimiters
-  | 'SpecialComment'  // Special comments
-  | 'Debug'           // Debug statements
-  | 'Underlined'      // Underlined text
-  | 'Ignore'          // Ignored text
-  | 'Error'           // Errors
-  | 'Todo'            // TODO notes
+  | 'Comment' | 'Constant' | 'String' | 'Character'
+  | 'Number' | 'Boolean' | 'Float'
+  | 'Identifier' | 'Function'
+  | 'Statement' | 'Conditional' | 'Repeat' | 'Label' | 'Operator' | 'Keyword' | 'Exception'
+  | 'PreProc' | 'Include' | 'Define' | 'Macro' | 'PreCondit'
+  | 'Type' | 'StorageClass' | 'Structure' | 'Typedef'
+  | 'Special' | 'SpecialChar' | 'Tag' | 'Delimiter' | 'SpecialComment' | 'Debug'
+  | 'Underlined' | 'Ignore' | 'Error' | 'Todo'
 
   // === Diagnostics (LSP) ===
-  | 'DiagnosticError'         // Error diagnostics
-  | 'DiagnosticWarn'          // Warning diagnostics
-  | 'DiagnosticInfo'          // Info diagnostics
-  | 'DiagnosticHint'          // Hint diagnostics
-  | 'DiagnosticUnderlineError'
-  | 'DiagnosticUnderlineWarn'
-  | 'DiagnosticUnderlineInfo'
-  | 'DiagnosticUnderlineHint'
+  | 'DiagnosticError' | 'DiagnosticWarn' | 'DiagnosticInfo' | 'DiagnosticHint'
+  | 'DiagnosticUnderlineError' | 'DiagnosticUnderlineWarn'
+  | 'DiagnosticUnderlineInfo' | 'DiagnosticUnderlineHint'
+  | 'DiagnosticSignError' | 'DiagnosticSignWarn' | 'DiagnosticSignInfo' | 'DiagnosticSignHint'
 
   // === Search ===
-  | 'Search'          // Last search pattern
-  | 'IncSearch'       // Incremental search
-  | 'CurSearch'       // Current search match
+  | 'Search' | 'IncSearch' | 'CurSearch' | 'Substitute'
 
   // === Diff ===
-  | 'DiffAdd'         // Added lines
-  | 'DiffChange'      // Changed lines
-  | 'DiffDelete'      // Deleted lines
-  | 'DiffText'        // Changed text within a line
+  | 'DiffAdd' | 'DiffChange' | 'DiffDelete' | 'DiffText'
 
   // === Misc ===
-  | 'Visual'          // Visual mode selection
-  | 'VisualNOS'       // Visual mode selection when not owning selection
-  | 'MatchParen'      // Matching parenthesis
-  | 'Conceal'         // Concealed text
-  | 'Directory'       // Directory names
-  | 'Title'           // Titles
-  | 'Question'        // Question prompts
-  | 'MoreMsg'         // More prompt
-  | 'ModeMsg'         // Mode message
-  | 'NonText'         // Non-text characters
-  | 'SpecialKey'      // Special keys
-  | 'Whitespace'      // Whitespace characters
-  | 'EndOfBuffer'     // Empty lines at end of buffer
+  | 'Visual' | 'VisualNOS' | 'MatchParen' | 'Conceal'
+  | 'Directory' | 'Title' | 'Question' | 'MoreMsg' | 'ModeMsg'
+  | 'NonText' | 'SpecialKey' | 'Whitespace' | 'EndOfBuffer'
 
   // Allow any string for custom highlight groups
   | string;
+
+// ============================================================================
+// Editor Options
+// ============================================================================
+
+/**
+ * Editor options (vim.opt)
+ * All option names use camelCase for JavaScript/TypeScript convention
+ */
+export interface VimOptions {
+  // === Display Options ===
+  number?: boolean;
+  relativeNumber?: boolean;
+  cursorLine?: boolean;
+  cursorColumn?: boolean;
+  signColumn?: 'yes' | 'no' | 'auto' | 'number';
+  colorColumn?: string;
+  scrollOff?: number;
+  sidescrollOff?: number;
+  lastStatus?: 0 | 1 | 2 | 3;
+  showCmd?: boolean;
+  showMode?: boolean;
+  wrap?: boolean;
+  lineBreak?: boolean;
+  list?: boolean;
+  listChars?: Record<string, string>;
+  fillChars?: Record<string, string>;
+  conceallevel?: 0 | 1 | 2 | 3;
+  concealCursor?: string;
+
+  // === Indentation Options ===
+  tabStop?: number;
+  shiftWidth?: number;
+  expandTab?: boolean;
+  smartIndent?: boolean;
+  autoIndent?: boolean;
+  copyIndent?: boolean;
+  preserveIndent?: boolean;
+  shiftRound?: boolean;
+
+  // === Search Options ===
+  ignoreCase?: boolean;
+  smartCase?: boolean;
+  hlSearch?: boolean;
+  incSearch?: boolean;
+  magic?: boolean;
+
+  // === Edit Options ===
+  mouse?: 'a' | 'n' | 'v' | 'i' | 'c' | '';
+  timeoutLen?: number;
+  backspace?: string;
+  matchPairs?: string;
+  undoFile?: boolean;
+  undoLevels?: number;
+  swapFile?: boolean;
+  backup?: boolean;
+  writeBackup?: boolean;
+
+  // === Window Options ===
+  splitBelow?: boolean;
+  splitRight?: boolean;
+  equalalways?: boolean;
+  splitkeep?: 'cursor' | 'screen' | 'topline';
+
+  // === File Options ===
+  autoRead?: boolean;
+  autoWrite?: boolean;
+  autoWriteAll?: boolean;
+  fileEncoding?: string;
+  fileFormat?: 'unix' | 'dos' | 'mac';
+  modifiable?: boolean;
+  readonly?: boolean;
+
+  // === Completion Options ===
+  wildMenu?: boolean;
+  wildMode?: string;
+  completeOpt?: string;
+  pumHeight?: number;
+  pumBlend?: number;
+
+  // === Performance Options ===
+  lazyRedraw?: boolean;
+  updateTime?: number;
+  timeoutLen?: number;
+  ttimeoutLen?: number;
+  redrawTime?: number;
+
+  // === Folding Options ===
+  foldenable?: boolean;
+  foldmethod?: 'manual' | 'indent' | 'expr' | 'marker' | 'syntax' | 'diff';
+  foldlevel?: number;
+  foldlevelStart?: number;
+  foldnestMax?: number;
+  foldminLines?: number;
+
+  // === Terminal Options ===
+  termguicolors?: boolean;
+
+  // === Spelling Options ===
+  spell?: boolean;
+  spellLang?: string;
+
+  // === Misc Options ===
+  clipboard?: string;
+  hidden?: boolean;
+  confirm?: boolean;
+  visualbell?: boolean;
+  errorbells?: boolean;
+  title?: boolean;
+  titlestring?: string;
+}
+
+// ============================================================================
+// Keymap System
+// ============================================================================
 
 /**
  * Key mapping modes
@@ -259,6 +243,8 @@ export type MapMode =
   | 'i'   // Insert mode
   | 'v'   // Visual mode
   | 'x'   // Visual block mode
+  | 's'   // Select mode
+  | 'o'   // Operator-pending mode
   | 'c'   // Command-line mode
   | 't'   // Terminal mode
   | ''    // All modes
@@ -272,117 +258,771 @@ export interface KeymapOpts {
   noremap?: boolean;
   /** Silent mapping (don't echo) */
   silent?: boolean;
-  /** Expression mapping */
+  /** Expression mapping (evaluated) */
   expr?: boolean;
-  /** Unique mapping */
+  /** Unique mapping (error if already exists) */
   unique?: boolean;
-  /** Buffer-local mapping */
-  buffer?: boolean;
-  /** Description of the mapping */
+  /** Buffer number (0 = current, true = current) */
+  buffer?: boolean | number;
+  /** Nowait for this mapping */
+  nowait?: boolean;
+  /** Script-local remapping */
+  script?: boolean;
+  /** Replace keycodes */
+  replace_keycodes?: boolean;
+  /** Description of the mapping (for which-key, etc.) */
+  desc?: string;
+  /** Callback function instead of rhs string */
+  callback?: () => void;
+}
+
+/**
+ * Keymap interface (vim.keymap)
+ */
+export interface Keymap {
+  /**
+   * Set a key mapping
+   * @param mode - Mode(s) where mapping applies
+   * @param lhs - Left-hand side (key to map)
+   * @param rhs - Right-hand side (action, keys, or callback)
+   * @param opts - Mapping options
+   *
+   * @example
+   * vim.keymap.set('n', '<leader>w', ':w<CR>', { silent: true });
+   * vim.keymap.set('i', 'jk', '<Esc>', { noremap: true });
+   * vim.keymap.set('n', '<leader>d', () => { console.log('delete'); });
+   */
+  set(mode: MapMode | MapMode[], lhs: string, rhs: string | (() => void), opts?: KeymapOpts): void;
+
+  /**
+   * Delete a key mapping
+   * @param mode - Mode(s) where mapping exists
+   * @param lhs - Left-hand side (key to delete)
+   * @param opts - Options (currently only buffer)
+   *
+   * @example
+   * vim.keymap.del('n', '<leader>w');
+   * vim.keymap.del('i', 'jk', { buffer: true });
+   */
+  del(mode: MapMode | MapMode[], lhs: string, opts?: { buffer?: boolean | number }): void;
+}
+
+// ============================================================================
+// Autocommands & Events
+// ============================================================================
+
+/**
+ * Autocommand events
+ */
+export type AutocmdEvent =
+  // File events
+  | 'BufAdd' | 'BufDelete' | 'BufEnter' | 'BufFilePost' | 'BufFilePre'
+  | 'BufHidden' | 'BufLeave' | 'BufNew' | 'BufNewFile'
+  | 'BufRead' | 'BufReadPost' | 'BufReadPre' | 'BufReadCmd'
+  | 'BufUnload' | 'BufWinEnter' | 'BufWinLeave'
+  | 'BufWrite' | 'BufWritePre' | 'BufWritePost' | 'BufWriteCmd'
+  | 'FileType' | 'FileChangedShell' | 'FileChangedShellPost'
+  | 'FileReadPre' | 'FileReadPost' | 'FileWritePre' | 'FileWritePost'
+
+  // Window/UI events
+  | 'WinEnter' | 'WinLeave' | 'WinNew' | 'WinClosed'
+  | 'TabEnter' | 'TabLeave' | 'TabNew' | 'TabClosed'
+  | 'CmdwinEnter' | 'CmdwinLeave'
+
+  // Mode events
+  | 'InsertEnter' | 'InsertLeave' | 'InsertChange'
+  | 'ModeChanged'
+  | 'CmdlineEnter' | 'CmdlineLeave' | 'CmdlineChanged'
+
+  // Text change events
+  | 'TextChanged' | 'TextChangedI' | 'TextChangedP' | 'TextYankPost'
+
+  // Cursor events
+  | 'CursorMoved' | 'CursorMovedI' | 'CursorHold' | 'CursorHoldI'
+
+  // Startup/shutdown
+  | 'VimEnter' | 'VimLeave' | 'VimLeavePre' | 'VimResume' | 'VimSuspend'
+
+  // LSP events
+  | 'LspAttach' | 'LspDetach' | 'LspTokenUpdate'
+
+  // Misc events
+  | 'ColorScheme' | 'OptionSet' | 'User' | 'FocusGained' | 'FocusLost'
+  | string;
+
+/**
+ * Autocommand callback arguments
+ */
+export interface AutocmdCallbackArgs {
+  /** Autocommand ID */
+  id: number;
+  /** Event name that triggered the autocommand */
+  event: string;
+  /** Augroup ID (if any) */
+  group?: number;
+  /** Pattern that matched */
+  match: string;
+  /** Buffer number */
+  buf: number;
+  /** File name */
+  file: string;
+  /** Additional data (event-specific) */
+  data?: any;
+}
+
+/**
+ * Autocommand options
+ */
+export interface AutocmdOpts {
+  /** Augroup name or ID */
+  group?: string | number;
+  /** File pattern(s) to match */
+  pattern?: string | string[];
+  /** Buffer number (0 = current) */
+  buffer?: number;
+  /** Callback function */
+  callback?: (args: AutocmdCallbackArgs) => void | boolean;
+  /** Vim command string (alternative to callback) */
+  command?: string;
+  /** Description */
+  desc?: string;
+  /** Run once then delete */
+  once?: boolean;
+  /** Nested autocommands allowed */
+  nested?: boolean;
+}
+
+/**
+ * Augroup options
+ */
+export interface AugroupOpts {
+  /** Clear existing autocommands in group */
+  clear?: boolean;
+}
+
+// ============================================================================
+// User Commands
+// ============================================================================
+
+/**
+ * User command attributes
+ */
+export interface UserCommandOpts {
+  /** Number of arguments ('0', '1', '*', '?', '+') */
+  nargs?: '0' | '1' | '*' | '?' | '+' | number;
+  /** Completion type */
+  complete?: 'file' | 'dir' | 'buffer' | 'custom' | string;
+  /** Custom completion function */
+  complete_function?: (arg_lead: string, cmd_line: string, cursor_pos: number) => string[];
+  /** Range allowed */
+  range?: boolean | '%' | number;
+  /** Count allowed */
+  count?: boolean | number;
+  /** Buffer-local command */
+  buffer?: boolean | number;
+  /** Bang allowed */
+  bang?: boolean;
+  /** Bar allowed */
+  bar?: boolean;
+  /** Register allowed */
+  register?: boolean;
+  /** Force replacement */
+  force?: boolean;
+  /** Description */
   desc?: string;
 }
 
 /**
+ * User command callback arguments
+ */
+export interface UserCommandCallbackArgs {
+  /** Command name */
+  name: string;
+  /** Command arguments string */
+  args: string;
+  /** Arguments array (split by whitespace) */
+  fargs: string[];
+  /** Bang (!) was used */
+  bang: boolean;
+  /** Line range */
+  line1: number;
+  line2: number;
+  /** Range was specified */
+  range: number;
+  /** Count was specified */
+  count: number;
+  /** Register name (if any) */
+  reg: string;
+  /** Modifiers string */
+  mods: string;
+  /** Smods table (parsed modifiers) */
+  smods: Record<string, any>;
+}
+
+// ============================================================================
+// Diagnostic System
+// ============================================================================
+
+/**
+ * Diagnostic severity levels
+ */
+export enum DiagnosticSeverity {
+  ERROR = 1,
+  WARN = 2,
+  INFO = 3,
+  HINT = 4,
+}
+
+/**
+ * Diagnostic structure
+ */
+export interface Diagnostic {
+  /** Buffer number */
+  bufnr?: number;
+  /** Line number (0-indexed) */
+  lnum: number;
+  /** End line number (0-indexed, optional) */
+  end_lnum?: number;
+  /** Column number (0-indexed) */
+  col: number;
+  /** End column number (0-indexed, optional) */
+  end_col?: number;
+  /** Severity level */
+  severity: DiagnosticSeverity | number;
+  /** Diagnostic message */
+  message: string;
+  /** Source of diagnostic (e.g., 'eslint', 'typescript') */
+  source?: string;
+  /** Error code */
+  code?: string | number;
+  /** User data */
+  user_data?: any;
+}
+
+/**
+ * Diagnostic configuration
+ */
+export interface DiagnosticConfig {
+  /** Underline diagnostics */
+  underline?: boolean;
+  /** Virtual text configuration */
+  virtual_text?: boolean | {
+    spacing?: number;
+    prefix?: string;
+    source?: boolean | 'always' | 'if_many';
+    format?: (diagnostic: Diagnostic) => string;
+  };
+  /** Signs in sign column */
+  signs?: boolean | {
+    text?: Record<string, string>;
+    priority?: number;
+  };
+  /** Update diagnostics in insert mode */
+  update_in_insert?: boolean;
+  /** Severity sort order */
+  severity_sort?: boolean | {
+    reverse?: boolean;
+  };
+  /** Float window configuration */
+  float?: boolean | {
+    source?: boolean | 'always' | 'if_many';
+    border?: string;
+    header?: string;
+    prefix?: string | ((diagnostic: Diagnostic, i: number, total: number) => string);
+  };
+}
+
+/**
+ * Diagnostic interface (vim.diagnostic)
+ */
+export interface DiagnosticAPI {
+  /**
+   * Set diagnostics for a namespace
+   */
+  set(namespace: Namespace, bufnr: Buffer, diagnostics: Diagnostic[], opts?: any): void;
+
+  /**
+   * Get diagnostics
+   */
+  get(bufnr?: Buffer, opts?: { namespace?: Namespace; lnum?: number; severity?: DiagnosticSeverity }): Diagnostic[];
+
+  /**
+   * Configure diagnostics
+   */
+  config(opts: DiagnosticConfig, namespace?: Namespace): void;
+
+  /**
+   * Show diagnostics in floating window
+   */
+  open_float(opts?: any): void;
+
+  /**
+   * Jump to next diagnostic
+   */
+  goto_next(opts?: any): void;
+
+  /**
+   * Jump to previous diagnostic
+   */
+  goto_prev(opts?: any): void;
+
+  /**
+   * Enable diagnostics
+   */
+  enable(bufnr?: Buffer, namespace?: Namespace): void;
+
+  /**
+   * Disable diagnostics
+   */
+  disable(bufnr?: Buffer, namespace?: Namespace): void;
+}
+
+// ============================================================================
+// Core API (vim.api.nvim_*)
+// ============================================================================
+
+/**
+ * Core Neovim API interface (vim.api)
+ * Contains all nvim_* functions
+ */
+export interface API {
+  // === Buffer Functions ===
+
+  /** Get current buffer */
+  nvim_get_current_buf(): Buffer;
+
+  /** Set current buffer */
+  nvim_set_current_buf(buffer: Buffer): void;
+
+  /** Get buffer lines */
+  nvim_buf_get_lines(buffer: Buffer, start: number, end: number, strict_indexing: boolean): string[];
+
+  /** Set buffer lines */
+  nvim_buf_set_lines(buffer: Buffer, start: number, end: number, strict_indexing: boolean, replacement: string[]): void;
+
+  /** Get buffer line count */
+  nvim_buf_line_count(buffer: Buffer): number;
+
+  /** Get buffer name */
+  nvim_buf_get_name(buffer: Buffer): string;
+
+  /** Set buffer name */
+  nvim_buf_set_name(buffer: Buffer, name: string): void;
+
+  /** Check if buffer is valid */
+  nvim_buf_is_valid(buffer: Buffer): boolean;
+
+  /** Delete buffer */
+  nvim_buf_delete(buffer: Buffer, opts: { force?: boolean; unload?: boolean }): void;
+
+  // === Window Functions ===
+
+  /** Get current window */
+  nvim_get_current_win(): Window;
+
+  /** Set current window */
+  nvim_set_current_win(window: Window): void;
+
+  /** Get window buffer */
+  nvim_win_get_buf(window: Window): Buffer;
+
+  /** Set window buffer */
+  nvim_win_set_buf(window: Window, buffer: Buffer): void;
+
+  /** Get window cursor position [row, col] (1-indexed, 0-indexed) */
+  nvim_win_get_cursor(window: Window): [number, number];
+
+  /** Set window cursor position [row, col] (1-indexed, 0-indexed) */
+  nvim_win_set_cursor(window: Window, pos: [number, number]): void;
+
+  /** Get window height */
+  nvim_win_get_height(window: Window): number;
+
+  /** Set window height */
+  nvim_win_set_height(window: Window, height: number): void;
+
+  /** Get window width */
+  nvim_win_get_width(window: Window): number;
+
+  /** Set window width */
+  nvim_win_set_width(window: Window, width: number): void;
+
+  /** Check if window is valid */
+  nvim_win_is_valid(window: Window): boolean;
+
+  /** Close window */
+  nvim_win_close(window: Window, force: boolean): void;
+
+  // === Tabpage Functions ===
+
+  /** Get current tabpage */
+  nvim_get_current_tabpage(): Tabpage;
+
+  /** Set current tabpage */
+  nvim_set_current_tabpage(tabpage: Tabpage): void;
+
+  /** List all tabpages */
+  nvim_list_tabpages(): Tabpage[];
+
+  // === Option Functions ===
+
+  /** Get option value */
+  nvim_get_option(name: string): any;
+
+  /** Set option value */
+  nvim_set_option(name: string, value: any): void;
+
+  /** Get buffer option value */
+  nvim_buf_get_option(buffer: Buffer, name: string): any;
+
+  /** Set buffer option value */
+  nvim_buf_set_option(buffer: Buffer, name: string, value: any): void;
+
+  /** Get window option value */
+  nvim_win_get_option(window: Window, name: string): any;
+
+  /** Set window option value */
+  nvim_win_set_option(window: Window, name: string, value: any): void;
+
+  // === Variable Functions ===
+
+  /** Get global variable */
+  nvim_get_var(name: string): any;
+
+  /** Set global variable */
+  nvim_set_var(name: string, value: any): void;
+
+  /** Delete global variable */
+  nvim_del_var(name: string): void;
+
+  /** Get buffer variable */
+  nvim_buf_get_var(buffer: Buffer, name: string): any;
+
+  /** Set buffer variable */
+  nvim_buf_set_var(buffer: Buffer, name: string, value: any): void;
+
+  // === Keymap Functions ===
+
+  /** Set global keymap */
+  nvim_set_keymap(mode: string, lhs: string, rhs: string, opts: any): void;
+
+  /** Delete global keymap */
+  nvim_del_keymap(mode: string, lhs: string): void;
+
+  /** Get keymaps */
+  nvim_get_keymap(mode: string): any[];
+
+  /** Set buffer keymap */
+  nvim_buf_set_keymap(buffer: Buffer, mode: string, lhs: string, rhs: string, opts: any): void;
+
+  /** Delete buffer keymap */
+  nvim_buf_del_keymap(buffer: Buffer, mode: string, lhs: string): void;
+
+  // === Highlight Functions ===
+
+  /** Set highlight group */
+  nvim_set_hl(namespace: Namespace, name: string, val: HighlightOpts): void;
+
+  /** Get highlight group */
+  nvim_get_hl(namespace: Namespace, opts: { name?: string; id?: number; link?: boolean }): Record<string, any>;
+
+  /** Set buffer highlight (extmark-based) */
+  nvim_buf_add_highlight(buffer: Buffer, ns_id: Namespace, hl_group: string, line: number, col_start: number, col_end: number): number;
+
+  /** Clear namespace highlights */
+  nvim_buf_clear_namespace(buffer: Buffer, ns_id: Namespace, line_start: number, line_end: number): void;
+
+  // === Autocommand Functions ===
+
+  /** Create autocommand */
+  nvim_create_autocmd(event: AutocmdEvent | AutocmdEvent[], opts: AutocmdOpts): AutocmdID;
+
+  /** Delete autocommand by ID */
+  nvim_del_autocmd(id: AutocmdID): void;
+
+  /** Create augroup */
+  nvim_create_augroup(name: string, opts: AugroupOpts): number;
+
+  /** Clear autocmds in augroup */
+  nvim_clear_autocmds(opts: { group?: string | number; event?: string | string[]; buffer?: number }): void;
+
+  // === User Command Functions ===
+
+  /** Create user command */
+  nvim_create_user_command(name: string, command: string | ((args: UserCommandCallbackArgs) => void), opts: UserCommandOpts): void;
+
+  /** Delete user command */
+  nvim_del_user_command(name: string): void;
+
+  /** Create buffer-local user command */
+  nvim_buf_create_user_command(buffer: Buffer, name: string, command: string | ((args: UserCommandCallbackArgs) => void), opts: UserCommandOpts): void;
+
+  /** Delete buffer-local user command */
+  nvim_buf_del_user_command(buffer: Buffer, name: string): void;
+
+  // === Command Execution ===
+
+  /** Execute Ex command */
+  nvim_command(command: string): void;
+
+  /** Execute Lua code */
+  nvim_exec_lua(code: string, args: any[]): any;
+
+  // === Namespace Functions ===
+
+  /** Create namespace */
+  nvim_create_namespace(name: string): Namespace;
+
+  /** Get namespaces */
+  nvim_get_namespaces(): Record<string, Namespace>;
+
+  // === Misc Functions ===
+
+  /** Call Vimscript function */
+  nvim_call_function(fname: string, args: any[]): any;
+
+  /** Evaluate Vimscript expression */
+  nvim_eval(expr: string): any;
+
+  /** Get mode */
+  nvim_get_mode(): { mode: string; blocking: boolean };
+
+  /** Notify user */
+  nvim_notify(msg: string, log_level: number, opts: any): void;
+
+  /** Echo message */
+  nvim_echo(chunks: Array<[string, string?]>, history: boolean, opts: any): void;
+
+  /** Get runtime files */
+  nvim_get_runtime_file(name: string, all: boolean): string[];
+}
+
+// ============================================================================
+// Function Bridge (vim.fn)
+// ============================================================================
+
+/**
+ * Vimscript function bridge (vim.fn)
+ * Allows calling built-in Vimscript functions
+ */
+export interface VimFunctions {
+  /** Expand wildcards and special keywords */
+  expand(expr: string): string;
+
+  /** Get character at cursor */
+  getchar(): number;
+
+  /** Get character from position */
+  getcharpos(expr: string): [number, number, number, number];
+
+  /** Check if file exists */
+  filereadable(file: string): boolean;
+
+  /** Get file type */
+  getftype(fname: string): string;
+
+  /** Simplify file path */
+  simplify(path: string): string;
+
+  /** Join path components */
+  join(list: string[], sep: string): string;
+
+  /** Split string */
+  split(string: string, pattern: string): string[];
+
+  // Allow calling any function by name
+  [key: string]: (...args: any[]) => any;
+}
+
+// ============================================================================
+// Loop (Event System) - Future
+// ============================================================================
+
+/**
+ * Event loop interface (vim.loop)
+ * libuv integration for async operations
+ * FUTURE: Phase 5+
+ */
+export interface Loop {
+  // Placeholder for future implementation
+  [key: string]: any;
+}
+
+// ============================================================================
+// LSP - Future
+// ============================================================================
+
+/**
+ * LSP client interface (vim.lsp)
+ * FUTURE: Phase 5+
+ */
+export interface LSP {
+  // Placeholder for future implementation
+  [key: string]: any;
+}
+
+// ============================================================================
+// TreeSitter - Future
+// ============================================================================
+
+/**
+ * Tree-sitter interface (vim.treesitter)
+ * FUTURE: Phase 5+
+ */
+export interface TreeSitter {
+  // Placeholder for future implementation
+  [key: string]: any;
+}
+
+// ============================================================================
+// Main Vim Interface
+// ============================================================================
+
+/**
  * Main vim global interface
+ * Entry point for all OpenVim configuration and API access
  */
 export interface Vim {
   /**
-   * Define syntax highlighting for a group
-   * @param name - Highlight group name
-   * @param opts - Styling options (bg, fg, bold, etc.)
-   *
+   * Core API (nvim_* functions)
+   * Full Neovim-compatible API
+   */
+  api: API;
+
+  /**
+   * Editor options
    * @example
-   * vim.highlight('CursorLine', { bg: '#2b2b2b' });
+   * vim.opt.cursorLine = true;
+   * vim.opt.number = true;
+   */
+  opt: VimOptions;
+
+  /**
+   * Buffer-local options
+   */
+  opt_local?: VimOptions;
+
+  /**
+   * Global options
+   */
+  opt_global?: VimOptions;
+
+  /**
+   * Key mapping interface
+   * @example
+   * vim.keymap.set('n', '<leader>w', ':w<CR>', { silent: true });
+   */
+  keymap: Keymap;
+
+  /**
+   * Vimscript function bridge
+   * @example
+   * const path = vim.fn.expand('%:p');
+   */
+  fn: VimFunctions;
+
+  /**
+   * Diagnostic system
+   */
+  diagnostic: DiagnosticAPI;
+
+  /**
+   * Event loop (libuv)
+   * FUTURE: Phase 5+
+   */
+  loop?: Loop;
+
+  /**
+   * LSP client
+   * FUTURE: Phase 5+
+   */
+  lsp?: LSP;
+
+  /**
+   * Tree-sitter integration
+   * FUTURE: Phase 5+
+   */
+  treesitter?: TreeSitter;
+
+  /**
+   * Execute Ex command
+   * @param cmd - Command to execute
+   * @example
+   * vim.cmd('set number');
+   */
+  cmd(cmd: string): void;
+
+  /**
+   * Define syntax highlighting for a group
+   * Ergonomic wrapper for vim.api.nvim_set_hl
+   * @param name - Highlight group name
+   * @param opts - Styling options
+   * @example
    * vim.highlight('Comment', { fg: '#6c6c6c', italic: true });
    */
   highlight(name: HighlightGroup, opts: HighlightOpts): void;
 
   /**
-   * Clear highlight for a group
-   * @param name - Highlight group name
-   *
-   * @example
-   * vim.clearHighlight('Comment');
+   * Create namespace
+   * @param name - Namespace name
+   * @returns Namespace ID
    */
-  clearHighlight?(name: HighlightGroup): void;
+  create_namespace?(name: string): Namespace;
 
   /**
-   * Set a key mapping
-   * @param mode - Mode(s) where mapping applies
-   * @param lhs - Left-hand side (key to map)
-   * @param rhs - Right-hand side (action or keys)
-   * @param opts - Mapping options
-   *
-   * @example
-   * vim.keymap('n', '<leader>w', ':w<CR>', { silent: true });
-   * vim.keymap('i', 'jk', '<Esc>', { noremap: true });
+   * Schedule function to run later
+   * @param fn - Function to schedule
    */
-  keymap?(mode: MapMode, lhs: string, rhs: string, opts?: KeymapOpts): void;
+  schedule?(fn: () => void): void;
 
   /**
-   * Execute a Vim command
-   * @param cmd - Command to execute
-   *
-   * @example
-   * vim.cmd('set number');
-   * vim.cmd('colorscheme default');
+   * Defer function to run after current execution
+   * @param fn - Function to defer
    */
-  cmd?(cmd: string): void;
+  defer_fn?(fn: () => void, timeout: number): void;
+
+  // === Variable Scopes ===
 
   /**
-   * Execute a Vim Ex command
-   * @param cmd - Ex command (without leading ':')
-   *
-   * @example
-   * vim.ex('write');
-   * vim.ex('quit');
-   */
-  ex?(cmd: string): void;
-
-  /**
-   * Editor options
-   *
-   * @example
-   * vim.opt.cursorLine = true;
-   * vim.opt.number = true;
-   * vim.opt.relativeNumber = true;
-   */
-  opt: VimOptions;
-
-  /**
-   * Global variables
-   *
+   * Global variables (g:)
    * @example
    * vim.g.mapleader = ' ';
-   * vim.g.loaded_netrw = 1;
    */
-  g?: Record<string, any>;
+  g: Record<string, any>;
 
   /**
-   * Buffer-local variables
+   * Buffer-local variables (b:)
+   * @example
+   * vim.b.filetype = 'javascript';
    */
-  b?: Record<string, any>;
+  b: Record<string, any>;
 
   /**
-   * Window-local variables
+   * Window-local variables (w:)
    */
-  w?: Record<string, any>;
+  w: Record<string, any>;
 
   /**
-   * Tab-local variables
+   * Tabpage-local variables (t:)
    */
-  t?: Record<string, any>;
+  t: Record<string, any>;
 
   /**
-   * Vim variables (v:)
+   * Vim variables (v:) - mostly read-only
    */
-  v?: Record<string, any>;
+  v: Record<string, any>;
 
   /**
    * Environment variables
+   * @example
+   * const home = vim.env.HOME;
    */
-  env?: Record<string, string>;
+  env: Record<string, string>;
 }
+
+// ============================================================================
+// Console Interface
+// ============================================================================
 
 /**
  * Console interface for debugging
@@ -393,46 +1033,56 @@ export interface Console {
    * Supports multiple arguments of any type
    */
   log(...args: any[]): void;
+
+  /**
+   * Log error messages
+   */
+  error(...args: any[]): void;
+
+  /**
+   * Log warning messages
+   */
+  warn(...args: any[]): void;
+
+  /**
+   * Log info messages
+   */
+  info(...args: any[]): void;
 }
 
-// Global declarations
+// ============================================================================
+// Global Declarations
+// ============================================================================
+
 declare global {
   /**
    * Global vim object - main API for configuring OpenVim
+   * Neovim-compatible interface
    */
   var vim: Vim;
 
   /**
    * Global console object - for debugging via Chrome DevTools
-   * Available methods: log(...args)
    */
   var console: Console;
 
   /**
    * Schedule a function to run after a delay
-   * @param callback - Function to execute
-   * @param delay - Delay in milliseconds (default: 0)
-   * @returns Timer ID for clearTimeout
    */
   function setTimeout(callback: () => void, delay?: number): number;
 
   /**
    * Schedule a function to run repeatedly at intervals
-   * @param callback - Function to execute
-   * @param delay - Delay between executions in milliseconds (default: 0)
-   * @returns Timer ID for clearInterval
    */
   function setInterval(callback: () => void, delay?: number): number;
 
   /**
    * Cancel a timeout created by setTimeout
-   * @param id - Timer ID returned by setTimeout
    */
   function clearTimeout(id: number): void;
 
   /**
    * Cancel an interval created by setInterval
-   * @param id - Timer ID returned by setInterval
    */
   function clearInterval(id: number): void;
 }

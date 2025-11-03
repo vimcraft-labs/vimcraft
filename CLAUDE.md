@@ -13,6 +13,73 @@ OpenVim is a Neovim-compatible text editor written in Zig with Hermes JavaScript
 - Terminal rendering with ANSI codes
 - Hermes+JSI integration (demos working, not yet in main editor)
 
+## Documentation Organization (Invisible but Critical!)
+
+**IMPORTANT**: Documentation is a first-class feature of OpenVim. Well-organized docs are what make the project accessible and maintainable long-term.
+
+### Structure & Philosophy
+
+All documentation lives in `docs/` with a clear hierarchy:
+
+```
+docs/
+├── README.md              # 📍 MAIN ENTRY POINT (always start here)
+├── api/                   # API reference and types
+├── architecture/          # System design and decisions
+├── development/           # Contributing and dev workflow
+├── guides/               # User tutorials
+├── research/             # Background analysis
+└── roadmap/              # Implementation plans
+```
+
+**Golden Rules**:
+1. **One Clear Entry Point**: `docs/README.md` is the master index - keep it updated
+2. **Category READMEs**: Each folder has a README for navigation
+3. **Multiple Paths**: Users should find docs by role, task, or alphabetically
+4. **No Orphans**: Every doc must be linked from at least one README
+5. **Clean Root**: Only 3 .md files in root (CLAUDE.md, README.md, DOCUMENTATION.md)
+
+### When Adding Documentation
+
+**New User Guide?**
+→ Add to `docs/guides/`, update `docs/guides/README.md`, link from `docs/README.md`
+
+**New API Documentation?**
+→ Add to `docs/api/`, update `docs/api/README.md`, link from `docs/README.md`
+
+**Implementation Plan?**
+→ Add to `docs/roadmap/`, update `docs/roadmap/README.md`
+
+**Architecture Decision?**
+→ Add to `docs/architecture/`, document rationale, update architecture README
+
+**Always**:
+1. Choose the right category
+2. Update category README
+3. Update `docs/README.md` (main index)
+4. Add cross-references where relevant
+5. Test all links work
+
+### Why This Matters
+
+Good documentation:
+- Helps new contributors onboard in minutes, not days
+- Ensures design decisions aren't forgotten
+- Makes the project look professional
+- Reduces "where do I find X?" questions
+- Allows you to return after months and understand immediately
+
+**Treat documentation as code**: It needs review, updates, and maintenance.
+
+### Quick Reference
+
+- **Main entry**: [docs/README.md](docs/README.md)
+- **Organization summary**: [DOCUMENTATION.md](DOCUMENTATION.md)
+- **For users**: [docs/guides/](docs/guides/)
+- **For contributors**: [docs/development/](docs/development/)
+- **API reference**: [docs/api/](docs/api/)
+- **Implementation plan**: [docs/roadmap/](docs/roadmap/)
+
 ## Reference Codebases
 
 Three local forks provide reference implementations:
@@ -357,3 +424,85 @@ A Neovim-compatible editor where:
 - Neovim API compatibility layer
 - Remote plugin support
 - Vimscript subset (if needed)
+
+## Documentation Maintenance (Critical Practice!)
+
+**Documentation is not a one-time task** - it's an ongoing practice that must be maintained alongside code.
+
+### When to Update Docs
+
+**Code Changes**:
+- Adding a new feature? → Update relevant API docs + guides
+- Changing architecture? → Update architecture docs + CLAUDE.md
+- Fixing a bug? → Add to troubleshooting if user-facing
+- Implementing a roadmap item? → Update phase status in roadmap
+
+**New Insights**:
+- Discovered a better pattern? → Document in architecture/
+- Solved a tricky problem? → Add to development/
+- Made an important decision? → Document rationale in architecture/design-decisions.md
+
+**User Feedback**:
+- "Where do I find X?" → Check if navigation is clear, add links
+- "This is confusing" → Clarify in relevant doc
+- "Does OpenVim support Y?" → Update feature status in README.md
+
+### Documentation Review Checklist
+
+Before completing any major work:
+
+- [ ] All new APIs documented in `docs/api/`
+- [ ] Architecture changes reflected in `docs/architecture/`
+- [ ] Implementation status updated in `docs/roadmap/`
+- [ ] User-facing changes in `docs/guides/`
+- [ ] Entry points (`docs/README.md`, root `README.md`) updated
+- [ ] Links tested (no broken links)
+- [ ] Phase status updated in CLAUDE.md
+
+### Signs of Good Documentation Health
+
+✅ **Healthy**:
+- New contributors can get started in < 30 minutes
+- API questions answered by docs, not verbal explanations
+- Design decisions have written rationale
+- Easy to find information (< 3 clicks from main entry point)
+- Cross-references between related docs
+
+❌ **Needs Attention**:
+- Answering same questions repeatedly
+- Contributors confused about structure
+- Outdated information contradicts reality
+- Broken or missing links
+- New docs not linked from main index
+
+### Documentation as Competitive Advantage
+
+Good documentation is a **force multiplier**:
+- Makes onboarding instant
+- Reduces maintainer burden
+- Attracts contributors
+- Looks professional
+- Preserves institutional knowledge
+- Enables autonomous work
+
+**Invest in docs early** - it compounds. Poor docs create eternal technical debt.
+
+### Quick Wins
+
+**Daily**:
+- Fix broken links when you see them
+- Add cross-references when relevant
+- Update status markers (✅/🚧/📅)
+
+**Weekly**:
+- Review recent changes - are they documented?
+- Check main entry points still accurate
+- Look for orphaned docs
+
+**Monthly**:
+- Full documentation review
+- Update roadmap progress
+- Refresh examples and code samples
+- Archive or update outdated content
+
+**Remember**: A well-documented project is a joy to work on. A poorly documented project is a burden.

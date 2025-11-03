@@ -6,9 +6,9 @@ __metadata:
   cacheKey: 10c0
 
 "@openvim/types@file:packages/types::locator=openvim%40workspace%3A.":
-  version: 0.2.0
-  resolution: "@openvim/types@file:packages/types#packages/types::hash=58d462&locator=openvim%40workspace%3A."
-  checksum: 10c0/7cafb3bc3f094a1f628d806e6eab75d4170991cf33707e9de33237d310624d2ead77f927fe6ddeed32fa6783c650272bf30fcd9be7c0067f1d9e8a892c22b70d
+  version: 0.3.0
+  resolution: "@openvim/types@file:packages/types#packages/types::hash=dadd2c&locator=openvim%40workspace%3A."
+  checksum: 10c0/176e22505996c6b5ed160b9d4187a7652840cdab0dffdd76c52eabd219d722e183df9bca49cd11dbaee5568bcc2e82a233d35d758e5d11e3d66f667bbc5bb7bc
   languageName: node
   linkType: hard
 
