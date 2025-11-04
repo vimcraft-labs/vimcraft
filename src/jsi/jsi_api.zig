@@ -13,7 +13,7 @@ export fn zig_set_highlight(
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
     arg_count: usize,
-) callconv(.C) ?*c.OVHermesValue {
+) callconv(.c) ?*c.OVHermesValue {
     // Unwrap nullable runtime
     const runtime = runtime_nullable orelse return null;
 
@@ -78,7 +78,7 @@ export fn zig_set_option(
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
     arg_count: usize,
-) callconv(.C) ?*c.OVHermesValue {
+) callconv(.c) ?*c.OVHermesValue {
     // Unwrap nullable runtime
     const runtime = runtime_nullable orelse return null;
 
@@ -129,7 +129,7 @@ export fn zig_console_log(
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
     arg_count: usize,
-) callconv(.C) ?*c.OVHermesValue {
+) callconv(.c) ?*c.OVHermesValue {
     if (arg_count < 1) {
         return c.hermes_value_create_undefined(runtime_nullable);
     }
@@ -184,7 +184,7 @@ pub fn initTimers(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime) voi
     timer_initialized = true;
 
     if (!timers_list_initialized) {
-        active_timers = std.ArrayList(*TimerData).init(allocator);
+        active_timers = .empty;
         timers_list_initialized = true;
     }
 }
@@ -196,8 +196,8 @@ pub fn clearAllTimers() void {
 
     // Stop and close all active timers
     // Make a copy of the list because onTimerClose will modify active_timers
-    const timers_copy = active_timers.clone() catch return;
-    defer timers_copy.deinit();
+    var timers_copy = active_timers.clone(timer_allocator) catch return;
+    defer timers_copy.deinit(timer_allocator);
 
     for (timers_copy.items) |timer_data| {
         _ = uv.uv_timer_stop(&timer_data.timer);
@@ -209,7 +209,7 @@ pub fn clearAllTimers() void {
     if (loop) |l| {
         var i: u8 = 0;
         while (i < 10) : (i += 1) {
-            _ = uv.uv_run(l, uv.UV_RUN_NOWAIT);
+            _ = uv.uv_run(@ptrCast(l), uv.UV_RUN_NOWAIT);
         }
     }
 }
@@ -222,13 +222,13 @@ pub fn deinitTimers() void {
     clearAllTimers();
 
     // Now deinitialize the timer system
-    active_timers.clearAndFree();
+    active_timers.clearAndFree(timer_allocator);
     timer_initialized = false;
     timer_runtime = null;
 }
 
 /// libuv timer callback - called when timer fires
-fn onTimerFire(handle: [*c]uv.uv_timer_t) callconv(.C) void {
+fn onTimerFire(handle: [*c]uv.uv_timer_t) callconv(.c) void {
     // Get our timer data from the handle
     const timer_data = @as(*TimerData, @ptrCast(@alignCast(handle.*.data)));
 
@@ -246,7 +246,7 @@ fn onTimerFire(handle: [*c]uv.uv_timer_t) callconv(.C) void {
 }
 
 /// libuv close callback - called when timer handle is closed
-fn onTimerClose(handle: [*c]uv.uv_handle_t) callconv(.C) void {
+fn onTimerClose(handle: [*c]uv.uv_handle_t) callconv(.c) void {
     // Get our timer data
     const timer_data = @as(*TimerData, @ptrCast(@alignCast(handle.*.data)));
 
@@ -273,7 +273,7 @@ export fn zig_set_timeout(
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
     arg_count: usize,
-) callconv(.C) ?*c.OVHermesValue {
+) callconv(.c) ?*c.OVHermesValue {
     _ = context;
     const rt = runtime orelse return c.hermes_value_create_undefined(runtime);
 
@@ -317,7 +317,7 @@ export fn zig_set_timeout(
     };
 
     // Initialize libuv timer
-    const init_result = uv.uv_timer_init(loop, &timer_data.timer);
+    const init_result = uv.uv_timer_init(@ptrCast(loop), &timer_data.timer);
     if (init_result != 0) {
         c.hermes_value_destroy(cloned_callback);
         timer_allocator.destroy(timer_data);
@@ -336,7 +336,7 @@ export fn zig_set_timeout(
     }
 
     // Track timer for cleanup
-    active_timers.append(timer_data) catch {
+    active_timers.append(timer_allocator, timer_data) catch {
         // If we can't track it, close it
         uv.uv_close(@ptrCast(&timer_data.timer), onTimerClose);
         return c.hermes_value_create_undefined(runtime);
@@ -353,7 +353,7 @@ export fn zig_set_interval(
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
     arg_count: usize,
-) callconv(.C) ?*c.OVHermesValue {
+) callconv(.c) ?*c.OVHermesValue {
     _ = context;
     const rt = runtime orelse return c.hermes_value_create_undefined(runtime);
 
@@ -398,7 +398,7 @@ export fn zig_set_interval(
     };
 
     // Initialize libuv timer handle
-    const init_result = uv.uv_timer_init(loop, &timer_data.timer);
+    const init_result = uv.uv_timer_init(@ptrCast(loop), &timer_data.timer);
     if (init_result != 0) {
         c.hermes_value_destroy(cloned_callback);
         timer_allocator.destroy(timer_data);
@@ -418,7 +418,7 @@ export fn zig_set_interval(
     }
 
     // Track timer for cleanup
-    active_timers.append(timer_data) catch {
+    active_timers.append(timer_allocator, timer_data) catch {
         // If we can't track it, close it
         uv.uv_close(@ptrCast(&timer_data.timer), onTimerClose);
         return c.hermes_value_create_undefined(runtime);
@@ -435,7 +435,7 @@ export fn zig_clear_timer(
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
     arg_count: usize,
-) callconv(.C) ?*c.OVHermesValue {
+) callconv(.c) ?*c.OVHermesValue {
     _ = context;
 
     if (arg_count < 1 or !timer_initialized) {

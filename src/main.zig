@@ -12,6 +12,9 @@ const ConfigWatcher = @import("config/watcher.zig").ConfigWatcher;
 const jsi_api = @import("jsi/jsi_api.zig");
 const event_loop = @import("event_loop/libuv.zig");
 const debug_protocol = @import("debug.zig");
+const VisualState = @import("visual/visual.zig").VisualState;
+const VisualMode = @import("visual/visual.zig").VisualMode;
+const Position = @import("visual/visual.zig").Position;
 
 // Import Hermes C API (use hermes_c namespace to avoid shadowing)
 const hermes_c = @cImport({
@@ -88,11 +91,13 @@ const ReloadState = struct {
             // Re-register console.log with debugger before reloading
             // This ensures console.log works in the reloaded config
             if (self.debugger_state.debugger_ptr) |debugger_ptr| {
-                jsi_api.registerConsoleWithDebugger(runtime, debugger_ptr);
+                jsi_api.registerConsoleWithDebugger(@ptrCast(runtime), debugger_ptr);
             }
 
-            jsi_api.loadConfig(runtime, self.config_path, self.allocator) catch |err| {
-                const stderr = std.io.getStdErr().writer();
+            jsi_api.loadConfig(@ptrCast(runtime), self.config_path, self.allocator) catch |err| {
+                var stderr_buf: [256]u8 = undefined;
+                var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+                const stderr = &stderr_writer.interface;
                 stderr.print("Reload failed: {}\n", .{err}) catch {};
                 self.needs_reload = false;
                 return err;
@@ -106,13 +111,17 @@ const ReloadState = struct {
 /// Command buffer for command mode
 const CommandBuffer = struct {
     buffer: std.ArrayList(u8),
+    allocator: std.mem.Allocator,
 
     fn init(allocator: std.mem.Allocator) CommandBuffer {
-        return .{ .buffer = std.ArrayList(u8).init(allocator) };
+        return .{
+            .buffer = .empty,
+            .allocator = allocator,
+        };
     }
 
     fn deinit(self: *CommandBuffer) void {
-        self.buffer.deinit();
+        self.buffer.deinit(self.allocator);
     }
 
     fn clear(self: *CommandBuffer) void {
@@ -120,7 +129,7 @@ const CommandBuffer = struct {
     }
 
     fn append(self: *CommandBuffer, char: u8) !void {
-        try self.buffer.append(char);
+        try self.buffer.append(self.allocator, char);
     }
 
     fn backspace(self: *CommandBuffer) void {
@@ -257,10 +266,10 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
 
         // Register JSI host functions (zigSetHighlight, zigSetOption)
         // Timer system is also initialized here
-        jsi_api.initJSI(allocator, runtime, config);
+        jsi_api.initJSI(allocator, @ptrCast(runtime), config);
 
         // Load and execute init.js
-        jsi_api.loadConfig(runtime, paths.init_js_path, allocator) catch |err| {
+        jsi_api.loadConfig(@ptrCast(runtime), paths.init_js_path, allocator) catch |err| {
             std.debug.print("WARNING: Failed to load init.js: {}\n", .{err});
             std.debug.print("Using default configuration\n", .{});
             // Fall back to defaults
@@ -303,6 +312,13 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     defer cmd_buffer.deinit();
     var pending_cmd = PendingCommand{};
 
+    // Visual mode state (initialized but not active)
+    var visual_state = VisualState{
+        .active = false,
+        .mode = .char,
+        .anchor = .{ .line = 0, .col = 0 },
+    };
+
     // Initialize debugger state (for :debug command)
     var debugger_state = DebuggerState{ .allocator = allocator };
     defer debugger_state.deinit();
@@ -332,7 +348,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     {
         const status = try allocator.dupe(u8, mode_manager.getModeString());
         defer allocator.free(status);
-        try display.render(&buffer, status, &highlight_config);
+        try display.render(&buffer, status, &highlight_config, &visual_state);
         try display.setCursorBlock(); // Start in normal mode with block cursor
         try display.flush();
     }
@@ -345,16 +361,18 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
         // Handle input with short timeout to keep UI responsive
         // libuv handles timer firing, so we just need to poll for input
-        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, allocator, &debugger_state, 10);
+        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &visual_state, allocator, &debugger_state, 10);
 
         // Render after input (something changed)
         const status = if (mode_manager.isCommand())
             try std.fmt.allocPrint(allocator, ":{s}", .{cmd_buffer.getString()})
+        else if (mode_manager.isVisual() and visual_state.active)
+            try allocator.dupe(u8, visual_state.mode.toString())
         else
             try allocator.dupe(u8, mode_manager.getModeString());
         defer allocator.free(status);
 
-        try display.render(&buffer, status, &highlight_config);
+        try display.render(&buffer, status, &highlight_config, &visual_state);
 
         // Set cursor shape based on mode
         if (mode_manager.isInsert()) {
@@ -429,6 +447,13 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     defer cmd_buffer.deinit();
     var pending_cmd = PendingCommand{};
 
+    // Visual mode state (initialized but not active)
+    var visual_state = VisualState{
+        .active = false,
+        .mode = .char,
+        .anchor = .{ .line = 0, .col = 0 },
+    };
+
     // Initialize debugger state (already have debugger running)
     var debugger_state = DebuggerState{};
 
@@ -464,7 +489,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
     // Register JSI host functions
     // Timer system is also initialized here
-    jsi_api.initJSI(allocator, runtime, &highlight_config);
+    jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config);
     defer jsi_api.deinitTimers(); // Clean up timers on exit (even on error)
 
     // Create and start CDP debugger BEFORE loading config
@@ -475,7 +500,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     try debugger.start();
 
     // Re-register console.log with debugger pointer so messages go to Chrome Console
-    jsi_api.registerConsoleWithDebugger(runtime, debugger.handle);
+    jsi_api.registerConsoleWithDebugger(@ptrCast(runtime), debugger.handle);
 
     // Auto-launch Chrome DevTools (silently)
     launchChromeDevTools(9229) catch {};
@@ -483,7 +508,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     // Wait up to 5 seconds for debugger to connect (silently)
     var wait_count: usize = 0;
     while (wait_count < 50 and !debugger.isConnected()) {
-        std.time.sleep(100 * std.time.ns_per_ms);
+        std.Thread.sleep(100 * std.time.ns_per_ms);
         wait_count += 1;
     }
 
@@ -491,7 +516,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     if (paths.initJsExists()) {
         debugger.log("OpenVim: Loading init.js...", .info);
 
-        jsi_api.loadConfig(runtime, paths.init_js_path, allocator) catch |err| {
+        jsi_api.loadConfig(@ptrCast(runtime), paths.init_js_path, allocator) catch |err| {
             const msg = try std.fmt.allocPrint(allocator, "Failed to load init.js: {}", .{err});
             defer allocator.free(msg);
             debugger.log(msg, .err);
@@ -554,7 +579,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     {
         const status = try allocator.dupe(u8, mode_manager.getModeString());
         defer allocator.free(status);
-        try display.render(&buffer, status, &highlight_config);
+        try display.render(&buffer, status, &highlight_config, &visual_state);
         try display.setCursorBlock();
         try display.flush();
     }
@@ -570,15 +595,17 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
         // Handle input with short timeout to keep UI responsive
         // libuv handles timer firing, so we just need to poll for input
-        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, allocator, &debugger_state, 10);
+        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &visual_state, allocator, &debugger_state, 10);
 
         const status = if (mode_manager.isCommand())
             try std.fmt.allocPrint(allocator, ":{s}", .{cmd_buffer.getString()})
+        else if (mode_manager.isVisual() and visual_state.active)
+            try allocator.dupe(u8, visual_state.mode.toString())
         else
             try allocator.dupe(u8, mode_manager.getModeString());
         defer allocator.free(status);
 
-        try display.render(&buffer, status, &highlight_config);
+        try display.render(&buffer, status, &highlight_config, &visual_state);
 
         if (mode_manager.isInsert()) {
             try display.setCursorBar();
@@ -617,11 +644,12 @@ fn handleInputWithTimeout(
     mode_manager: *ModeManager,
     cmd_buffer: *CommandBuffer,
     pending_cmd: *PendingCommand,
+    visual_state: *VisualState,
     allocator: std.mem.Allocator,
     debugger_state: *DebuggerState,
     timeout_ms: ?i64,
 ) !bool {
-    const stdin = std.io.getStdIn();
+    const stdin = std.fs.File.stdin();
     var buf: [16]u8 = undefined;
 
     // Use poll() to wait for input with timeout
@@ -658,11 +686,11 @@ fn handleInputWithTimeout(
 
     // Handle based on mode
     if (mode_manager.isNormal()) {
-        return try handleNormalMode(buffer, display, mode_manager, cmd_buffer, pending_cmd, input);
+        return try handleNormalMode(buffer, display, mode_manager, cmd_buffer, pending_cmd, visual_state, input);
     } else if (mode_manager.isInsert()) {
         return try handleInsertMode(buffer, mode_manager, input);
     } else if (mode_manager.isVisual()) {
-        return try handleVisualMode(buffer, mode_manager, input);
+        return try handleVisualMode(buffer, mode_manager, visual_state, input);
     } else if (mode_manager.isCommand()) {
         return try handleCommandMode(buffer, mode_manager, cmd_buffer, allocator, input, debugger_state);
     }
@@ -677,6 +705,7 @@ fn handleNormalMode(
     mode_manager: *ModeManager,
     cmd_buffer: *CommandBuffer,
     pending_cmd: *PendingCommand,
+    visual_state: *VisualState,
     input: []const u8,
 ) !bool {
     // Check for pending command first (e.g., waiting for second 'd' in 'dd')
@@ -739,8 +768,35 @@ fn handleNormalMode(
                 mode_manager.enterCommand();
             },
 
-            // Enter visual mode
-            'v' => mode_manager.enterVisual(),
+            // Enter visual mode (character-wise)
+            'v' => {
+                const cursor_pos = Position{
+                    .line = buffer.cursor.row,
+                    .col = buffer.cursor.col,
+                };
+                visual_state.* = VisualState.init(cursor_pos, .char);
+                mode_manager.enterVisual();
+            },
+
+            // Enter visual mode (line-wise)
+            'V' => {
+                const cursor_pos = Position{
+                    .line = buffer.cursor.row,
+                    .col = buffer.cursor.col,
+                };
+                visual_state.* = VisualState.init(cursor_pos, .line);
+                mode_manager.enterVisual();
+            },
+
+            // Ctrl+V - Enter visual mode (block-wise)
+            22 => { // Ctrl+V
+                const cursor_pos = Position{
+                    .line = buffer.cursor.row,
+                    .col = buffer.cursor.col,
+                };
+                visual_state.* = VisualState.init(cursor_pos, .block);
+                mode_manager.enterVisual();
+            },
 
             // Enter insert mode
             'i' => mode_manager.enterInsert(),
@@ -866,10 +922,12 @@ fn handleInsertMode(
 fn handleVisualMode(
     buffer: *Buffer,
     mode_manager: *ModeManager,
+    visual_state: *VisualState,
     input: []const u8,
 ) !bool {
     // Escape exits visual mode
     if (input.len == 1 and input[0] == 27) { // ESC
+        visual_state.deactivate();
         mode_manager.enterNormal();
         return true;
     }
@@ -898,8 +956,11 @@ fn handleVisualMode(
             // File movement
             'G' => movement.moveToFileEnd(buffer),
 
-            // Exit visual mode
-            'v' => mode_manager.enterNormal(),
+            // Exit visual mode (toggle off)
+            'v' => {
+                visual_state.deactivate();
+                mode_manager.enterNormal();
+            },
 
             else => {},
         }
@@ -978,7 +1039,7 @@ fn handleCommandMode(
                         try debugger_heap.start();
 
                         // Re-register console.log with debugger so messages go to Chrome Console
-                        jsi_api.registerConsoleWithDebugger(state.runtime.?, debugger_heap.handle);
+                        jsi_api.registerConsoleWithDebugger(@ptrCast(state.runtime.?), debugger_heap.handle);
 
                         // Launch Chrome (silently)
                         launchChromeDevTools(state.port) catch {};
@@ -1013,7 +1074,10 @@ fn handleCommandMode(
 
 /// Run test mode - execute test script from file
 fn runTestMode(allocator: std.mem.Allocator, test_file_path: []const u8) !void {
-    const stdout = std.io.getStdOut();
+    const stdout_file = std.fs.File.stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_writer = stdout_file.writer(&stdout_buf);
+    const stdout = &stdout_writer.interface;
 
     // Initialize components
     var buffer = Buffer.init(allocator);
@@ -1022,21 +1086,25 @@ fn runTestMode(allocator: std.mem.Allocator, test_file_path: []const u8) !void {
     var display = try Display.init(allocator);
     defer display.deinit();
     var mode_manager = ModeManager.init();
-    var harness = TestHarness.init(allocator, &buffer, &display, &mode_manager, stdout);
+    var harness = TestHarness.init(allocator, &buffer, &display, &mode_manager, stdout_file);
 
-    try stdout.writer().print("=== OpenVim Test Mode ===\n", .{});
-    try stdout.writer().print("Running: {s}\n\n", .{test_file_path});
+    try stdout.print("=== OpenVim Test Mode ===\n", .{});
+    try stdout.print("Running: {s}\n\n", .{test_file_path});
 
     // Read test file
     const test_file = try std.fs.cwd().openFile(test_file_path, .{});
     defer test_file.close();
 
-    var buf_reader = std.io.bufferedReader(test_file.reader());
-    var reader = buf_reader.reader();
-    var line_buf: [1024]u8 = undefined;
+    var test_file_buf: [4096]u8 = undefined;
+    var file_reader = test_file.reader(&test_file_buf);
+    const reader = &file_reader.interface;
     var line_num: usize = 0;
 
-    while (try reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
+    while (true) {
+        const line = reader.*.takeDelimiterExclusive('\n') catch |err| {
+            if (err == error.EndOfStream) break;
+            return err;
+        };
         line_num += 1;
 
         const trimmed = std.mem.trim(u8, line, " \t\r");
@@ -1047,9 +1115,9 @@ fn runTestMode(allocator: std.mem.Allocator, test_file_path: []const u8) !void {
 
         if (std.mem.eql(u8, cmd_type, "LOAD")) {
             const filepath = parts.rest();
-            try stdout.writer().print("\n>>> LOAD {s}\n", .{filepath});
+            try stdout.print("\n>>> LOAD {s}\n", .{filepath});
             buffer.loadFile(filepath) catch |err| {
-                try stdout.writer().print("ERROR: {}\n", .{err});
+                try stdout.print("ERROR: {}\n", .{err});
                 continue;
             };
             try harness.dumpState();
@@ -1076,23 +1144,29 @@ fn runTestMode(allocator: std.mem.Allocator, test_file_path: []const u8) !void {
             try harness.assertMode(parts.rest());
         } else if (std.mem.eql(u8, cmd_type, "SLEEP")) {
             const ms = try std.fmt.parseInt(u64, parts.rest(), 10);
-            std.time.sleep(ms * std.time.ns_per_ms);
+            std.Thread.sleep(ms * std.time.ns_per_ms);
         } else {
-            try stdout.writer().print("WARN: Unknown command at line {}: {s}\n", .{ line_num, cmd_type });
+            try stdout.print("WARN: Unknown command at line {}: {s}\n", .{ line_num, cmd_type });
         }
     }
 
-    try stdout.writer().print("\n=== Test Complete ===\n", .{});
+    try stdout.print("\n=== Test Complete ===\n", .{});
 }
 
 /// Run interactive REPL mode for debugging
 fn runREPL(allocator: std.mem.Allocator) !void {
-    const stdout = std.io.getStdOut();
-    const stdin = std.io.getStdIn();
+    const stdout_file = std.fs.File.stdout();
+    const stdin_file = std.fs.File.stdin();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_writer = stdout_file.writer(&stdout_buf);
+    const stdout = &stdout_writer.interface;
+    var stdin_buf: [4096]u8 = undefined;
+    var stdin_reader = stdin_file.reader(&stdin_buf);
+    const stdin = &stdin_reader.interface;
 
-    try stdout.writer().print("\n=== OpenVim Debug REPL ===\n", .{});
-    try stdout.writer().print("Interactive debugging mode\n", .{});
-    try stdout.writer().print("Type 'help' for commands, 'quit' to exit\n\n", .{});
+    try stdout.print("\n=== OpenVim Debug REPL ===\n", .{});
+    try stdout.print("Interactive debugging mode\n", .{});
+    try stdout.print("Type 'help' for commands, 'quit' to exit\n\n", .{});
 
     // Initialize components
     var buffer = Buffer.init(allocator);
@@ -1101,27 +1175,22 @@ fn runREPL(allocator: std.mem.Allocator) !void {
     var display = try Display.init(allocator);
     defer display.deinit();
     var mode_manager = ModeManager.init();
-    var harness = TestHarness.init(allocator, &buffer, &display, &mode_manager, stdout);
-
-    var buf_reader = std.io.bufferedReader(stdin.reader());
-    var reader = buf_reader.reader();
-    var line_buf: [1024]u8 = undefined;
+    var harness = TestHarness.init(allocator, &buffer, &display, &mode_manager, stdout_file);
 
     while (true) {
-        try stdout.writer().writeAll("> ");
+        try stdout.writeAll("> ");
 
-        const line = reader.readUntilDelimiterOrEof(&line_buf, '\n') catch |err| {
-            try stdout.writer().print("Error: {}\n", .{err});
+        const line = stdin.*.takeDelimiterExclusive('\n') catch |err| {
+            if (err == error.EndOfStream) break;
+            try stdout.print("Error: {}\n", .{err});
             continue;
         };
 
-        if (line == null) break;
-
-        const trimmed = std.mem.trim(u8, line.?, " \t\r");
+        const trimmed = std.mem.trim(u8, line, " \t\r");
         if (trimmed.len == 0) continue;
 
         if (std.mem.eql(u8, trimmed, "quit") or std.mem.eql(u8, trimmed, "exit")) {
-            try stdout.writer().print("Goodbye!\n", .{});
+            try stdout.print("Goodbye!\n", .{});
             break;
         }
 
@@ -1129,7 +1198,7 @@ fn runREPL(allocator: std.mem.Allocator) !void {
         const cmd_type = parts.next() orelse continue;
 
         if (std.mem.eql(u8, cmd_type, "help")) {
-            try stdout.writer().writeAll(
+            try stdout.writeAll(
                 \\Commands:
                 \\  LOAD <file>         - Load file into buffer
                 \\  CMD <command>       - Execute editor command
@@ -1145,13 +1214,13 @@ fn runREPL(allocator: std.mem.Allocator) !void {
             );
         } else if (std.mem.eql(u8, cmd_type, "LOAD")) {
             buffer.loadFile(parts.rest()) catch |err| {
-                try stdout.writer().print("ERROR: {}\n", .{err});
+                try stdout.print("ERROR: {}\n", .{err});
                 continue;
             };
             try harness.dumpState();
         } else if (std.mem.eql(u8, cmd_type, "CMD")) {
             harness.executeCommand(parts.rest()) catch |err| {
-                try stdout.writer().print("ERROR: {}\n", .{err});
+                try stdout.print("ERROR: {}\n", .{err});
             };
         } else if (std.mem.eql(u8, cmd_type, "DISPLAY")) {
             const width = std.fmt.parseInt(usize, parts.rest(), 10) catch 80;
@@ -1161,32 +1230,32 @@ fn runREPL(allocator: std.mem.Allocator) !void {
         } else if (std.mem.eql(u8, cmd_type, "ASSERT_CURSOR")) {
             var args_iter = std.mem.splitScalar(u8, parts.rest(), ' ');
             const row = std.fmt.parseInt(usize, args_iter.next() orelse "", 10) catch {
-                try stdout.writer().print("ERROR: Invalid arguments\n", .{});
+                try stdout.print("ERROR: Invalid arguments\n", .{});
                 continue;
             };
             const col = std.fmt.parseInt(usize, args_iter.next() orelse "", 10) catch {
-                try stdout.writer().print("ERROR: Invalid arguments\n", .{});
+                try stdout.print("ERROR: Invalid arguments\n", .{});
                 continue;
             };
             harness.assertCursor(row, col) catch {};
         } else if (std.mem.eql(u8, cmd_type, "ASSERT_LINE")) {
             var args_iter = std.mem.splitScalar(u8, parts.rest(), ' ');
             const line_idx = std.fmt.parseInt(usize, args_iter.next() orelse "", 10) catch {
-                try stdout.writer().print("ERROR: Invalid line number\n", .{});
+                try stdout.print("ERROR: Invalid line number\n", .{});
                 continue;
             };
             harness.assertLine(line_idx, args_iter.rest()) catch {};
         } else if (std.mem.eql(u8, cmd_type, "ASSERT_LINES")) {
             const count = std.fmt.parseInt(usize, parts.rest(), 10) catch {
-                try stdout.writer().print("ERROR: Invalid count\n", .{});
+                try stdout.print("ERROR: Invalid count\n", .{});
                 continue;
             };
             harness.assertLineCount(count) catch {};
         } else if (std.mem.eql(u8, cmd_type, "ASSERT_MODE")) {
             harness.assertMode(parts.rest()) catch {};
         } else {
-            try stdout.writer().print("Unknown command: {s}\n", .{cmd_type});
-            try stdout.writer().print("Type 'help' for available commands\n", .{});
+            try stdout.print("Unknown command: {s}\n", .{cmd_type});
+            try stdout.print("Type 'help' for available commands\n", .{});
         }
     }
 }

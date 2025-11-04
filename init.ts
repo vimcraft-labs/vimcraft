@@ -3,7 +3,7 @@
 const colors = {
   bg: '#1e1e1e',
   bgAlt: '#252526',
-  bgHighlight: '#2b2b2b',
+  bgHighlight: '#1E202F',
 
   fg: '#d4d4d4',
   fgAlt: '#808080',

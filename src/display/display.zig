@@ -5,13 +5,17 @@ const highlights = @import("../config/highlights.zig");
 const ScreenGrid = @import("screen_grid.zig").ScreenGrid;
 const Cell = @import("screen_grid.zig").Cell;
 const Update = @import("screen_grid.zig").Update;
+const VisualState = @import("../visual/visual.zig").VisualState;
+const Position = @import("../visual/visual.zig").Position;
+const char_width = @import("char_width.zig");
 
 /// Terminal display manager
 /// Handles rendering buffer content to terminal using ANSI escape codes
 /// Now uses grid-based rendering (Neovim-style) with Helix optimizations
 pub const Display = struct {
     allocator: std.mem.Allocator,
-    stdout: std.fs.File.Writer,
+    stdout: std.fs.File,
+    stdout_buf: [4096]u8, // Buffer for stdout writer
     terminal_rows: usize,
     terminal_cols: usize,
     viewport_top: usize, // First visible line number
@@ -25,24 +29,37 @@ pub const Display = struct {
         const grid = try ScreenGrid.init(allocator, 80, 24);
         return .{
             .allocator = allocator,
-            .stdout = std.io.getStdOut().writer(),
+            .stdout = std.fs.File.stdout(),
+            .stdout_buf = undefined, // Will be initialized on first use
             .terminal_rows = 24, // Default, will be updated by getTerminalSize
             .terminal_cols = 80,
             .viewport_top = 0,
             .viewport_left = 0,
             .grid = grid,
-            .output_buf = std.ArrayList(u8).init(allocator),
+            .output_buf = .empty,
         };
     }
 
     pub fn deinit(self: *Display) void {
         self.grid.deinit();
-        self.output_buf.deinit();
+        self.output_buf.deinit(self.allocator);
+    }
+
+    /// Helper to get a buffered writer for stdout
+    // Direct access to stdout for writing - simpler in Zig 0.15.2
+    fn write(self: *Display, bytes: []const u8) !void {
+        return self.stdout.writeAll(bytes);
+    }
+
+    fn print(self: *Display, comptime format: []const u8, args: anytype) !void {
+        // Format to a temporary buffer, then write it
+        const formatted = try std.fmt.bufPrint(&self.stdout_buf, format, args);
+        try self.stdout.writeAll(formatted);
     }
 
     /// Enter raw terminal mode (disable line buffering, echo)
     pub fn enterRawMode(self: *Display) !void {
-        const stdin = std.io.getStdIn();
+        const stdin = std.fs.File.stdin();
         const builtin = @import("builtin");
 
         if (builtin.os.tag == .linux or builtin.os.tag == .macos)
@@ -77,19 +94,19 @@ pub const Display = struct {
 
             // Enter alternate screen buffer
             // This allows text selection in the normal terminal
-            try self.stdout.writeAll("\x1b[?1049h");
+            try self.write("\x1b[?1049h");
         }
     }
 
     /// Exit raw terminal mode (restore normal terminal)
     pub fn exitRawMode(self: *Display) void {
-        const stdin = std.io.getStdIn();
+        const stdin = std.fs.File.stdin();
         const builtin = @import("builtin");
 
         if (builtin.os.tag == .linux or builtin.os.tag == .macos)
         {
             // Exit alternate screen buffer (restores original terminal content)
-            self.stdout.writeAll("\x1b[?1049l") catch {};
+            self.write("\x1b[?1049l") catch {};
 
             var termios = std.posix.tcgetattr(stdin.handle) catch return;
 
@@ -106,42 +123,42 @@ pub const Display = struct {
 
     /// Clear entire screen
     pub fn clearScreen(self: *Display) !void {
-        try self.stdout.writeAll("\x1b[2J");
+        try self.write("\x1b[2J");
     }
 
     /// Move cursor to position (0-indexed)
     pub fn moveCursor(self: *Display, row: usize, col: usize) !void {
-        try self.stdout.print("\x1b[{d};{d}H", .{ row + 1, col + 1 });
+        try self.print("\x1b[{d};{d}H", .{ row + 1, col + 1 });
     }
 
     /// Hide cursor
     pub fn hideCursor(self: *Display) !void {
-        try self.stdout.writeAll("\x1b[?25l");
+        try self.write("\x1b[?25l");
     }
 
     /// Show cursor
     pub fn showCursor(self: *Display) !void {
-        try self.stdout.writeAll("\x1b[?25h");
+        try self.write("\x1b[?25h");
     }
 
     /// Set cursor to block shape (normal mode)
     pub fn setCursorBlock(self: *Display) !void {
-        try self.stdout.writeAll("\x1b[2 q");
+        try self.write("\x1b[2 q");
     }
 
     /// Set cursor to bar/vertical line shape (insert mode)
     pub fn setCursorBar(self: *Display) !void {
-        try self.stdout.writeAll("\x1b[6 q");
+        try self.write("\x1b[6 q");
     }
 
     /// Set cursor to underline shape (replace mode, if needed later)
     pub fn setCursorUnderline(self: *Display) !void {
-        try self.stdout.writeAll("\x1b[4 q");
+        try self.write("\x1b[4 q");
     }
 
     /// Get terminal size (uses TIOCGWINSZ ioctl) and resize grid if needed
     pub fn getTerminalSize(self: *Display) !void {
-        const stdout = std.io.getStdOut();
+        const stdout = std.fs.File.stdout();
         const builtin = @import("builtin");
 
         if (builtin.os.tag == .linux or builtin.os.tag == .macos)
@@ -172,7 +189,7 @@ pub const Display = struct {
 
     /// Render buffer content to screen using grid-based rendering
     /// This is the main rendering function following Neovim's architecture
-    pub fn render(self: *Display, buffer: *const Buffer, status: []const u8, config: *const highlights.HighlightConfig) !void {
+    pub fn render(self: *Display, buffer: *const Buffer, status: []const u8, config: *const highlights.HighlightConfig, visual_state: *const VisualState) !void {
         // Update terminal size (handles resize and ensures correct dimensions)
         try self.getTerminalSize();
 
@@ -194,7 +211,7 @@ pub const Display = struct {
         }
 
         // STEP 1: Update grid from buffer content (render to memory)
-        try self.updateGridFromBuffer(buffer, status, config);
+        try self.updateGridFromBuffer(buffer, status, config, visual_state);
 
         // STEP 2: Compute diff (what changed since last frame)
         const updates = try self.grid.diff(self.allocator);
@@ -224,8 +241,16 @@ pub const Display = struct {
     }
 
     /// Update grid from buffer content (Step 1: logical → grid)
-    fn updateGridFromBuffer(self: *Display, buffer: *const Buffer, status: []const u8, config: *const highlights.HighlightConfig) !void {
+    fn updateGridFromBuffer(self: *Display, buffer: *const Buffer, status: []const u8, config: *const highlights.HighlightConfig, visual_state: *const VisualState) !void {
         const text_rows = if (self.terminal_rows > 1) self.terminal_rows - 1 else 1;
+
+        // Cache visual state to ensure consistency during this render frame
+        const visual_active = visual_state.active;
+        const cursor_pos = if (visual_active) Position{
+            .line = buffer.cursor.row,
+            .col = buffer.cursor.col,
+        } else Position{ .line = 0, .col = 0 }; // Unused if not active
+        const visual_range = if (visual_active) visual_state.getRange(cursor_pos) else undefined;
 
         // Render text lines to grid
         var row: usize = 0;
@@ -258,13 +283,96 @@ pub const Display = struct {
                     bg_color = config.cursorline.?.bg;
                 }
 
-                // Write line to grid and get actual ending column
-                const end_col = self.grid.setString(row, 0, remaining, fg_color, bg_color);
+                // Check if this line could be in visual selection (using cached state)
+                const line_in_selection = visual_active and
+                    (line_num >= visual_range.start.line and line_num <= visual_range.end.line);
+
+                // Fast path: Use setString for lines without visual selection
+                // This avoids character-by-character processing and is more stable
+                const end_col = if (!line_in_selection) blk: {
+                    break :blk self.grid.setString(row, 0, remaining, fg_color, bg_color);
+                } else blk: {
+                    // Slow path: Character-by-character for visual selection highlighting
+                    // NOTE: Buffer positions are in BYTES, not character counts
+                    var screen_col: usize = 0;
+                    var byte_idx: usize = 0;
+
+                    // Pre-calculate visual background
+                    const visual_bg = if (config.visual) |v|
+                        v.bg
+                    else
+                        highlights.Color{ .r = 80, .g = 80, .b = 80 }; // Default gray
+
+                    while (byte_idx < remaining.len and screen_col < self.terminal_cols) {
+                        // Decode UTF-8 character
+                        const char_len = std.unicode.utf8ByteSequenceLength(remaining[byte_idx]) catch 1;
+                        if (byte_idx + char_len > remaining.len) break;
+
+                        const codepoint = std.unicode.utf8Decode(remaining[byte_idx..][0..char_len]) catch ' ';
+                        const width = char_width.codepointWidth(codepoint);
+
+                        // Handle zero-width characters (combining marks, variation selectors)
+                        // Attach them to the previous cell's combining array
+                        if (width == 0) {
+                            if (screen_col > 0) {
+                                // Find the actual character cell (skip continuation cells)
+                                var target_col = screen_col - 1;
+                                while (target_col > 0 and self.grid.current[row][target_col].is_continuation) {
+                                    target_col -= 1;
+                                }
+                                // Add to combining array if there's space
+                                if (self.grid.current[row][target_col].combining_count < 2) {
+                                    const idx = self.grid.current[row][target_col].combining_count;
+                                    self.grid.current[row][target_col].combining[idx] = codepoint;
+                                    self.grid.current[row][target_col].combining_count += 1;
+                                }
+                            }
+                            byte_idx += char_len;
+                            continue;
+                        }
+
+                        // Check if character start position is in selection
+                        const buffer_col = start_col + byte_idx;
+                        const char_pos = Position{
+                            .line = line_num,
+                            .col = buffer_col,
+                        };
+
+                        const final_bg = if (visual_state.contains(cursor_pos, char_pos))
+                            visual_bg
+                        else
+                            bg_color;
+
+                        // Set the main character cell
+                        self.grid.setCell(row, screen_col, .{
+                            .char = codepoint,
+                            .fg = fg_color,
+                            .bg = final_bg,
+                        });
+
+                        screen_col += 1;
+
+                        // For double-width characters, fill the second column with continuation marker
+                        if (width == 2 and screen_col < self.terminal_cols) {
+                            self.grid.setCell(row, screen_col, .{
+                                .char = ' ', // Placeholder (not rendered to terminal)
+                                .fg = fg_color,
+                                .bg = final_bg, // Same background as the main character
+                                .is_continuation = true, // Mark as continuation
+                            });
+                            screen_col += 1;
+                        }
+
+                        byte_idx += char_len;
+                    }
+
+                    break :blk screen_col;
+                };
 
                 // Fill rest of line from where text ended (either with cursor bg or clear it)
                 // This ensures old background colors are properly cleared
-                for (end_col..self.terminal_cols) |col| {
-                    self.grid.setCell(row, col, .{ .char = ' ', .bg = bg_color });
+                for (end_col..self.terminal_cols) |fill_col| {
+                    self.grid.setCell(row, fill_col, .{ .char = ' ', .bg = bg_color });
                 }
             } else {
                 // Empty line indicator (Vim-style ~) - no background
@@ -313,7 +421,7 @@ pub const Display = struct {
 
         // Clear output buffer
         self.output_buf.clearRetainingCapacity();
-        const writer = self.output_buf.writer();
+        const buf_writer = self.output_buf.writer(self.allocator);
 
         // Track state to minimize ANSI codes (Helix optimization)
         var current_fg: ?highlights.Color = null;
@@ -324,6 +432,12 @@ pub const Display = struct {
         var last_pos: ?struct { row: usize, col: usize } = null;
 
         for (updates) |update| {
+            // Skip continuation cells - terminals handle double-width chars automatically
+            // The double-width character's background extends across both columns
+            if (update.cell.is_continuation) {
+                continue;
+            }
+
             // HELIX OPTIMIZATION 1: Skip cursor movement if adjacent
             // If we're printing at (last_col + 1, same_row), terminal auto-advances
             const is_adjacent = if (last_pos) |pos|
@@ -333,7 +447,7 @@ pub const Display = struct {
 
             if (!is_adjacent) {
                 // Move cursor to position
-                try writer.print("\x1b[{d};{d}H", .{ update.row + 1, update.col + 1 });
+                try buf_writer.print("\x1b[{d};{d}H", .{ update.row + 1, update.col + 1 });
             }
 
             // HELIX OPTIMIZATION 2: Only send attribute changes
@@ -342,11 +456,11 @@ pub const Display = struct {
                 if (current_fg == null or !colorEql(current_fg.?, fg)) {
                     var buf: [32]u8 = undefined;
                     const fg_code = try fg.toAnsiFg(&buf);
-                    try writer.writeAll(fg_code);
+                    try buf_writer.writeAll(fg_code);
                     current_fg = fg;
                 }
             } else if (current_fg != null) {
-                try writer.writeAll("\x1b[39m"); // Reset FG
+                try buf_writer.writeAll("\x1b[39m"); // Reset FG
                 current_fg = null;
             }
 
@@ -355,20 +469,20 @@ pub const Display = struct {
                 if (current_bg == null or !colorEql(current_bg.?, bg)) {
                     var buf: [32]u8 = undefined;
                     const bg_code = try bg.toAnsiBg(&buf);
-                    try writer.writeAll(bg_code);
+                    try buf_writer.writeAll(bg_code);
                     current_bg = bg;
                 }
             } else if (current_bg != null) {
-                try writer.writeAll("\x1b[49m"); // Reset BG
+                try buf_writer.writeAll("\x1b[49m"); // Reset BG
                 current_bg = null;
             }
 
             // Bold
             if (update.cell.bold != current_bold) {
                 if (update.cell.bold) {
-                    try writer.writeAll("\x1b[1m");
+                    try buf_writer.writeAll("\x1b[1m");
                 } else {
-                    try writer.writeAll("\x1b[22m");
+                    try buf_writer.writeAll("\x1b[22m");
                 }
                 current_bold = update.cell.bold;
             }
@@ -376,9 +490,9 @@ pub const Display = struct {
             // Italic
             if (update.cell.italic != current_italic) {
                 if (update.cell.italic) {
-                    try writer.writeAll("\x1b[3m");
+                    try buf_writer.writeAll("\x1b[3m");
                 } else {
-                    try writer.writeAll("\x1b[23m");
+                    try buf_writer.writeAll("\x1b[23m");
                 }
                 current_italic = update.cell.italic;
             }
@@ -386,27 +500,33 @@ pub const Display = struct {
             // Underline
             if (update.cell.underline != current_underline) {
                 if (update.cell.underline) {
-                    try writer.writeAll("\x1b[4m");
+                    try buf_writer.writeAll("\x1b[4m");
                 } else {
-                    try writer.writeAll("\x1b[24m");
+                    try buf_writer.writeAll("\x1b[24m");
                 }
                 current_underline = update.cell.underline;
             }
 
-            // Write the character
+            // Write the base character
             var buf: [4]u8 = undefined;
             const len = std.unicode.utf8Encode(update.cell.char, &buf) catch 1;
-            try writer.writeAll(buf[0..len]);
+            try buf_writer.writeAll(buf[0..len]);
+
+            // Write any combining characters (variation selectors, combining marks)
+            for (0..update.cell.combining_count) |i| {
+                const combining_len = std.unicode.utf8Encode(update.cell.combining[i], &buf) catch 1;
+                try buf_writer.writeAll(buf[0..combining_len]);
+            }
 
             // Track position for adjacent detection
             last_pos = .{ .row = update.row, .col = update.col };
         }
 
         // Reset all attributes at end
-        try writer.writeAll("\x1b[0m");
+        try buf_writer.writeAll("\x1b[0m");
 
         // NEOVIM + HELIX PATTERN: Single flush (batched output)
-        try self.stdout.writeAll(self.output_buf.items);
+        try self.write(self.output_buf.items);
     }
 
     /// Helper: Compare two colors
@@ -420,7 +540,7 @@ pub const Display = struct {
         try self.moveCursor(status_row, 0);
 
         // Inverse video for status line
-        try self.stdout.writeAll("\x1b[7m");
+        try self.write("\x1b[7m");
 
         // File info
         const filename = buffer.filepath orelse "[No Name]";
@@ -438,18 +558,18 @@ pub const Display = struct {
         else
             position;
 
-        try self.stdout.writeAll(visible_status);
+        try self.write(visible_status);
 
         // Pad remaining space
         if (visible_status.len < self.terminal_cols) {
             var i: usize = 0;
             while (i < self.terminal_cols - visible_status.len) : (i += 1) {
-                try self.stdout.writeAll(" ");
+                try self.write(" ");
             }
         }
 
         // Reset attributes
-        try self.stdout.writeAll("\x1b[0m");
+        try self.write("\x1b[0m");
     }
 
     /// Adjust viewport to keep cursor visible
@@ -469,7 +589,7 @@ pub const Display = struct {
 
     /// Flush output buffer
     pub fn flush(_: *Display) !void {
-        const stdout = std.io.getStdOut();
+        const stdout = std.fs.File.stdout();
         try stdout.sync();
     }
 };

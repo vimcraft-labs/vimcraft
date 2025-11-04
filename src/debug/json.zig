@@ -7,10 +7,10 @@ const state = @import("state.zig");
 
 /// Serialize Command to JSON
 pub fn serializeCommand(command: protocol.Command, allocator: std.mem.Allocator) ![]const u8 {
-    var string = std.ArrayList(u8).init(allocator);
-    errdefer string.deinit();
+    var string: std.ArrayList(u8) = .empty;
+    errdefer string.deinit(allocator);
 
-    var writer = string.writer();
+    var writer = string.writer(allocator);
     try writer.writeAll("{");
 
     // ID
@@ -29,7 +29,7 @@ pub fn serializeCommand(command: protocol.Command, allocator: std.mem.Allocator)
 
     try writer.writeAll("}");
 
-    return string.toOwnedSlice();
+    return string.toOwnedSlice(allocator);
 }
 
 fn serializeCommandArgs(args: protocol.CommandArgs, writer: anytype) !void {
@@ -70,10 +70,10 @@ fn serializeCommandArgs(args: protocol.CommandArgs, writer: anytype) !void {
 
 /// Serialize Response to JSON
 pub fn serializeResponse(response: protocol.Response, allocator: std.mem.Allocator) ![]const u8 {
-    var string = std.ArrayList(u8).init(allocator);
-    errdefer string.deinit();
+    var string: std.ArrayList(u8) = .empty;
+    errdefer string.deinit(allocator);
 
-    var writer = string.writer();
+    var writer = string.writer(allocator);
     try writer.writeAll("{");
 
     // ID
@@ -102,7 +102,7 @@ pub fn serializeResponse(response: protocol.Response, allocator: std.mem.Allocat
 
     try writer.writeAll("}");
 
-    return string.toOwnedSlice();
+    return string.toOwnedSlice(allocator);
 }
 
 fn serializeResponseResult(result: protocol.ResponseResult, writer: anytype) !void {

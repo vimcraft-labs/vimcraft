@@ -19,8 +19,11 @@ pub fn log(comptime fmt: []const u8, args: anytype) void {
     defer log_mutex.unlock();
 
     if (log_file) |f| {
-        f.writer().print(fmt, args) catch {};
-        f.writer().writeAll("\n") catch {};
+        var buf: [4096]u8 = undefined;
+        var w = f.writer(&buf);
+        const writer = &w.interface;
+        writer.print(fmt, args) catch {};
+        writer.writeAll("\n") catch {};
         f.sync() catch {};
     }
 }

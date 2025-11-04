@@ -41,19 +41,19 @@ pub const Buffer = struct {
     pub fn init(allocator: std.mem.Allocator) Buffer {
         return .{
             .allocator = allocator,
-            .content = std.ArrayList(u8).init(allocator),
-            .line_starts = std.ArrayList(usize).init(allocator),
+            .content = .empty,
+            .line_starts = .empty,
             .cursor = Cursor.init(),
             .filepath = null,
             .modified = false,
-            .undo_stack = std.ArrayList(Change).init(allocator),
-            .redo_stack = std.ArrayList(Change).init(allocator),
+            .undo_stack = .empty,
+            .redo_stack = .empty,
         };
     }
 
     pub fn deinit(self: *Buffer) void {
-        self.content.deinit();
-        self.line_starts.deinit();
+        self.content.deinit(self.allocator);
+        self.line_starts.deinit(self.allocator);
         if (self.filepath) |path| {
             self.allocator.free(path);
         }
@@ -62,12 +62,12 @@ pub const Buffer = struct {
         for (self.undo_stack.items) |*change| {
             change.deinit(self.allocator);
         }
-        self.undo_stack.deinit();
+        self.undo_stack.deinit(self.allocator);
 
         for (self.redo_stack.items) |*change| {
             change.deinit(self.allocator);
         }
-        self.redo_stack.deinit();
+        self.redo_stack.deinit(self.allocator);
     }
 
     /// Load file from path
@@ -77,7 +77,11 @@ pub const Buffer = struct {
 
         // Read entire file into content
         const max_size = 100 * 1024 * 1024; // 100MB limit
-        try file.reader().readAllArrayList(&self.content, max_size);
+        const file_contents = try file.readToEndAlloc(self.allocator, max_size);
+        defer self.allocator.free(file_contents);
+
+        // Copy to our ArrayList
+        try self.content.appendSlice(self.allocator, file_contents);
 
         // Store filepath
         self.filepath = try self.allocator.dupe(u8, path);
@@ -93,12 +97,12 @@ pub const Buffer = struct {
         self.line_starts.clearRetainingCapacity();
 
         // First line starts at 0
-        try self.line_starts.append(0);
+        try self.line_starts.append(self.allocator, 0);
 
         // Find all newline positions
         for (self.content.items, 0..) |byte, i| {
             if (byte == '\n' and i + 1 < self.content.items.len) {
-                try self.line_starts.append(i + 1);
+                try self.line_starts.append(self.allocator, i + 1);
             }
         }
     }
@@ -196,7 +200,7 @@ pub const Buffer = struct {
 
     /// Record a change for undo/redo
     fn recordChange(self: *Buffer, change: Change) !void {
-        try self.undo_stack.append(change);
+        try self.undo_stack.append(self.allocator, change);
         // Clear redo stack when new change is made
         for (self.redo_stack.items) |*c| {
             c.deinit(self.allocator);
@@ -210,7 +214,7 @@ pub const Buffer = struct {
         const cursor_before = self.cursor;
 
         // Insert character
-        try self.content.insert(offset, char);
+        try self.content.insert(self.allocator, offset, char);
 
         // Rebuild line index after insertion (offsets have shifted)
         try self.buildLineIndex();
@@ -325,7 +329,7 @@ pub const Buffer = struct {
 
         if (change.deleted_text.len > 0) {
             // Re-insert deleted text
-            try self.content.insertSlice(change.offset, change.deleted_text);
+            try self.content.insertSlice(self.allocator, change.offset, change.deleted_text);
         }
 
         // Restore cursor position
@@ -335,7 +339,7 @@ pub const Buffer = struct {
         try self.buildLineIndex();
 
         // Move change to redo stack
-        try self.redo_stack.append(change);
+        try self.redo_stack.append(self.allocator, change);
     }
 
     /// Redo last undone change
@@ -352,7 +356,7 @@ pub const Buffer = struct {
 
         if (change.inserted_text.len > 0) {
             // Re-insert text
-            try self.content.insertSlice(change.offset, change.inserted_text);
+            try self.content.insertSlice(self.allocator, change.offset, change.inserted_text);
         }
 
         // Restore cursor position
@@ -362,7 +366,7 @@ pub const Buffer = struct {
         try self.buildLineIndex();
 
         // Move change back to undo stack
-        try self.undo_stack.append(change);
+        try self.undo_stack.append(self.allocator, change);
     }
 
     /// Delete entire line (dd)

@@ -1,0 +1,13 @@
+.{
+    .name = .openvim,
+    .version = "0.1.0",
+    .fingerprint = 0xb6db4f57c41b94a7,
+    .minimum_zig_version = "0.15.0",
+    .paths = .{""},
+    .dependencies = .{
+        .uucode = .{
+            .url = "https://deps.files.ghostty.org/uucode-f81f8ef8518b8ec5a7fca30ec5fdbc76cc6197df.tar.gz",
+            .hash = "uucode-0.1.0-ZZjBPjQHQADuCy1VMWftjrMl3iWqgMpUugWVQJG6_7xT",
+        },
+    },
+}

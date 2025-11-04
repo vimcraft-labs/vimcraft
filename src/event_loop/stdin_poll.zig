@@ -38,7 +38,7 @@ pub fn init(callback: StdinCallback) !void {
     stdin_callback = callback;
 
     // Get stdin file descriptor
-    const stdin_fd = std.io.getStdIn().handle;
+    const stdin_fd = std.fs.File.stdin().handle;
 
     // Initialize poll handle for stdin
     const result = uv.uv_poll_init(loop, &poll_handle, stdin_fd);

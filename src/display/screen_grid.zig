@@ -1,14 +1,21 @@
 const std = @import("std");
 const highlights = @import("../config/highlights.zig");
+const char_width = @import("char_width.zig");
 
 /// A single cell in the terminal grid
 pub const Cell = struct {
-    char: u21, // Unicode codepoint
+    char: u21, // Unicode codepoint (base character)
     fg: ?highlights.Color = null,
     bg: ?highlights.Color = null,
     bold: bool = false,
     italic: bool = false,
     underline: bool = false,
+    is_continuation: bool = false, // True for the second cell of double-width chars
+
+    // Store up to 2 combining/zero-width characters (e.g., variation selectors)
+    // This allows proper rendering of emoji with variation selectors like 🖥️
+    combining: [2]u21 = [_]u21{0} ** 2,
+    combining_count: u8 = 0,
 
     /// Check if two cells are equal (for diffing)
     pub fn eql(self: Cell, other: Cell) bool {
@@ -16,6 +23,10 @@ pub const Cell = struct {
         if (self.bold != other.bold) return false;
         if (self.italic != other.italic) return false;
         if (self.underline != other.underline) return false;
+        if (self.combining_count != other.combining_count) return false;
+        for (0..self.combining_count) |i| {
+            if (self.combining[i] != other.combining[i]) return false;
+        }
 
         // Compare colors (handle null cases)
         if (self.fg == null and other.fg != null) return false;
@@ -191,7 +202,7 @@ pub const ScreenGrid = struct {
     /// Compare current vs previous buffer and return list of changes
     /// This is the core diff algorithm (inspired by both Neovim and Helix)
     pub fn diff(self: *ScreenGrid, allocator: std.mem.Allocator) ![]Update {
-        var updates = std.ArrayList(Update).init(allocator);
+        var updates: std.ArrayList(Update) = .empty;
 
         // Only check dirty lines (Neovim optimization)
         var iter = self.dirty_lines.iterator(.{});
@@ -202,7 +213,7 @@ pub const ScreenGrid = struct {
                 const previous_cell = self.previous[row][col];
 
                 if (!current_cell.eql(previous_cell)) {
-                    try updates.append(.{
+                    try updates.append(allocator, .{
                         .row = row,
                         .col = col,
                         .cell = current_cell,
@@ -211,7 +222,7 @@ pub const ScreenGrid = struct {
             }
         }
 
-        return updates.toOwnedSlice();
+        return updates.toOwnedSlice(allocator);
     }
 
     /// Swap current and previous buffers after rendering
@@ -257,7 +268,29 @@ pub const ScreenGrid = struct {
             if (i + char_len > text.len) break;
 
             const codepoint = std.unicode.utf8Decode(text[i..][0..char_len]) catch ' ';
+            const width = char_width.codepointWidth(codepoint);
 
+            // Handle zero-width characters (combining marks, variation selectors)
+            // Attach them to the previous cell's combining array
+            if (width == 0) {
+                if (current_col > col and current_col > 0) {
+                    // Find the actual character cell (skip continuation cells)
+                    var target_col = current_col - 1;
+                    while (target_col > 0 and self.current[row][target_col].is_continuation) {
+                        target_col -= 1;
+                    }
+                    // Add to combining array if there's space
+                    if (self.current[row][target_col].combining_count < 2) {
+                        const idx = self.current[row][target_col].combining_count;
+                        self.current[row][target_col].combining[idx] = codepoint;
+                        self.current[row][target_col].combining_count += 1;
+                    }
+                }
+                i += char_len;
+                continue;
+            }
+
+            // Set the main character cell
             self.current[row][current_col] = .{
                 .char = codepoint,
                 .fg = fg,
@@ -265,6 +298,19 @@ pub const ScreenGrid = struct {
             };
 
             current_col += 1;
+
+            // For double-width characters, fill the second column with a continuation marker
+            // This marks the cell as part of a double-width character
+            if (width == 2 and current_col < self.width) {
+                self.current[row][current_col] = .{
+                    .char = ' ', // Placeholder (not rendered to terminal)
+                    .fg = fg,
+                    .bg = bg,
+                    .is_continuation = true, // Mark as continuation
+                };
+                current_col += 1;
+            }
+
             i += char_len;
         }
 

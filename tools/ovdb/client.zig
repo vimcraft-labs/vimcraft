@@ -108,17 +108,20 @@ pub const Client = struct {
         defer self.allocator.free(cmd_json);
 
         // Send to server
-        const stdin = self.process.?.stdin.?.writer();
+        var stdin_buf: [4096]u8 = undefined;
+        var stdin_writer = self.process.?.stdin.?.writer(&stdin_buf);
+        const stdin = &stdin_writer.interface;
         try stdin.print("{s}\n", .{cmd_json});
 
         // Read response
-        const stdout = self.process.?.stdout.?.reader();
-        var buf_reader = std.io.bufferedReader(stdout);
-        var in_stream = buf_reader.reader();
+        var stdout_buf: [8192]u8 = undefined;
+        var stdout_reader = self.process.?.stdout.?.reader(&stdout_buf);
+        const stdout = &stdout_reader.interface;
 
-        var line_buffer: [8192]u8 = undefined;
-        const response_line = try in_stream.readUntilDelimiterOrEof(&line_buffer, '\n') orelse
-            return error.UnexpectedEOF;
+        const response_line = stdout.*.takeDelimiterExclusive('\n') catch |err| {
+            if (err == error.EndOfStream) return error.UnexpectedEOF;
+            return err;
+        };
 
         // Parse response JSON
         const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, response_line, .{});

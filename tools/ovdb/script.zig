@@ -65,7 +65,7 @@ pub const ScriptResults = struct {
             .passed = 0,
             .failed = 0,
             .errors = 0,
-            .results = std.ArrayList(TestResult).init(allocator),
+            .results = .empty,
             .total_duration_ms = 0,
         };
     }
@@ -74,12 +74,12 @@ pub const ScriptResults = struct {
         for (self.results.items) |*result| {
             result.deinit(allocator);
         }
-        self.results.deinit();
+        self.results.deinit(allocator);
         allocator.free(self.script_path);
     }
 
-    pub fn addResult(self: *ScriptResults, result: TestResult) !void {
-        try self.results.append(result);
+    pub fn addResult(self: *ScriptResults, allocator: std.mem.Allocator, result: TestResult) !void {
+        try self.results.append(allocator, result);
         self.total += 1;
         self.total_duration_ms += result.duration_ms;
 
@@ -93,25 +93,29 @@ pub const ScriptResults = struct {
 
 /// Parse a .ovdb script file
 pub fn parseScript(allocator: std.mem.Allocator, script_path: []const u8) !std.ArrayList(ScriptCommand) {
-    var commands = std.ArrayList(ScriptCommand).init(allocator);
+    var commands: std.ArrayList(ScriptCommand) = .empty;
     errdefer {
         for (commands.items) |*cmd| {
             cmd.deinit(allocator);
         }
-        commands.deinit();
+        commands.deinit(allocator);
     }
 
     // Read file
     const file = try std.fs.cwd().openFile(script_path, .{});
     defer file.close();
 
-    var buf_reader = std.io.bufferedReader(file.reader());
-    var in_stream = buf_reader.reader();
+    var file_buf: [4096]u8 = undefined;
+    var file_reader = file.reader(&file_buf);
+    const reader = &file_reader.interface;
 
-    var line_buffer: [4096]u8 = undefined;
     var line_number: usize = 0;
 
-    while (try in_stream.readUntilDelimiterOrEof(&line_buffer, '\n')) |line| {
+    while (true) {
+        const line = reader.*.takeDelimiterExclusive('\n') catch |err| {
+            if (err == error.EndOfStream) break;
+            return err;
+        };
         line_number += 1;
         const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
 
@@ -120,7 +124,7 @@ pub fn parseScript(allocator: std.mem.Allocator, script_path: []const u8) !std.A
 
         // Parse command
         const cmd = try parseScriptLine(allocator, trimmed, line_number);
-        try commands.append(cmd);
+        try commands.append(allocator, cmd);
     }
 
     return commands;
@@ -248,7 +252,7 @@ pub fn executeScript(
             // Network/communication error
             const duration_ms = @as(f64, @floatFromInt(std.time.milliTimestamp() - start));
             const err_msg = try std.fmt.allocPrint(allocator, "Communication error: {}", .{err});
-            try results.addResult(.{
+            try results.addResult(allocator, .{
                 .command = try allocator.dupe(u8, cmd.raw_line),
                 .status = .@"error",
                 .duration_ms = duration_ms,
@@ -270,7 +274,7 @@ pub fn executeScript(
             else
                 try allocator.dupe(u8, "Unknown error");
 
-            try results.addResult(.{
+            try results.addResult(allocator, .{
                 .command = try allocator.dupe(u8, cmd.raw_line),
                 .status = .@"error",
                 .duration_ms = duration_ms,
@@ -291,7 +295,7 @@ pub fn executeScript(
             const assertion = response.result.?.assertion;
             const status: TestStatus = if (assertion.match) .pass else .fail;
 
-            try results.addResult(.{
+            try results.addResult(allocator, .{
                 .command = try allocator.dupe(u8, cmd.raw_line),
                 .status = status,
                 .duration_ms = duration_ms,
@@ -301,7 +305,7 @@ pub fn executeScript(
             });
         } else {
             // Non-assertion command - just mark as passed
-            try results.addResult(.{
+            try results.addResult(allocator, .{
                 .command = try allocator.dupe(u8, cmd.raw_line),
                 .status = .pass,
                 .duration_ms = duration_ms,
@@ -340,7 +344,7 @@ test "Script: parse simple commands" {
         for (commands.items) |*cmd| {
             cmd.deinit(allocator);
         }
-        commands.deinit();
+        commands.deinit(allocator);
     }
 
     try std.testing.expectEqual(@as(usize, 3), commands.items.len);
@@ -370,7 +374,7 @@ test "Script: parse assertion commands" {
         for (commands.items) |*cmd| {
             cmd.deinit(allocator);
         }
-        commands.deinit();
+        commands.deinit(allocator);
     }
 
     try std.testing.expectEqual(@as(usize, 3), commands.items.len);

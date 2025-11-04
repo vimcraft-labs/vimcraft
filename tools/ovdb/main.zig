@@ -27,7 +27,7 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
 
     if (args.len < 2) {
-        try std.io.getStdErr().writeAll(usage);
+        try std.fs.File.stderr().writeAll(usage);
         std.process.exit(1);
     }
 
@@ -35,36 +35,43 @@ pub fn main() !void {
 
     if (std.mem.eql(u8, command, "connect")) {
         if (args.len < 3) {
-            try std.io.getStdErr().writeAll("Error: connect requires OpenVim path\n\n");
-            try std.io.getStdErr().writeAll(usage);
+            try std.fs.File.stderr().writeAll("Error: connect requires OpenVim path\n\n");
+            try std.fs.File.stderr().writeAll(usage);
             std.process.exit(1);
         }
         try connectCommand(allocator, args[2]);
     } else if (std.mem.eql(u8, command, "run")) {
         if (args.len < 3) {
-            try std.io.getStdErr().writeAll("Error: run requires script path\n\n");
-            try std.io.getStdErr().writeAll(usage);
+            try std.fs.File.stderr().writeAll("Error: run requires script path\n\n");
+            try std.fs.File.stderr().writeAll(usage);
             std.process.exit(1);
         }
         try runCommand(allocator, args[2]);
     } else if (std.mem.eql(u8, command, "ping")) {
         if (args.len < 3) {
-            try std.io.getStdErr().writeAll("Error: ping requires OpenVim path\n\n");
-            try std.io.getStdErr().writeAll(usage);
+            try std.fs.File.stderr().writeAll("Error: ping requires OpenVim path\n\n");
+            try std.fs.File.stderr().writeAll(usage);
             std.process.exit(1);
         }
         try pingCommand(allocator, args[2]);
     } else {
-        try std.io.getStdErr().writer().print("Error: unknown command '{s}'\n\n", .{command});
-        try std.io.getStdErr().writeAll(usage);
+        var stderr_buf: [256]u8 = undefined;
+        var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+        const stderr = &stderr_writer.interface;
+        try stderr.print("Error: unknown command '{s}'\n\n", .{command});
+        try std.fs.File.stderr().writeAll(usage);
         std.process.exit(1);
     }
 }
 
 /// Connect to OpenVim and enter interactive REPL mode
 fn connectCommand(allocator: std.mem.Allocator, openvim_path: []const u8) !void {
-    const stdout = std.io.getStdOut().writer();
-    const stdin = std.io.getStdIn().reader();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    const stdout = &stdout_writer.interface;
+    var stdin_buf: [4096]u8 = undefined;
+    var stdin_reader = std.fs.File.stdin().reader(&stdin_buf);
+    const stdin = &stdin_reader.interface;
 
     try stdout.print("Connecting to OpenVim at {s}...\n", .{openvim_path});
 
@@ -75,17 +82,13 @@ fn connectCommand(allocator: std.mem.Allocator, openvim_path: []const u8) !void 
     try stdout.writeAll("Connected! Type 'help' for commands, 'quit' to exit.\n\n");
 
     // Interactive REPL
-    var buf_reader = std.io.bufferedReader(stdin);
-    var in_stream = buf_reader.reader();
-
     while (true) {
         try stdout.writeAll("ovdb> ");
 
-        var line_buffer: [4096]u8 = undefined;
-        const line = in_stream.readUntilDelimiterOrEof(&line_buffer, '\n') catch |err| {
+        const line = stdin.*.takeDelimiterExclusive('\n') catch |err| {
             if (err == error.EndOfStream) break;
             return err;
-        } orelse break;
+        };
 
         const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
         if (trimmed.len == 0) continue;
@@ -186,8 +189,12 @@ fn executeReplCommand(
 
 /// Run a test script
 fn runCommand(allocator: std.mem.Allocator, script_path: []const u8) !void {
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    const stdout = &stdout_writer.interface;
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+    const stderr = &stderr_writer.interface;
 
     // Parse script
     var commands = script.parseScript(allocator, script_path) catch |err| {
@@ -198,7 +205,7 @@ fn runCommand(allocator: std.mem.Allocator, script_path: []const u8) !void {
         for (commands.items) |*cmd| {
             cmd.deinit(allocator);
         }
-        commands.deinit();
+        commands.deinit(allocator);
     }
 
     if (commands.items.len == 0) {
@@ -242,7 +249,9 @@ fn runCommand(allocator: std.mem.Allocator, script_path: []const u8) !void {
 
 /// Ping OpenVim to check if debug server responds
 fn pingCommand(allocator: std.mem.Allocator, openvim_path: []const u8) !void {
-    const stdout = std.io.getStdOut().writer();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    const stdout = &stdout_writer.interface;
 
     try stdout.print("Pinging OpenVim at {s}...\n", .{openvim_path});
 

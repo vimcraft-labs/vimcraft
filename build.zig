@@ -5,6 +5,31 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // ============================================================================
+    // Unicode Support: Ghostty's uucode library
+    // ============================================================================
+    // Load uucode dependency for production-quality Unicode width calculations
+    // Uses East Asian Width property (UAX #11) + grapheme boundary detection
+    const uucode_dep = b.dependency("uucode", .{
+        .target = target,
+        .optimize = optimize,
+        .@"build_config.zig" =
+            \\const config = @import("config.zig");
+            \\const d = config.default;
+            \\pub const tables = [_]config.Table{
+            \\    .{
+            \\        .fields = &.{
+            \\            d.field("east_asian_width"),
+            \\            d.field("grapheme_break"),
+            \\            d.field("is_emoji_modifier"),
+            \\            d.field("is_emoji_modifier_base"),
+            \\        },
+            \\    },
+            \\};
+        ,
+    });
+    const uucode_module = uucode_dep.module("uucode");
+
+    // ============================================================================
     // C Library: libvterm (from Neovim) - DEFERRED
     // ============================================================================
     // NOTE: libvterm has dependencies on many Neovim internal headers
@@ -23,67 +48,21 @@ pub fn build(b: *std.Build) void {
     // For now, skip it.
 
     // ============================================================================
-    // Hermes+JSI Integration (C++ Static Library)
+    // Hermes+JSI Integration (C++ Object Files)
     // ============================================================================
-    // Build C++ wrapper as a static library
-    const hermes_lib = b.addStaticLibrary(.{
-        .name = "hermes_jsi",
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // Add C++ source files
-    hermes_lib.addCSourceFile(.{
-        .file = b.path("src/jsi/hermes_c_api.cpp"),
-        .flags = &[_][]const u8{
-            "-std=c++17",
-            "-fno-sanitize=all",
-        },
-    });
-
-    hermes_lib.addCSourceFile(.{
-        .file = b.path("vendor/hermes/API/jsi/jsi/jsi.cpp"),
-        .flags = &[_][]const u8{
-            "-std=c++17",
-            "-fno-sanitize=all",
-        },
-    });
-
-    // Add CDP debugger files
-    hermes_lib.addCSourceFile(.{
-        .file = b.path("src/debug/websocket_server.cpp"),
-        .flags = &[_][]const u8{
-            "-std=c++17",
-            "-fno-sanitize=all",
-        },
-    });
-
-    hermes_lib.addCSourceFile(.{
-        .file = b.path("src/debug/cdp_debugger.cpp"),
-        .flags = &[_][]const u8{
-            "-std=c++17",
-            "-fno-sanitize=all",
-        },
-    });
-
-    // Add include paths for Hermes
-    hermes_lib.addIncludePath(b.path("src"));
-    hermes_lib.addIncludePath(b.path("vendor/hermes/API"));
-    hermes_lib.addIncludePath(b.path("vendor/hermes/API/jsi"));
-    hermes_lib.addIncludePath(b.path("vendor/hermes/public"));
-
-    // Link C and C++ (but NO rpath here - will be added in exe only)
-    hermes_lib.linkLibC();
-    hermes_lib.linkLibCpp();
+    // In Zig 0.15.2, we compile C++ sources directly into the executable
+    // rather than creating a separate static library
 
     // ============================================================================
     // Main OpenVim executable
     // ============================================================================
     const exe = b.addExecutable(.{
         .name = "openvim",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     // Link C and C++
@@ -99,8 +78,42 @@ pub fn build(b: *std.Build) void {
     exe.addIncludePath(b.path("vendor/hermes/API/jsi"));
     exe.addIncludePath(b.path("vendor/hermes/public"));
 
-    // Link Hermes static library
-    exe.linkLibrary(hermes_lib);
+    // Add uucode module for Unicode width calculations
+    exe.root_module.addImport("uucode", uucode_module);
+
+    // Add C++ source files for Hermes+JSI wrapper
+    exe.addCSourceFile(.{
+        .file = b.path("src/jsi/hermes_c_api.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    exe.addCSourceFile(.{
+        .file = b.path("vendor/hermes/API/jsi/jsi/jsi.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    // Add CDP debugger C++ files
+    exe.addCSourceFile(.{
+        .file = b.path("src/debug/websocket_server.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    exe.addCSourceFile(.{
+        .file = b.path("src/debug/cdp_debugger.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
 
     // Link Hermes dynamic library (includes CDP debugger support)
     // The libhermes_lean.dylib contains all Hermes runtime + CDP API
@@ -124,9 +137,11 @@ pub fn build(b: *std.Build) void {
     // ============================================================================
     const ovdb = b.addExecutable(.{
         .name = "ovdb",
-        .root_source_file = b.path("tools/ovdb/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/ovdb/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     // Provide unified debug module to ovdb
@@ -153,9 +168,11 @@ pub fn build(b: *std.Build) void {
     // Tests
     // ============================================================================
     const unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     unit_tests.linkLibC();
@@ -168,8 +185,43 @@ pub fn build(b: *std.Build) void {
     unit_tests.addIncludePath(b.path("vendor/hermes/API/jsi"));
     unit_tests.addIncludePath(b.path("vendor/hermes/public"));
 
+    // Add uucode module for tests
+    unit_tests.root_module.addImport("uucode", uucode_module);
+
+    // Add C++ source files for tests
+    unit_tests.addCSourceFile(.{
+        .file = b.path("src/jsi/hermes_c_api.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    unit_tests.addCSourceFile(.{
+        .file = b.path("vendor/hermes/API/jsi/jsi/jsi.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    unit_tests.addCSourceFile(.{
+        .file = b.path("src/debug/websocket_server.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    unit_tests.addCSourceFile(.{
+        .file = b.path("src/debug/cdp_debugger.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
     // Link Hermes for tests (addLibraryPath handles rpath automatically)
-    unit_tests.linkLibrary(hermes_lib);
     unit_tests.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
 
     // libuv for tests

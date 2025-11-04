@@ -49,19 +49,19 @@ pub const Server = struct {
 
     /// Run server using stdin/stdout
     fn runStdio(self: *Server) !void {
-        const stdin = std.io.getStdIn().reader();
-        const stdout = std.io.getStdOut().writer();
-
-        var buf_reader = std.io.bufferedReader(stdin);
-        var in_stream = buf_reader.reader();
+        var stdin_buf: [4096]u8 = undefined;
+        var stdin_reader = std.fs.File.stdin().reader(&stdin_buf);
+        const stdin = &stdin_reader.interface;
+        var stdout_buf: [4096]u8 = undefined;
+        var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+        const stdout = &stdout_writer.interface;
 
         while (self.running) {
             // Read line from stdin
-            var line_buffer: [4096]u8 = undefined;
-            const line = in_stream.readUntilDelimiterOrEof(&line_buffer, '\n') catch |err| {
+            const line = stdin.*.takeDelimiterExclusive('\n') catch |err| {
                 if (err == error.EndOfStream) break;
                 return err;
-            } orelse break;
+            };
 
             // Parse command
             var cmd = json.parseCommand(line, self.allocator) catch |err| {

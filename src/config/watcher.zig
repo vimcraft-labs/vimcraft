@@ -99,7 +99,7 @@ pub const ConfigWatcher = struct {
     }
 
     /// libuv close callback - called when handle is fully closed and safe to free
-    fn onCloseCallback(handle: [*c]uv.uv_handle_t) callconv(.C) void {
+    fn onCloseCallback(handle: [*c]uv.uv_handle_t) callconv(.c) void {
         const fs_event: *uv.uv_fs_event_t = @ptrCast(@alignCast(handle));
         const self: *ConfigWatcher = @ptrCast(@alignCast(fs_event.data));
 
@@ -117,7 +117,7 @@ pub const ConfigWatcher = struct {
         filename: [*c]const u8,
         events: c_int,
         status: c_int,
-    ) callconv(.C) void {
+    ) callconv(.c) void {
         if (status != 0) {
             return;
         }

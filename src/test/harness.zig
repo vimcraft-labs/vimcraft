@@ -12,7 +12,8 @@ pub const TestHarness = struct {
     mode_manager: *ModeManager,
     pending_cmd: ?u8 = null,
     allocator: std.mem.Allocator,
-    output: std.fs.File.Writer,
+    output_file: std.fs.File,
+    output_buf: [4096]u8,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -26,13 +27,24 @@ pub const TestHarness = struct {
             .display = display,
             .mode_manager = mode_manager,
             .allocator = allocator,
-            .output = output_file.writer(),
+            .output_file = output_file,
+            .output_buf = undefined,
         };
+    }
+
+    fn write(self: *TestHarness, bytes: []const u8) !void {
+        return self.output_file.writeAll(bytes);
+    }
+
+    fn print(self: *TestHarness, comptime format: []const u8, args: anytype) !void {
+        var w = self.output_file.writer(&self.output_buf);
+        const writer = &w.interface;
+        return writer.print(format, args);
     }
 
     /// Execute a command string (like "j", "A", "hello", "ESC")
     pub fn executeCommand(self: *TestHarness, cmd: []const u8) !void {
-        try self.output.print("\n=== COMMAND: '{s}' ===\n", .{cmd});
+        try self.print("\n=== COMMAND: '{s}' ===\n", .{cmd});
 
         // Special commands
         if (std.mem.eql(u8, cmd, "ESC")) {
@@ -151,14 +163,14 @@ pub const TestHarness = struct {
 
     /// Dump current editor state in visual format
     pub fn dumpState(self: *TestHarness) !void {
-        try self.output.writeAll("\n");
-        try self.output.print("Mode: {s}\n", .{self.mode_manager.getModeString()});
-        try self.output.print("Cursor: row={}, col={}\n", .{
+        try self.write("\n");
+        try self.print("Mode: {s}\n", .{self.mode_manager.getModeString()});
+        try self.print("Cursor: row={}, col={}\n", .{
             self.buffer.cursor.row,
             self.buffer.cursor.col
         });
-        try self.output.print("Lines: {}\n", .{self.buffer.lineCount()});
-        try self.output.writeAll("\n--- BUFFER CONTENT ---\n");
+        try self.print("Lines: {}\n", .{self.buffer.lineCount()});
+        try self.write("\n--- BUFFER CONTENT ---\n");
 
         // Show each line with line numbers
         for (0..self.buffer.lineCount()) |i| {
@@ -170,26 +182,26 @@ pub const TestHarness = struct {
 
             // Mark cursor line
             const marker = if (i == self.buffer.cursor.row) ">" else " ";
-            try self.output.print("{s}{d:3} | {s}\n", .{ marker, i + 1, line_clean });
+            try self.print("{s}{d:3} | {s}\n", .{ marker, i + 1, line_clean });
 
             // Show cursor position on this line
             if (i == self.buffer.cursor.row) {
-                try self.output.writeAll("      ");
+                try self.write("      ");
                 var col: usize = 0;
                 while (col < self.buffer.cursor.col) : (col += 1) {
-                    try self.output.writeAll(" ");
+                    try self.write(" ");
                 }
-                try self.output.writeAll("^\n");
+                try self.write("^\n");
             }
         }
 
-        try self.output.writeAll("--- END BUFFER ---\n");
-        try self.output.writeAll("\n");
+        try self.write("--- END BUFFER ---\n");
+        try self.write("\n");
     }
 
     /// Render what the display would show
     pub fn dumpDisplay(self: *TestHarness, terminal_cols: usize) !void {
-        try self.output.print("\n--- DISPLAY (width={}) ---\n", .{terminal_cols});
+        try self.print("\n--- DISPLAY (width={}) ---\n", .{terminal_cols});
 
         for (0..self.buffer.lineCount()) |i| {
             const line = self.buffer.getLine(i).?;
@@ -213,16 +225,16 @@ pub const TestHarness = struct {
                 remaining;
 
             // Show what would be rendered
-            try self.output.print("{s}", .{visible});
+            try self.print("{s}", .{visible});
 
             // Fill rest of line with spaces (to terminal width)
             if (visible.len < terminal_cols) {
                 var spaces = terminal_cols - visible.len;
                 while (spaces > 0) : (spaces -= 1) {
-                    try self.output.writeAll(" ");
+                    try self.write(" ");
                 }
             }
-            try self.output.writeAll("|\n"); // | marks edge of terminal
+            try self.write("|\n"); // | marks edge of terminal
 
             // Show cursor position on this line
             if (is_cursor_line) {
@@ -233,30 +245,30 @@ pub const TestHarness = struct {
 
                 var col: usize = 0;
                 while (col < cursor_screen_col) : (col += 1) {
-                    try self.output.writeAll(" ");
+                    try self.write(" ");
                 }
-                try self.output.writeAll("^\n");
+                try self.write("^\n");
             }
         }
 
-        try self.output.writeAll("--- END DISPLAY ---\n\n");
+        try self.write("--- END DISPLAY ---\n\n");
     }
 
     /// Assert cursor position
     pub fn assertCursor(self: *TestHarness, row: usize, col: usize) !void {
         if (self.buffer.cursor.row != row or self.buffer.cursor.col != col) {
-            try self.output.print("\n❌ ASSERTION FAILED: Cursor position\n", .{});
-            try self.output.print("  Expected: row={}, col={}\n", .{ row, col });
-            try self.output.print("  Actual:   row={}, col={}\n", .{ self.buffer.cursor.row, self.buffer.cursor.col });
+            try self.print("\n❌ ASSERTION FAILED: Cursor position\n", .{});
+            try self.print("  Expected: row={}, col={}\n", .{ row, col });
+            try self.print("  Actual:   row={}, col={}\n", .{ self.buffer.cursor.row, self.buffer.cursor.col });
             return error.AssertionFailed;
         }
-        try self.output.print("✓ ASSERT: Cursor at ({}, {})\n", .{ row, col });
+        try self.print("✓ ASSERT: Cursor at ({}, {})\n", .{ row, col });
     }
 
     /// Assert line content
     pub fn assertLine(self: *TestHarness, line_num: usize, expected: []const u8) !void {
         const line = self.buffer.getLine(line_num) orelse {
-            try self.output.print("\n❌ ASSERTION FAILED: Line {} does not exist\n", .{line_num});
+            try self.print("\n❌ ASSERTION FAILED: Line {} does not exist\n", .{line_num});
             return error.AssertionFailed;
         };
 
@@ -266,35 +278,35 @@ pub const TestHarness = struct {
             line;
 
         if (!std.mem.eql(u8, line_clean, expected)) {
-            try self.output.print("\n❌ ASSERTION FAILED: Line {} content\n", .{line_num});
-            try self.output.print("  Expected: [{s}]\n", .{expected});
-            try self.output.print("  Actual:   [{s}]\n", .{line_clean});
+            try self.print("\n❌ ASSERTION FAILED: Line {} content\n", .{line_num});
+            try self.print("  Expected: [{s}]\n", .{expected});
+            try self.print("  Actual:   [{s}]\n", .{line_clean});
             return error.AssertionFailed;
         }
-        try self.output.print("✓ ASSERT: Line {} = [{s}]\n", .{ line_num, expected });
+        try self.print("✓ ASSERT: Line {} = [{s}]\n", .{ line_num, expected });
     }
 
     /// Assert line count
     pub fn assertLineCount(self: *TestHarness, expected: usize) !void {
         const actual = self.buffer.lineCount();
         if (actual != expected) {
-            try self.output.print("\n❌ ASSERTION FAILED: Line count\n", .{});
-            try self.output.print("  Expected: {}\n", .{expected});
-            try self.output.print("  Actual:   {}\n", .{actual});
+            try self.print("\n❌ ASSERTION FAILED: Line count\n", .{});
+            try self.print("  Expected: {}\n", .{expected});
+            try self.print("  Actual:   {}\n", .{actual});
             return error.AssertionFailed;
         }
-        try self.output.print("✓ ASSERT: Line count = {}\n", .{expected});
+        try self.print("✓ ASSERT: Line count = {}\n", .{expected});
     }
 
     /// Assert mode
     pub fn assertMode(self: *TestHarness, expected: []const u8) !void {
         const actual = self.mode_manager.getModeString();
         if (!std.mem.eql(u8, actual, expected)) {
-            try self.output.print("\n❌ ASSERTION FAILED: Mode\n", .{});
-            try self.output.print("  Expected: {s}\n", .{expected});
-            try self.output.print("  Actual:   {s}\n", .{actual});
+            try self.print("\n❌ ASSERTION FAILED: Mode\n", .{});
+            try self.print("  Expected: {s}\n", .{expected});
+            try self.print("  Actual:   {s}\n", .{actual});
             return error.AssertionFailed;
         }
-        try self.output.print("✓ ASSERT: Mode = {s}\n", .{expected});
+        try self.print("✓ ASSERT: Mode = {s}\n", .{expected});
     }
 };
