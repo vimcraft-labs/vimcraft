@@ -712,6 +712,75 @@ fn handleInputWithTimeout(
 
     const input = buf[0..bytes_read];
 
+    // Check for SGR mouse events first (format: ESC[<button;col;row;M or ESC[<button;col;row;m)
+    // Example: ESC[<0;10;5;M = left button press at col 10, row 5
+    if (input.len >= 6 and input[0] == 27 and input[1] == '[' and input[2] == '<') {
+        // Find the semicolons and terminator
+        var button: usize = 0;
+        var col: usize = 0;
+        var row: usize = 0;
+        var is_press = false;
+
+        // Parse the mouse event: <button;col;row;M or <button;col;row;m
+        var idx: usize = 3; // Skip "ESC[<"
+        var num_start = idx;
+
+        // Parse button number
+        while (idx < input.len and input[idx] != ';') : (idx += 1) {}
+        if (idx < input.len) {
+            button = std.fmt.parseInt(usize, input[num_start..idx], 10) catch 0;
+            idx += 1; // Skip semicolon
+            num_start = idx;
+        }
+
+        // Parse column number
+        while (idx < input.len and input[idx] != ';') : (idx += 1) {}
+        if (idx < input.len) {
+            col = std.fmt.parseInt(usize, input[num_start..idx], 10) catch 0;
+            idx += 1; // Skip semicolon
+            num_start = idx;
+        }
+
+        // Parse row number
+        while (idx < input.len and input[idx] != 'M' and input[idx] != 'm') : (idx += 1) {}
+        if (idx < input.len) {
+            row = std.fmt.parseInt(usize, input[num_start..idx], 10) catch 0;
+            is_press = (input[idx] == 'M');
+        }
+
+        // Only handle left button press (button 0) in normal mode
+        if (is_press and button == 0 and mode_manager.isNormal()) {
+            // Convert 1-indexed terminal coordinates to 0-indexed
+            const screen_row = if (row > 0) row - 1 else 0;
+            const screen_col = if (col > 0) col - 1 else 0;
+
+            // Account for gutter width (line numbers, signs, etc.)
+            const gutter_width = display.gutter_manager.getTotalWidth();
+
+            // Calculate buffer position from screen position
+            const buffer_row = display.viewport_top + screen_row;
+            const text_col = if (screen_col >= gutter_width)
+                screen_col - gutter_width
+            else
+                0;
+            const buffer_col = display.viewport_left + text_col;
+
+            // Move cursor to clicked position (clamped to buffer bounds)
+            if (buffer_row < buffer.lineCount()) {
+                const line = buffer.getLine(buffer_row).?;
+                const line_len = if (line.len > 0 and line[line.len - 1] == '\n')
+                    line.len - 1
+                else
+                    line.len;
+
+                buffer.cursor.row = buffer_row;
+                buffer.cursor.col = @min(buffer_col, line_len);
+            }
+        }
+
+        return true; // Mouse event handled, continue running
+    }
+
     // Handle based on mode
     if (mode_manager.isNormal()) {
         return try handleNormalMode(buffer, display, mode_manager, cmd_buffer, pending_cmd, visual_state, yank_highlight, register_mgr, allocator, input);

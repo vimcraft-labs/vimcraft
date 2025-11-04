@@ -112,6 +112,12 @@ pub const Display = struct {
             // Enter alternate screen buffer
             // This allows text selection in the normal terminal
             try self.write("\x1b[?1049h");
+
+            // Enable mouse tracking
+            // SGR mode (1006): Better coordinate support (handles terminals larger than 223 cols)
+            // Button tracking (1000): Report button press/release events
+            try self.write("\x1b[?1006h"); // Enable SGR mouse mode
+            try self.write("\x1b[?1000h"); // Enable mouse button tracking
         }
     }
 
@@ -122,6 +128,10 @@ pub const Display = struct {
 
         if (builtin.os.tag == .linux or builtin.os.tag == .macos)
         {
+            // Disable mouse tracking
+            self.write("\x1b[?1000l") catch {}; // Disable mouse button tracking
+            self.write("\x1b[?1006l") catch {}; // Disable SGR mouse mode
+
             // Exit alternate screen buffer (restores original terminal content)
             self.write("\x1b[?1049l") catch {};
 
@@ -546,10 +556,10 @@ pub const Display = struct {
                 };
 
                 // Fill rest of line from where text ended
-                // Use null background for padding (don't extend cursorline to padding)
-                const padding_bg = if (config.normal) |n| n.bg else null;
+                // Extend cursorline background to full width (Vim/Neovim behavior)
+                // bg_color already has cursorline applied if is_cursor_line is true
                 for (end_col..self.terminal_cols) |fill_col| {
-                    self.grid.setCell(row, fill_col, .{ .char = ' ', .bg = padding_bg });
+                    self.grid.setCell(row, fill_col, .{ .char = ' ', .bg = bg_color });
                 }
             } else {
                 // Empty line indicator (Vim-style ~) - render after gutter
