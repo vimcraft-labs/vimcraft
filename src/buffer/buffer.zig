@@ -93,7 +93,7 @@ pub const Buffer = struct {
     }
 
     /// Build index of line start positions
-    fn buildLineIndex(self: *Buffer) !void {
+    pub fn buildLineIndex(self: *Buffer) !void {
         self.line_starts.clearRetainingCapacity();
 
         // First line starts at 0

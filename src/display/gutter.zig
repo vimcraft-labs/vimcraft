@@ -134,7 +134,7 @@ pub const LineNumberMode = enum {
 /// Calculate width needed for line numbers
 /// Uses fast integer log10 (Helix approach)
 pub fn calculateLineNumberWidth(line_count: usize) usize {
-    if (line_count == 0) return 1;
+    if (line_count == 0) return 2; // "0 " = 2
     // Use checked_ilog10 equivalent
     var count = line_count;
     var width: usize = 1;

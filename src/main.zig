@@ -18,6 +18,7 @@ const Position = @import("visual/visual.zig").Position;
 const YankHighlight = @import("visual/yank_highlight.zig").YankHighlight;
 const RegisterManager = @import("register/register.zig").RegisterManager;
 const yank = @import("buffer/yank.zig");
+const paste = @import("buffer/paste.zig");
 
 // Import Hermes C API (use hermes_c namespace to avoid shadowing)
 const hermes_c = @cImport({
@@ -826,6 +827,14 @@ fn handleNormalMode(
             'y' => {
                 // Wait for next character (yy, yw, etc.)
                 pending_cmd.set('y');
+            },
+
+            // Paste operations
+            'p' => { // paste after cursor
+                _ = try paste.pasteAfter(buffer, register_mgr, '"');
+            },
+            'P' => { // paste before cursor
+                _ = try paste.pasteBefore(buffer, register_mgr, '"');
             },
 
             // Undo/redo
