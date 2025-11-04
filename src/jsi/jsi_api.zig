@@ -1,10 +1,17 @@
 const std = @import("std");
 const highlights = @import("../config/highlights.zig");
+const Display = @import("../display/display.zig").Display;
 
 // Import Hermes C API
 const c = @cImport({
     @cInclude("jsi/hermes_c_api.h");
 });
+
+/// Context struct for host functions
+pub const JSIContext = struct {
+    config: *highlights.HighlightConfig,
+    display: *Display,
+};
 
 /// Zig host function: zigSetHighlight(name, bg, fg)
 /// Called from JavaScript: zigSetHighlight('CursorLine', '#2b2b2b', null)
@@ -110,6 +117,23 @@ export fn zig_set_option(
     if (std.mem.eql(u8, name, "cursorLine") or std.mem.eql(u8, name, "cursorline")) {
         const value = c.hermes_value_get_boolean(args[1]);
         config.cursorline_enabled = value;
+    } else if (std.mem.eql(u8, name, "signColumn") or std.mem.eql(u8, name, "signcolumn")) {
+        // Get string value for signColumn ("yes", "no", "auto")
+        var value_len: usize = 0;
+        const value_ptr = c.hermes_value_get_string(runtime, args[1], &value_len);
+        if (value_ptr != null) {
+            // Store the mode string (will be applied to Display later)
+            // Valid values: "yes", "no", "auto"
+            if (value_len <= 4) { // "auto" is longest
+                if (value_len == 3 and std.mem.eql(u8, value_ptr[0..3], "yes")) {
+                    config.signcolumn_mode = "yes";
+                } else if (value_len == 4 and std.mem.eql(u8, value_ptr[0..4], "auto")) {
+                    config.signcolumn_mode = "auto";
+                } else {
+                    config.signcolumn_mode = "no";
+                }
+            }
+        }
     }
 
     return c.hermes_value_create_undefined(runtime);

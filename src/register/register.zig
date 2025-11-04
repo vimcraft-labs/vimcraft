@@ -25,7 +25,7 @@ pub const YankReg = struct {
 
     pub fn init(allocator: std.mem.Allocator) YankReg {
         return .{
-            .lines = std.ArrayList([]const u8).init(allocator),
+            .lines = .empty,
             .motion_type = .char_wise,
             .width = 0,
             .timestamp = 0,
@@ -38,7 +38,7 @@ pub const YankReg = struct {
         for (self.lines.items) |line| {
             self.allocator.free(line);
         }
-        self.lines.deinit();
+        self.lines.deinit(self.allocator);
     }
 
     /// Check if register is empty
@@ -67,7 +67,7 @@ pub const YankReg = struct {
 
         for (text_lines) |line| {
             const owned = try self.allocator.dupe(u8, line);
-            try self.lines.append(owned);
+            try self.lines.append(self.allocator, owned);
         }
     }
 
@@ -201,7 +201,7 @@ pub const RegisterManager = struct {
             // Append to existing contents
             for (text_lines) |line| {
                 const owned = try self.allocator.dupe(u8, line);
-                try reg.lines.append(owned);
+                try reg.lines.append(self.allocator, owned);
             }
             reg.timestamp = std.time.milliTimestamp();
         } else {
@@ -230,7 +230,7 @@ pub const RegisterManager = struct {
             // Copy source to destination
             for (src.lines.items) |line| {
                 const copy = try self.allocator.dupe(u8, line);
-                try dst.lines.append(copy);
+                try dst.lines.append(self.allocator, copy);
             }
             dst.motion_type = src.motion_type;
             dst.width = src.width;

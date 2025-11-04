@@ -50,10 +50,14 @@ pub const HighlightConfig = struct {
     normal: ?Highlight = null,      // Normal text (background/foreground)
     cursorline: ?Highlight = null,
     visual: ?Highlight = null,
+    yank_flash: ?Highlight = null,  // Brief flash after yank
     line_nr: ?Highlight = null,
 
     // Options
     cursorline_enabled: bool = false,
+
+    // Sign column config (stored here temporarily for JSI access)
+    signcolumn_mode: []const u8 = "no", // "yes", "no", "auto"
 
     allocator: std.mem.Allocator,
 
@@ -76,6 +80,8 @@ pub const HighlightConfig = struct {
             self.cursorline = hl;
         } else if (std.mem.eql(u8, name, "Visual")) {
             self.visual = hl;
+        } else if (std.mem.eql(u8, name, "YankFlash")) {
+            self.yank_flash = hl;
         } else if (std.mem.eql(u8, name, "LineNr")) {
             self.line_nr = hl;
         }
@@ -90,6 +96,8 @@ pub const HighlightConfig = struct {
             return self.cursorline;
         } else if (std.mem.eql(u8, name, "Visual")) {
             return self.visual;
+        } else if (std.mem.eql(u8, name, "YankFlash")) {
+            return self.yank_flash;
         } else if (std.mem.eql(u8, name, "LineNr")) {
             return self.line_nr;
         }

@@ -536,10 +536,10 @@ test "Buffer: load simple content" {
     try std.testing.expectEqual(@as(usize, 2), buffer.lineCount());
 
     const line1 = buffer.getLine(0).?;
-    try std.testing.expectEqualStrings("Hello", line1);
+    try std.testing.expectEqualStrings("Hello\n", line1);
 
     const line2 = buffer.getLine(1).?;
-    try std.testing.expectEqualStrings("World", line2);
+    try std.testing.expectEqualStrings("World\n", line2);
 }
 
 test "Buffer: cursor movement" {

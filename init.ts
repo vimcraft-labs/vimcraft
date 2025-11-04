@@ -17,7 +17,6 @@ const colors = {
   gray: '#5c6370',
 };
 
-// Highlight groups configuration
 const highlights = {
   CursorLine: {
     bg: colors.bgHighlight,
@@ -47,12 +46,12 @@ const highlights = {
   },
 };
 
-// Apply all highlights
 for (const [name, opts] of Object.entries(highlights)) {
   vim.highlight(name, opts);
 }
 
-// Editor options (using camelCase)
+vim.opt.number = true;
+vim.opt.signColumn = "yes";
 vim.opt.cursorLine = true;
 
 setTimeout(() => {

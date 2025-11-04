@@ -6,8 +6,10 @@ const ScreenGrid = @import("screen_grid.zig").ScreenGrid;
 const Cell = @import("screen_grid.zig").Cell;
 const Update = @import("screen_grid.zig").Update;
 const VisualState = @import("../visual/visual.zig").VisualState;
+const YankHighlight = @import("../visual/yank_highlight.zig").YankHighlight;
 const Position = @import("../visual/visual.zig").Position;
 const char_width = @import("char_width.zig");
+const gutter = @import("gutter.zig");
 
 /// Terminal display manager
 /// Handles rendering buffer content to terminal using ANSI escape codes
@@ -25,8 +27,18 @@ pub const Display = struct {
     grid: ScreenGrid,
     output_buf: std.ArrayList(u8), // Batch output (Neovim + Helix pattern)
 
+    // Gutter system (line numbers, signs, etc.)
+    gutter_manager: gutter.GutterManager,
+    line_number_config: gutter.LineNumberConfig,
+    sign_column_config: gutter.SignColumnConfig,
+
+    // Cache for gutter width calculation (Neovim optimization)
+    cached_line_count: usize, // Track line count for cache invalidation
+
     pub fn init(allocator: std.mem.Allocator) !Display {
         const grid = try ScreenGrid.init(allocator, 80, 24);
+        const gutter_mgr = gutter.GutterManager.init(allocator);
+
         return .{
             .allocator = allocator,
             .stdout = std.fs.File.stdout(),
@@ -37,12 +49,17 @@ pub const Display = struct {
             .viewport_left = 0,
             .grid = grid,
             .output_buf = .empty,
+            .gutter_manager = gutter_mgr,
+            .line_number_config = .{}, // Default: no line numbers
+            .sign_column_config = .{}, // Default: no sign column
+            .cached_line_count = 0,
         };
     }
 
     pub fn deinit(self: *Display) void {
         self.grid.deinit();
         self.output_buf.deinit(self.allocator);
+        self.gutter_manager.deinit();
     }
 
     /// Helper to get a buffered writer for stdout
@@ -156,6 +173,91 @@ pub const Display = struct {
         try self.write("\x1b[4 q");
     }
 
+    /// Configure line number display
+    pub fn setLineNumbers(self: *Display, enabled: bool) !void {
+        self.line_number_config.number = enabled;
+        try self.updateGutterColumns();
+    }
+
+    /// Configure relative line number display
+    pub fn setRelativeLineNumbers(self: *Display, enabled: bool) !void {
+        self.line_number_config.relative_number = enabled;
+        try self.updateGutterColumns();
+    }
+
+    /// Configure sign column display
+    pub fn setSignColumn(self: *Display, mode_str: []const u8) !void {
+        self.sign_column_config.mode = gutter.SignColumnConfig.parseMode(mode_str);
+        try self.updateGutterColumns();
+    }
+
+    /// Update gutter columns based on current configuration
+    /// This implements the hybrid Neovim+Helix approach:
+    /// - Register line number renderer based on mode (absolute/relative/hybrid)
+    /// - Cache width calculation with invalidation on line count change
+    fn updateGutterColumns(self: *Display) !void {
+        // Sign column comes FIRST (before line numbers) in Neovim
+        const sign_mode = self.sign_column_config.mode;
+        self.gutter_manager.setColumnEnabled("signs", false);
+
+        if (sign_mode == .yes or sign_mode == .auto) {
+            // For now, always show if mode is "yes" (auto will check for actual signs later)
+            if (sign_mode == .yes) {
+                if (self.gutter_manager.getColumn("signs")) |col| {
+                    col.enabled = true;
+                } else {
+                    try self.gutter_manager.registerColumn("signs", gutter.renderSignColumn);
+                    // Set width to 2 for sign column
+                    if (self.gutter_manager.getColumn("signs")) |col| {
+                        col.cached_width = 2;
+                    }
+                }
+            }
+        }
+
+        // Line numbers come SECOND (after signs)
+        const line_mode = self.line_number_config.getMode();
+        self.gutter_manager.setColumnEnabled("line_numbers", false);
+
+        if (line_mode != .none) {
+            // Determine which renderer to use
+            const renderer: gutter.GutterRenderer = switch (line_mode) {
+                .absolute => gutter.renderAbsoluteLineNumber,
+                .relative => gutter.renderRelativeLineNumber,
+                .hybrid => gutter.renderHybridLineNumber,
+                .none => unreachable,
+            };
+
+            // Check if line number column already exists
+            if (self.gutter_manager.getColumn("line_numbers")) |col| {
+                col.renderer = renderer;
+                col.enabled = true;
+            } else {
+                // Register new line number column
+                try self.gutter_manager.registerColumn("line_numbers", renderer);
+            }
+        }
+    }
+
+    /// Update gutter width cache if line count changed (Neovim optimization)
+    fn updateGutterCache(self: *Display, buffer: *const Buffer) void {
+        const line_count = buffer.lineCount();
+
+        // Invalidate cache if line count changed significantly
+        if (line_count != self.cached_line_count) {
+            self.cached_line_count = line_count;
+
+            // Recalculate line number width if enabled
+            if (self.line_number_config.getMode() != .none) {
+                if (self.gutter_manager.getColumn("line_numbers")) |col| {
+                    const new_width = gutter.calculateLineNumberWidth(line_count);
+                    col.cached_width = new_width;
+                    col.cache_key = line_count;
+                }
+            }
+        }
+    }
+
     /// Get terminal size (uses TIOCGWINSZ ioctl) and resize grid if needed
     pub fn getTerminalSize(self: *Display) !void {
         const stdout = std.fs.File.stdout();
@@ -189,9 +291,12 @@ pub const Display = struct {
 
     /// Render buffer content to screen using grid-based rendering
     /// This is the main rendering function following Neovim's architecture
-    pub fn render(self: *Display, buffer: *const Buffer, status: []const u8, config: *const highlights.HighlightConfig, visual_state: *const VisualState) !void {
+    pub fn render(self: *Display, buffer: *const Buffer, status: []const u8, config: *const highlights.HighlightConfig, visual_state: *const VisualState, yank_highlight: *const YankHighlight) !void {
         // Update terminal size (handles resize and ensures correct dimensions)
         try self.getTerminalSize();
+
+        // Update gutter cache (Neovim optimization: invalidate on line count change)
+        self.updateGutterCache(buffer);
 
         debug_log.log("=== RENDER START (Grid-based) ===", .{});
         debug_log.log("Terminal size: {}x{}", .{ self.terminal_rows, self.terminal_cols });
@@ -203,15 +308,23 @@ pub const Display = struct {
         // Adjust viewport to keep cursor visible
         self.adjustViewport(buffer);
 
-        // Adjust horizontal scroll for cursor line
-        if (buffer.cursor.col >= self.viewport_left + self.terminal_cols) {
-            self.viewport_left = buffer.cursor.col - self.terminal_cols + 1;
+        // Get gutter width for horizontal positioning
+        const gutter_width = self.gutter_manager.getTotalWidth();
+
+        // Adjust horizontal scroll for cursor line (account for gutter)
+        const text_cols = if (self.terminal_cols > gutter_width)
+            self.terminal_cols - gutter_width
+        else
+            self.terminal_cols;
+
+        if (buffer.cursor.col >= self.viewport_left + text_cols) {
+            self.viewport_left = buffer.cursor.col - text_cols + 1;
         } else if (buffer.cursor.col < self.viewport_left) {
             self.viewport_left = buffer.cursor.col;
         }
 
         // STEP 1: Update grid from buffer content (render to memory)
-        try self.updateGridFromBuffer(buffer, status, config, visual_state);
+        try self.updateGridFromBuffer(buffer, status, config, visual_state, yank_highlight);
 
         // STEP 2: Compute diff (what changed since last frame)
         const updates = try self.grid.diff(self.allocator);
@@ -225,23 +338,24 @@ pub const Display = struct {
         // STEP 4: Swap buffers (current becomes previous for next frame)
         self.grid.swapBuffers();
 
-        // Position cursor at buffer cursor location
+        // Position cursor at buffer cursor location (add gutter offset)
         const screen_row = if (buffer.cursor.row >= self.viewport_top)
             buffer.cursor.row - self.viewport_top
         else
             0;
 
-        const screen_col = if (buffer.cursor.col >= self.viewport_left)
+        const screen_col_text = if (buffer.cursor.col >= self.viewport_left)
             buffer.cursor.col - self.viewport_left
         else
             0;
 
+        const screen_col = gutter_width + screen_col_text;
         const clamped_col = @min(screen_col, self.terminal_cols - 1);
         try self.moveCursor(screen_row, clamped_col);
     }
 
     /// Update grid from buffer content (Step 1: logical → grid)
-    fn updateGridFromBuffer(self: *Display, buffer: *const Buffer, status: []const u8, config: *const highlights.HighlightConfig, visual_state: *const VisualState) !void {
+    fn updateGridFromBuffer(self: *Display, buffer: *const Buffer, status: []const u8, config: *const highlights.HighlightConfig, visual_state: *const VisualState, yank_highlight: *const YankHighlight) !void {
         const text_rows = if (self.terminal_rows > 1) self.terminal_rows - 1 else 1;
 
         // Cache visual state to ensure consistency during this render frame
@@ -252,10 +366,61 @@ pub const Display = struct {
         } else Position{ .line = 0, .col = 0 }; // Unused if not active
         const visual_range = if (visual_active) visual_state.getRange(cursor_pos) else undefined;
 
+        // Check if yank highlight is visible (time-based)
+        const yank_active = yank_highlight.active and yank_highlight.isVisible();
+
+        // Get gutter width for positioning
+        const gutter_width = self.gutter_manager.getTotalWidth();
+        const text_cols = if (self.terminal_cols > gutter_width)
+            self.terminal_cols - gutter_width
+        else
+            self.terminal_cols;
+
         // Render text lines to grid
         var row: usize = 0;
         while (row < text_rows) : (row += 1) {
             const line_num = self.viewport_top + row;
+
+            // Render gutter columns (line numbers, signs, etc.)
+            if (gutter_width > 0) {
+                var gutter_buf: [32]u8 = undefined;
+                const gutter_str_len = self.gutter_manager.renderLine(
+                    line_num,
+                    buffer.cursor.row,
+                    &gutter_buf,
+                );
+                const gutter_str = gutter_buf[0..gutter_str_len];
+
+                // Render gutter to grid with line number highlight
+                const gutter_fg = if (config.line_nr) |ln| ln.fg else null;
+                const gutter_bg = if (config.line_nr) |ln| ln.bg else null;
+
+                var gutter_col: usize = 0;
+                var byte_idx: usize = 0;
+                while (byte_idx < gutter_str.len and gutter_col < gutter_width) {
+                    const char_len = std.unicode.utf8ByteSequenceLength(gutter_str[byte_idx]) catch 1;
+                    if (byte_idx + char_len > gutter_str.len) break;
+
+                    const codepoint = std.unicode.utf8Decode(gutter_str[byte_idx..][0..char_len]) catch ' ';
+                    self.grid.setCell(row, gutter_col, .{
+                        .char = codepoint,
+                        .fg = gutter_fg,
+                        .bg = gutter_bg,
+                    });
+
+                    gutter_col += 1;
+                    byte_idx += char_len;
+                }
+
+                // Pad remaining gutter space
+                while (gutter_col < gutter_width) : (gutter_col += 1) {
+                    self.grid.setCell(row, gutter_col, .{
+                        .char = ' ',
+                        .fg = gutter_fg,
+                        .bg = gutter_bg,
+                    });
+                }
+            }
 
             if (line_num < buffer.lineCount()) {
                 const line = buffer.getLine(line_num).?;
@@ -278,32 +443,40 @@ pub const Display = struct {
                 const fg_color = if (config.normal) |n| n.fg else null;
                 var bg_color = if (config.normal) |n| n.bg else null;
 
-                // Override with CursorLine if applicable
-                if (is_cursor_line and config.cursorline_enabled and config.cursorline != null) {
+                // Override with CursorLine if applicable (disabled in visual mode like Neovim)
+                if (is_cursor_line and !visual_active and config.cursorline_enabled and config.cursorline != null) {
                     bg_color = config.cursorline.?.bg;
                 }
 
-                // Check if this line could be in visual selection (using cached state)
+                // Check if this line could be in visual selection or yank highlight (using cached state)
                 const line_in_selection = visual_active and
                     (line_num >= visual_range.start.line and line_num <= visual_range.end.line);
+                const line_in_yank = yank_active and
+                    (line_num >= yank_highlight.start.line and line_num <= yank_highlight.end.line);
 
-                // Fast path: Use setString for lines without visual selection
-                // This avoids character-by-character processing and is more stable
-                const end_col = if (!line_in_selection) blk: {
-                    break :blk self.grid.setString(row, 0, remaining, fg_color, bg_color);
+                // Fast path: Use setString for lines without any highlighting
+                // Avoid fast path on cursorline to properly handle double-width char backgrounds
+                const use_fast_path = !line_in_selection and !line_in_yank and !is_cursor_line;
+                const end_col = if (use_fast_path) blk: {
+                    break :blk self.grid.setString(row, gutter_width, remaining, fg_color, bg_color);
                 } else blk: {
-                    // Slow path: Character-by-character for visual selection highlighting
+                    // Slow path: Character-by-character for visual/yank highlighting
                     // NOTE: Buffer positions are in BYTES, not character counts
-                    var screen_col: usize = 0;
+                    var screen_col: usize = gutter_width; // Start after gutter
                     var byte_idx: usize = 0;
 
-                    // Pre-calculate visual background
+                    // Pre-calculate highlight backgrounds
                     const visual_bg = if (config.visual) |v|
                         v.bg
                     else
                         highlights.Color{ .r = 80, .g = 80, .b = 80 }; // Default gray
 
-                    while (byte_idx < remaining.len and screen_col < self.terminal_cols) {
+                    const yank_bg = if (config.yank_flash) |y|
+                        y.bg
+                    else
+                        highlights.Color{ .r = 100, .g = 100, .b = 50 }; // Default yellow-ish
+
+                    while (byte_idx < remaining.len and screen_col < (gutter_width + text_cols)) {
                         // Decode UTF-8 character
                         const char_len = std.unicode.utf8ByteSequenceLength(remaining[byte_idx]) catch 1;
                         if (byte_idx + char_len > remaining.len) break;
@@ -331,14 +504,17 @@ pub const Display = struct {
                             continue;
                         }
 
-                        // Check if character start position is in selection
+                        // Check if character start position is in selection or yank highlight
                         const buffer_col = start_col + byte_idx;
                         const char_pos = Position{
                             .line = line_num,
                             .col = buffer_col,
                         };
 
-                        const final_bg = if (visual_state.contains(cursor_pos, char_pos))
+                        // Yank highlight takes priority over visual selection
+                        const final_bg = if (yank_active and yank_highlight.contains(char_pos))
+                            yank_bg
+                        else if (visual_active and visual_state.contains(cursor_pos, char_pos))
                             visual_bg
                         else
                             bg_color;
@@ -353,7 +529,7 @@ pub const Display = struct {
                         screen_col += 1;
 
                         // For double-width characters, fill the second column with continuation marker
-                        if (width == 2 and screen_col < self.terminal_cols) {
+                        if (width == 2 and screen_col < (gutter_width + text_cols)) {
                             self.grid.setCell(row, screen_col, .{
                                 .char = ' ', // Placeholder (not rendered to terminal)
                                 .fg = fg_color,
@@ -369,16 +545,18 @@ pub const Display = struct {
                     break :blk screen_col;
                 };
 
-                // Fill rest of line from where text ended (either with cursor bg or clear it)
-                // This ensures old background colors are properly cleared
+                // Fill rest of line from where text ended
+                // Use null background for padding (don't extend cursorline to padding)
+                const padding_bg = if (config.normal) |n| n.bg else null;
                 for (end_col..self.terminal_cols) |fill_col| {
-                    self.grid.setCell(row, fill_col, .{ .char = ' ', .bg = bg_color });
+                    self.grid.setCell(row, fill_col, .{ .char = ' ', .bg = padding_bg });
                 }
             } else {
-                // Empty line indicator (Vim-style ~) - no background
-                self.grid.setCell(row, 0, .{ .char = '~', .bg = null });
+                // Empty line indicator (Vim-style ~) - render after gutter
+                // Gutter already rendered above (if gutter_width > 0)
+                self.grid.setCell(row, gutter_width, .{ .char = '~', .bg = null });
                 // Clear rest of line - explicitly set no background
-                for (1..self.terminal_cols) |col| {
+                for ((gutter_width + 1)..self.terminal_cols) |col| {
                     self.grid.setCell(row, col, .{ .char = ' ', .bg = null });
                 }
             }

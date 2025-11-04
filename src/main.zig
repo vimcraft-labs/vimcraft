@@ -15,6 +15,9 @@ const debug_protocol = @import("debug.zig");
 const VisualState = @import("visual/visual.zig").VisualState;
 const VisualMode = @import("visual/visual.zig").VisualMode;
 const Position = @import("visual/visual.zig").Position;
+const YankHighlight = @import("visual/yank_highlight.zig").YankHighlight;
+const RegisterManager = @import("register/register.zig").RegisterManager;
+const yank = @import("buffer/yank.zig");
 
 // Import Hermes C API (use hermes_c namespace to avoid shadowing)
 const hermes_c = @cImport({
@@ -307,6 +310,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
     var display = try Display.init(allocator);
     defer display.deinit();
+    try display.setLineNumbers(true); // Enable line numbers
     var mode_manager = ModeManager.init();
     var cmd_buffer = CommandBuffer.init(allocator);
     defer cmd_buffer.deinit();
@@ -319,6 +323,13 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         .anchor = .{ .line = 0, .col = 0 },
     };
 
+    // Yank highlight state (brief flash after yank)
+    var yank_highlight = YankHighlight{};
+
+    // Initialize register manager (for yank/paste)
+    var register_mgr = RegisterManager.init(allocator);
+    defer register_mgr.deinit();
+
     // Initialize debugger state (for :debug command)
     var debugger_state = DebuggerState{ .allocator = allocator };
     defer debugger_state.deinit();
@@ -330,6 +341,9 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     // Load configuration from init.js (Phase 4!)
     try loadConfigFromJs(allocator, &highlight_config, &debugger_state);
     defer jsi_api.deinitTimers(); // Clean up timers on exit (even on error)
+
+    // Apply sign column config from JS to display
+    try display.setSignColumn(highlight_config.signcolumn_mode);
 
     // Load file
     buffer.loadFile(filepath) catch |err| {
@@ -348,7 +362,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     {
         const status = try allocator.dupe(u8, mode_manager.getModeString());
         defer allocator.free(status);
-        try display.render(&buffer, status, &highlight_config, &visual_state);
+        try display.render(&buffer, status, &highlight_config, &visual_state, &yank_highlight);
         try display.setCursorBlock(); // Start in normal mode with block cursor
         try display.flush();
     }
@@ -361,7 +375,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
         // Handle input with short timeout to keep UI responsive
         // libuv handles timer firing, so we just need to poll for input
-        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &visual_state, allocator, &debugger_state, 10);
+        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &visual_state, &yank_highlight, &register_mgr, allocator, &debugger_state, 10);
 
         // Render after input (something changed)
         const status = if (mode_manager.isCommand())
@@ -372,7 +386,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
             try allocator.dupe(u8, mode_manager.getModeString());
         defer allocator.free(status);
 
-        try display.render(&buffer, status, &highlight_config, &visual_state);
+        try display.render(&buffer, status, &highlight_config, &visual_state, &yank_highlight);
 
         // Set cursor shape based on mode
         if (mode_manager.isInsert()) {
@@ -442,6 +456,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
     var display = try Display.init(allocator);
     defer display.deinit();
+    try display.setLineNumbers(true); // Enable line numbers
     var mode_manager = ModeManager.init();
     var cmd_buffer = CommandBuffer.init(allocator);
     defer cmd_buffer.deinit();
@@ -453,6 +468,13 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         .mode = .char,
         .anchor = .{ .line = 0, .col = 0 },
     };
+
+    // Yank highlight state (brief flash after yank)
+    var yank_highlight = YankHighlight{};
+
+    // Initialize register manager (for yank/paste)
+    var register_mgr = RegisterManager.init(allocator);
+    defer register_mgr.deinit();
 
     // Initialize debugger state (already have debugger running)
     var debugger_state = DebuggerState{};
@@ -529,6 +551,9 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         };
     }
 
+    // Apply sign column config from JS to display
+    try display.setSignColumn(highlight_config.signcolumn_mode);
+
     // Load file
     buffer.loadFile(filepath) catch |err| {
         std.debug.print("Error loading file: {}\n", .{err});
@@ -579,7 +604,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     {
         const status = try allocator.dupe(u8, mode_manager.getModeString());
         defer allocator.free(status);
-        try display.render(&buffer, status, &highlight_config, &visual_state);
+        try display.render(&buffer, status, &highlight_config, &visual_state, &yank_highlight);
         try display.setCursorBlock();
         try display.flush();
     }
@@ -595,7 +620,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
         // Handle input with short timeout to keep UI responsive
         // libuv handles timer firing, so we just need to poll for input
-        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &visual_state, allocator, &debugger_state, 10);
+        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &visual_state, &yank_highlight, &register_mgr, allocator, &debugger_state, 10);
 
         const status = if (mode_manager.isCommand())
             try std.fmt.allocPrint(allocator, ":{s}", .{cmd_buffer.getString()})
@@ -605,7 +630,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
             try allocator.dupe(u8, mode_manager.getModeString());
         defer allocator.free(status);
 
-        try display.render(&buffer, status, &highlight_config, &visual_state);
+        try display.render(&buffer, status, &highlight_config, &visual_state, &yank_highlight);
 
         if (mode_manager.isInsert()) {
             try display.setCursorBar();
@@ -645,6 +670,8 @@ fn handleInputWithTimeout(
     cmd_buffer: *CommandBuffer,
     pending_cmd: *PendingCommand,
     visual_state: *VisualState,
+    yank_highlight: *YankHighlight,
+    register_mgr: *RegisterManager,
     allocator: std.mem.Allocator,
     debugger_state: *DebuggerState,
     timeout_ms: ?i64,
@@ -686,11 +713,11 @@ fn handleInputWithTimeout(
 
     // Handle based on mode
     if (mode_manager.isNormal()) {
-        return try handleNormalMode(buffer, display, mode_manager, cmd_buffer, pending_cmd, visual_state, input);
+        return try handleNormalMode(buffer, display, mode_manager, cmd_buffer, pending_cmd, visual_state, yank_highlight, register_mgr, allocator, input);
     } else if (mode_manager.isInsert()) {
         return try handleInsertMode(buffer, mode_manager, input);
     } else if (mode_manager.isVisual()) {
-        return try handleVisualMode(buffer, mode_manager, visual_state, input);
+        return try handleVisualMode(buffer, mode_manager, visual_state, yank_highlight, register_mgr, allocator, input);
     } else if (mode_manager.isCommand()) {
         return try handleCommandMode(buffer, mode_manager, cmd_buffer, allocator, input, debugger_state);
     }
@@ -706,9 +733,13 @@ fn handleNormalMode(
     cmd_buffer: *CommandBuffer,
     pending_cmd: *PendingCommand,
     visual_state: *VisualState,
+    yank_highlight: *YankHighlight,
+    register_mgr: *RegisterManager,
+    allocator: std.mem.Allocator,
     input: []const u8,
 ) !bool {
-    // Check for pending command first (e.g., waiting for second 'd' in 'dd')
+    _ = allocator; // Reserved for future use
+    // Check for pending command first (e.g., waiting for second 'd' in 'dd', 'yy')
     if (pending_cmd.get()) |pending| {
         if (input.len == 1) {
             const char = input[0];
@@ -718,6 +749,38 @@ fn handleNormalMode(
                 switch (char) {
                     'd' => try buffer.deleteLine(), // dd - delete line
                     'w' => try buffer.deleteWord(), // dw - delete word
+                    else => {}, // Invalid combo, just ignore
+                }
+                pending_cmd.clear();
+                return true;
+            }
+
+            // Handle pending 'y' commands (yank)
+            if (pending == 'y') {
+                switch (char) {
+                    'y' => { // yy - yank current line
+                        const line_num = buffer.cursor.row;
+                        const line = buffer.getLine(line_num) orelse {
+                            pending_cmd.clear();
+                            return true;
+                        };
+
+                        // Remove trailing newline if present
+                        const text = if (line.len > 0 and line[line.len - 1] == '\n')
+                            line[0 .. line.len - 1]
+                        else
+                            line;
+
+                        // Yank to unnamed register (line-wise)
+                        const lines = [_][]const u8{text};
+                        try register_mgr.yank('"', &lines, .line_wise);
+
+                        // Create yank highlight (flash the line)
+                        const start_pos = Position{ .line = line_num, .col = 0 };
+                        const end_col = if (text.len > 0) text.len - 1 else 0;
+                        const end_pos = Position{ .line = line_num, .col = end_col };
+                        yank_highlight.* = YankHighlight.init(start_pos, end_pos, .line);
+                    },
                     else => {}, // Invalid combo, just ignore
                 }
                 pending_cmd.clear();
@@ -757,6 +820,12 @@ fn handleNormalMode(
             'd' => {
                 // Wait for next character (dd, dw, etc.)
                 pending_cmd.set('d');
+            },
+
+            // Yank operations
+            'y' => {
+                // Wait for next character (yy, yw, etc.)
+                pending_cmd.set('y');
             },
 
             // Undo/redo
@@ -923,6 +992,9 @@ fn handleVisualMode(
     buffer: *Buffer,
     mode_manager: *ModeManager,
     visual_state: *VisualState,
+    yank_highlight: *YankHighlight,
+    register_mgr: *RegisterManager,
+    allocator: std.mem.Allocator,
     input: []const u8,
 ) !bool {
     // Escape exits visual mode
@@ -958,6 +1030,27 @@ fn handleVisualMode(
 
             // Exit visual mode (toggle off)
             'v' => {
+                visual_state.deactivate();
+                mode_manager.enterNormal();
+            },
+
+            // Yank (copy) selection
+            'y' => {
+                const cursor_pos = Position{
+                    .line = buffer.cursor.row,
+                    .col = buffer.cursor.col,
+                };
+
+                // Get selection range before yanking
+                const range = visual_state.getRange(cursor_pos);
+
+                // Yank to unnamed register (")
+                try yank.yankVisualSelection(buffer, visual_state.*, cursor_pos, register_mgr, '"', allocator);
+
+                // Create yank highlight (brief flash)
+                yank_highlight.* = YankHighlight.init(range.start, range.end, visual_state.mode);
+
+                // Exit visual mode after yank
                 visual_state.deactivate();
                 mode_manager.enterNormal();
             },
@@ -1085,6 +1178,7 @@ fn runTestMode(allocator: std.mem.Allocator, test_file_path: []const u8) !void {
 
     var display = try Display.init(allocator);
     defer display.deinit();
+    try display.setLineNumbers(true); // Enable line numbers
     var mode_manager = ModeManager.init();
     var harness = TestHarness.init(allocator, &buffer, &display, &mode_manager, stdout_file);
 
@@ -1174,6 +1268,7 @@ fn runREPL(allocator: std.mem.Allocator) !void {
 
     var display = try Display.init(allocator);
     defer display.deinit();
+    try display.setLineNumbers(true); // Enable line numbers
     var mode_manager = ModeManager.init();
     var harness = TestHarness.init(allocator, &buffer, &display, &mode_manager, stdout_file);
 
