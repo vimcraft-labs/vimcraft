@@ -120,6 +120,23 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     // ============================================================================
+    // ovdb (OpenVim Debugger) - Debug Client Tool
+    // ============================================================================
+    const ovdb = b.addExecutable(.{
+        .name = "ovdb",
+        .root_source_file = b.path("tools/ovdb/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Provide unified debug module to ovdb
+    ovdb.root_module.addAnonymousImport("debug", .{
+        .root_source_file = b.path("src/debug.zig"),
+    });
+
+    b.installArtifact(ovdb);
+
+    // ============================================================================
     // Run command
     // ============================================================================
     const run_cmd = b.addRunArtifact(exe);

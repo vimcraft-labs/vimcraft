@@ -80,6 +80,196 @@ Good documentation:
 - **API reference**: [docs/api/](docs/api/)
 - **Implementation plan**: [docs/roadmap/](docs/roadmap/)
 
+## Debug Protocol & Verification System (CRITICAL!)
+
+**IMPORTANT**: OpenVim uses a sophisticated Zig-based debugging system designed specifically for LLM-driven development. This creates an efficient feedback loop for implementation verification.
+
+### Architecture Overview
+
+```
+OpenVim (--debug-protocol) ←→ ovdb (OpenVim Debugger) ←→ Claude (LLM)
+     ↓ JSON State                    ↓ Structured                ↓ Parse
+   Expose internals            Query/Assert/Verify        Understand & Iterate
+```
+
+### Why This Matters for LLM Development
+
+Traditional bash scripts are **inefficient for LLM verification**:
+- ❌ Unstructured output (hard to parse)
+- ❌ No deep introspection
+- ❌ Slow (spawn processes)
+- ❌ Error-prone (string parsing)
+
+**Zig-based debug protocol is LLM-optimized**:
+- ✅ **Structured JSON**: Easy to parse and understand
+- ✅ **Deep Introspection**: Full editor state accessible
+- ✅ **Fast**: IPC/socket communication, no spawning
+- ✅ **Type-Safe**: Zig ensures correctness
+- ✅ **Deterministic**: Same input → same output
+- ✅ **Self-Documenting**: JSON schema is the API
+
+### Core Components
+
+**1. OpenVim Debug Server** (`src/debug/`)
+- Exposes editor state via JSON protocol
+- Handles queries (get_state, get_registers, get_visual)
+- Executes commands (execute_keys, load_file)
+- Emits events (mode_changed, buffer_changed)
+- Performance instrumentation
+
+**2. ovdb - OpenVim Debugger** (`tools/ovdb/`)
+- Zig CLI tool for debugging OpenVim
+- Interactive REPL mode
+- Script execution (.ovdb files)
+- Assertion framework
+- LLM-friendly output (JSON + human-readable)
+
+**3. Debug Protocol** (JSON over Unix socket/stdin)
+```json
+// Request
+{"cmd": "get_visual", "id": "1"}
+
+// Response
+{
+  "status": "ok",
+  "result": {
+    "active": true,
+    "mode": "char",
+    "anchor": {"line": 5, "col": 5},
+    "head": {"line": 5, "col": 10},
+    "text": ["Hello"]
+  },
+  "duration_ns": 1234
+}
+```
+
+### LLM Verification Workflow
+
+**Claude's Development Loop**:
+```bash
+# 1. Claude implements visual mode feature
+
+# 2. Claude writes test script (test_visual.ovdb)
+load_file /tmp/test.txt
+execute_keys viw
+assert_visual_mode char
+assert_cursor 0 3
+execute_keys y
+assert_register " "Hel"
+
+# 3. Claude runs verification
+$ ./ovdb run test_visual.ovdb --format=json
+
+# 4. Claude parses JSON result
+{
+  "status": "pass",
+  "passed": 5,
+  "failed": 0,
+  "tests": [
+    {"name": "execute_keys", "status": "pass"},
+    {"name": "assert_visual_mode", "status": "pass"},
+    ...
+  ]
+}
+
+# 5. If failure, Claude gets exact error with diff:
+{
+  "status": "fail",
+  "tests": [{
+    "name": "assert_register",
+    "expected": "Hel",
+    "actual": "Hello",
+    "diff": "+ lo"  // Clear, actionable
+  }]
+}
+
+# 6. Claude fixes and re-runs (fast iteration!)
+```
+
+### Key Features for Claude
+
+**Deep State Inspection**:
+- `get_state` → Full editor snapshot (mode, cursor, buffer, visual, registers)
+- `get_registers` → All 39 registers with metadata
+- `get_visual` → Selection range, mode, text
+- `get_cursor` → Current position
+
+**Command Execution**:
+- `execute_keys "viw"` → Simulate keystrokes
+- `load_file "/tmp/test.txt"` → Load test file
+- `benchmark "yank_line"` → Performance measurement
+
+**Assertions** (for testing):
+- `assert_cursor 5 10` → Verify cursor position
+- `assert_mode VISUAL` → Verify editor mode
+- `assert_register "a" "text"` → Verify register content
+- `assert_visual_mode char` → Verify visual mode type
+
+**Performance Tracking**:
+- All commands report `duration_ns`
+- Benchmark mode for measuring operations
+- Target verification (<16ms for editor operations)
+
+### Implementation Status
+
+**Phase 3 (Current)**:
+- ✅ Debug protocol designed ([docs/development/debug-protocol.md](docs/development/debug-protocol.md))
+- 🚧 Implementing `src/debug/protocol.zig` (Command/Response types)
+- 🚧 Implementing `src/debug/state.zig` (EditorState serialization)
+- 🚧 Implementing `tools/ovdb/` (Debugger CLI)
+- 📅 Integration tests using ovdb (.ovdb scripts)
+
+**Benefits Realized**:
+- Claude can verify implementations in seconds (not minutes)
+- Clear, structured failure messages (no ambiguity)
+- Deep introspection (understand editor state fully)
+- Fast iteration (no process spawning overhead)
+- Deterministic testing (reproducible results)
+
+### Documentation
+
+- **Protocol Spec**: [docs/development/debug-protocol.md](docs/development/debug-protocol.md)
+- **Usage Guide**: [docs/development/ovdb-usage.md](docs/development/ovdb-usage.md) (TODO)
+- **Test Scripts**: `tests/*.ovdb` (integration tests)
+
+### When to Use ovdb
+
+**During Development**:
+- Implementing new feature → Write .ovdb test first (TDD)
+- Feature complete → Run ovdb to verify
+- Bug found → Write .ovdb to reproduce → Fix → Verify
+
+**For Claude**:
+- After every feature implementation → Run verification
+- Before committing → Full regression suite
+- On failure → Parse JSON, understand exact issue, fix
+
+**Example Usage**:
+```bash
+# Interactive debugging
+$ ./ovdb connect /tmp/openvim-debug.sock
+ovdb> get_state
+ovdb> execute_keys viw
+ovdb> get_visual
+ovdb> quit
+
+# Script execution (for Claude)
+$ ./ovdb run test_visual.ovdb --format=json > result.json
+$ cat result.json  # Claude parses this
+```
+
+### Critical Principle
+
+**"Natural Like Home" for LLM**:
+- JSON everywhere (easy parsing)
+- Structured data (no string parsing)
+- Clear pass/fail (boolean logic)
+- Exact diffs (actionable fixes)
+- Fast feedback (<100ms typical)
+- Deterministic (reproducible)
+
+This debug system is **optimized for LLM cognition**, not human debugging. It provides the structured, deterministic feedback that LLMs need for efficient development iteration.
+
 ## Reference Codebases
 
 Three local forks provide reference implementations:

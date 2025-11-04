@@ -11,6 +11,7 @@ const ConfigPaths = @import("config/loader.zig").ConfigPaths;
 const ConfigWatcher = @import("config/watcher.zig").ConfigWatcher;
 const jsi_api = @import("jsi/jsi_api.zig");
 const event_loop = @import("event_loop/libuv.zig");
+const debug_protocol = @import("debug.zig");
 
 // Import Hermes C API (use hermes_c namespace to avoid shadowing)
 const hermes_c = @cImport({
@@ -162,6 +163,8 @@ pub fn main() !void {
     if (std.mem.eql(u8, first_arg, "--help") or std.mem.eql(u8, first_arg, "-h")) {
         printHelp();
         return;
+    } else if (std.mem.eql(u8, first_arg, "--debug-protocol")) {
+        return try runDebugProtocol(allocator);
     } else if (std.mem.eql(u8, first_arg, "--debug")) {
         if (args.len < 3) {
             std.debug.print("Error: --debug requires a file\n", .{});
@@ -192,12 +195,18 @@ fn printHelp() void {
         \\Usage:
         \\  openvim <file>                 Open file in interactive editor
         \\  openvim --debug <file>         Open file with Chrome DevTools debugging
+        \\  openvim --debug-protocol       Start debug protocol server (for ovdb)
         \\  openvim --test <test_file>     Run automated test script
         \\  openvim --repl                 Interactive debugging REPL
         \\  openvim --help                 Show this help message
         \\
         \\Interactive Mode:
         \\  Normal Vim keybindings (hjkl, i/a/o, dd/dw, u, :w, :q, :debug, etc.)
+        \\
+        \\Debug Protocol Mode:
+        \\  JSON-based protocol for automated testing and LLM verification
+        \\  Used by ovdb debugger tool (see tools/ovdb/)
+        \\  Communicates via stdin/stdout
         \\
         \\Test Mode:
         \\  Run .test files with scripted commands
@@ -210,9 +219,10 @@ fn printHelp() void {
         \\  Type 'help' for available commands, 'quit' to exit
         \\
         \\Examples:
-        \\  openvim myfile.txt          # Edit a file
-        \\  openvim --test bug.test     # Run test script
-        \\  openvim --repl              # Start debugging REPL
+        \\  openvim myfile.txt            # Edit a file
+        \\  openvim --test bug.test       # Run test script
+        \\  openvim --repl                # Start debugging REPL
+        \\  openvim --debug-protocol      # Start debug server (used by ovdb)
         \\
     ;
     std.debug.print("{s}", .{help});
@@ -265,6 +275,18 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
         config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
         config.cursorline_enabled = true;
     }
+}
+
+/// Run debug protocol server (headless, stdin/stdout communication)
+fn runDebugProtocol(allocator: std.mem.Allocator) !void {
+    // Create debug server
+    var server = debug_protocol.server.Server.init(allocator, .{
+        .use_stdio = true,
+    });
+    defer server.deinit();
+
+    // Start server (blocks until shutdown command received)
+    try server.start();
 }
 
 /// Run the interactive editor (normal mode)

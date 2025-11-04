@@ -1,0 +1,291 @@
+const std = @import("std");
+
+/// Debug protocol version
+pub const PROTOCOL_VERSION = "1.0.0";
+
+/// Message ID (for request/response correlation)
+pub const MessageId = []const u8;
+
+/// Command types
+pub const CommandType = enum {
+    // State queries
+    get_state,
+    get_cursor,
+    get_mode,
+    get_visual,
+    get_registers,
+    get_register,
+    get_buffer,
+
+    // Commands
+    execute_keys,
+    load_file,
+
+    // Assertions
+    assert_cursor,
+    assert_mode,
+    assert_visual_active,
+    assert_visual_mode,
+    assert_register,
+    assert_line,
+
+    // Performance
+    benchmark,
+
+    // Control
+    ping,
+    shutdown,
+
+    pub fn fromString(s: []const u8) ?CommandType {
+        const type_info = @typeInfo(CommandType);
+        inline for (type_info.@"enum".fields) |field| {
+            if (std.mem.eql(u8, s, field.name)) {
+                return @enumFromInt(field.value);
+            }
+        }
+        return null;
+    }
+
+    pub fn toString(self: CommandType) []const u8 {
+        return @tagName(self);
+    }
+};
+
+/// Position in buffer
+pub const Position = struct {
+    line: usize,
+    col: usize,
+};
+
+/// Command arguments (union based on command type)
+pub const CommandArgs = union(enum) {
+    none: void,
+    get_register: struct { name: u8 },
+    execute_keys: struct { keys: []const u8 },
+    load_file: struct { path: []const u8 },
+    assert_cursor: Position,
+    assert_mode: struct { mode: []const u8 },
+    assert_visual_active: struct { active: bool },
+    assert_visual_mode: struct { mode: []const u8 }, // "char", "line", "block"
+    assert_register: struct { name: u8, text: []const u8 },
+    assert_line: struct { line: usize, text: []const u8 },
+    benchmark: struct { operation: []const u8, iterations: usize },
+};
+
+/// Command message
+pub const Command = struct {
+    id: MessageId,
+    cmd: CommandType,
+    args: CommandArgs,
+    timestamp: i64,
+
+    pub fn init(allocator: std.mem.Allocator, id: MessageId, cmd: CommandType, args: CommandArgs) !Command {
+        return Command{
+            .id = try allocator.dupe(u8, id),
+            .cmd = cmd,
+            .args = args,
+            .timestamp = std.time.milliTimestamp(),
+        };
+    }
+
+    pub fn deinit(self: *Command, allocator: std.mem.Allocator) void {
+        allocator.free(self.id);
+        // Free args based on type
+        switch (self.args) {
+            .execute_keys => |a| allocator.free(a.keys),
+            .load_file => |a| allocator.free(a.path),
+            .assert_mode => |a| allocator.free(a.mode),
+            .assert_visual_mode => |a| allocator.free(a.mode),
+            .assert_register => |a| {
+                allocator.free(a.text);
+            },
+            .assert_line => |a| {
+                allocator.free(a.text);
+            },
+            .benchmark => |a| allocator.free(a.operation),
+            else => {},
+        }
+    }
+};
+
+/// Response status
+pub const ResponseStatus = enum {
+    ok,
+    @"error",
+
+    pub fn toString(self: ResponseStatus) []const u8 {
+        return @tagName(self);
+    }
+};
+
+/// Response result (union based on command type)
+pub const ResponseResult = union(enum) {
+    none: void,
+    state: EditorState,
+    cursor: Position,
+    mode: struct { mode: []const u8 },
+    visual: VisualState,
+    registers: RegistersState,
+    register: RegisterState,
+    buffer: BufferState,
+    execute_keys: struct { keys_processed: usize },
+    assertion: AssertionResult,
+    benchmark: BenchmarkResult,
+    pong: struct { version: []const u8 },
+};
+
+/// Response message
+pub const Response = struct {
+    id: MessageId,
+    status: ResponseStatus,
+    result: ?ResponseResult,
+    @"error": ?[]const u8,
+    timestamp: i64,
+    duration_ns: u64,
+
+    pub fn deinit(self: *Response, allocator: std.mem.Allocator) void {
+        allocator.free(self.id);
+        if (self.@"error") |err| {
+            allocator.free(err);
+        }
+
+        // Free result fields that are heap-allocated
+        if (self.result) |result| {
+            switch (result) {
+                .mode => |m| allocator.free(m.mode),
+                .pong => |p| {
+                    // Only free if it's not a string literal
+                    // String literals from protocol.PROTOCOL_VERSION don't need freeing
+                    // but duped strings from client parsing do
+                    allocator.free(p.version);
+                },
+                .assertion => |a| {
+                    if (a.expected) |exp| allocator.free(exp);
+                    if (a.actual) |act| allocator.free(act);
+                    if (a.diff) |d| allocator.free(d);
+                },
+                // Other types either don't allocate or have different ownership
+                else => {},
+            }
+        }
+    }
+};
+
+/// Event types
+pub const EventType = enum {
+    mode_changed,
+    buffer_changed,
+    register_changed,
+    cursor_moved,
+    visual_changed,
+
+    pub fn toString(self: EventType) []const u8 {
+        return @tagName(self);
+    }
+};
+
+/// Event data (union based on event type)
+pub const EventData = union(enum) {
+    mode_changed: struct {
+        old_mode: []const u8,
+        new_mode: []const u8,
+    },
+    buffer_changed: struct {
+        line: usize,
+        old_text: ?[]const u8,
+        new_text: []const u8,
+    },
+    register_changed: struct {
+        register: u8,
+    },
+    cursor_moved: struct {
+        old_pos: Position,
+        new_pos: Position,
+    },
+    visual_changed: struct {
+        active: bool,
+        mode: ?[]const u8,
+    },
+};
+
+/// Event message
+pub const Event = struct {
+    type: EventType,
+    data: EventData,
+    timestamp: i64,
+};
+
+/// Editor state snapshot
+pub const EditorState = struct {
+    mode: []const u8, // "NORMAL", "INSERT", "VISUAL", etc.
+    cursor: Position,
+    buffer: BufferState,
+    visual: ?VisualState,
+    registers: RegistersState,
+};
+
+/// Visual selection state
+pub const VisualState = struct {
+    active: bool,
+    mode: []const u8, // "char", "line", "block"
+    anchor: Position,
+    head: Position,
+    text: []const []const u8, // Selected text lines
+};
+
+/// Buffer state
+pub const BufferState = struct {
+    path: ?[]const u8,
+    lines: []const []const u8,
+    modified: bool,
+    line_count: usize,
+};
+
+/// Single register state
+pub const RegisterState = struct {
+    name: u8,
+    lines: []const []const u8,
+    type: []const u8, // "char", "line", "block"
+    width: usize,
+    timestamp: i64,
+};
+
+/// All registers state
+pub const RegistersState = struct {
+    registers: std.StringHashMap(RegisterState),
+};
+
+/// Assertion result
+pub const AssertionResult = struct {
+    match: bool,
+    expected: ?[]const u8,
+    actual: ?[]const u8,
+    diff: ?[]const u8,
+};
+
+/// Benchmark result
+pub const BenchmarkResult = struct {
+    iterations: usize,
+    total_ns: u64,
+    avg_ns: u64,
+    avg_ms: f64,
+    min_ns: u64,
+    max_ns: u64,
+    within_target: bool,
+    target_ms: f64,
+};
+
+// Tests
+test "Protocol: CommandType from/to string" {
+    const cmd = CommandType.get_state;
+    const str = cmd.toString();
+    try std.testing.expectEqualStrings("get_state", str);
+
+    const parsed = CommandType.fromString("get_state").?;
+    try std.testing.expectEqual(CommandType.get_state, parsed);
+}
+
+test "Protocol: Response status" {
+    try std.testing.expectEqualStrings("ok", ResponseStatus.ok.toString());
+    try std.testing.expectEqualStrings("error", ResponseStatus.@"error".toString());
+}
