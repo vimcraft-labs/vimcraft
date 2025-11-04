@@ -52,6 +52,34 @@ const PendingCommand = struct {
     }
 };
 
+/// Pending register selection (after pressing ")
+const PendingRegister = struct {
+    waiting_for_name: bool = false, // Waiting for register name after "
+    selected: ?u8 = null,           // Selected register (a-z, A-Z, ", etc.)
+
+    fn startSelection(self: *PendingRegister) void {
+        self.waiting_for_name = true;
+    }
+
+    fn setRegister(self: *PendingRegister, reg: u8) void {
+        self.selected = reg;
+        self.waiting_for_name = false;
+    }
+
+    fn clear(self: *PendingRegister) void {
+        self.waiting_for_name = false;
+        self.selected = null;
+    }
+
+    fn isWaitingForName(self: *const PendingRegister) bool {
+        return self.waiting_for_name;
+    }
+
+    fn getSelected(self: *const PendingRegister) ?u8 {
+        return self.selected;
+    }
+};
+
 /// Global debugger state (for on-demand debugging via :debug command)
 const DebuggerState = struct {
     runtime: ?*hermes_c.OVHermesRuntime = null,
@@ -316,6 +344,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var cmd_buffer = CommandBuffer.init(allocator);
     defer cmd_buffer.deinit();
     var pending_cmd = PendingCommand{};
+    var pending_register = PendingRegister{};
 
     // Visual mode state (initialized but not active)
     var visual_state = VisualState{
@@ -339,6 +368,20 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var highlight_config = highlights.HighlightConfig.init(allocator);
     defer highlight_config.deinit();
 
+    // Get config paths for hot reload
+    var paths = try ConfigPaths.init(allocator);
+    defer paths.deinit();
+    try paths.ensureConfigDir();
+    try paths.createDefaultInitJs();
+
+    // Set up hot reload state BEFORE loading config
+    var reload_state = ReloadState{
+        .highlight_config = &highlight_config,
+        .debugger_state = &debugger_state,
+        .allocator = allocator,
+        .config_path = paths.init_js_path,
+    };
+
     // Load configuration from init.js (Phase 4!)
     try loadConfigFromJs(allocator, &highlight_config, &debugger_state);
     defer jsi_api.deinitTimers(); // Clean up timers on exit (even on error)
@@ -359,6 +402,39 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     // Get terminal size
     try display.getTerminalSize();
 
+    // Set up hot reload watcher AFTER entering raw mode
+    const reloadCallback = struct {
+        fn callback(user_data: ?*anyopaque) void {
+            const state: *ReloadState = @ptrCast(@alignCast(user_data.?));
+            state.markForReload();
+        }
+    }.callback;
+
+    var watcher: ?*ConfigWatcher = null;
+    if (paths.initJsExists()) {
+        if (ConfigWatcher.init(
+            allocator,
+            paths.init_js_path,
+            reloadCallback,
+            &reload_state,
+        )) |w| {
+            if (w.start()) {
+                watcher = w; // Successfully started
+            } else |_| {
+                // Cleanup failed watcher - even though start() failed,
+                // the fs_event handle was initialized, so we need to close it properly
+                w.close();
+                // Run event loop briefly to process the close callback
+                var i: u8 = 0;
+                while (i < 5) : (i += 1) {
+                    _ = event_loop.runOnce();
+                }
+            }
+        } else |_| {}
+    }
+    // NOTE: watcher cleanup uses uv_close() callback for proper libuv handle cleanup
+    // We call close() and run the event loop to process the callback before other cleanup
+
     // Initial render
     {
         const status = try allocator.dupe(u8, mode_manager.getModeString());
@@ -374,9 +450,12 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         // Run libuv event loop to process timers and async events (non-blocking)
         _ = event_loop.runOnce();
 
+        // Check if config needs reload (triggered by file watcher)
+        reload_state.reload() catch {};
+
         // Handle input with short timeout to keep UI responsive
         // libuv handles timer firing, so we just need to poll for input
-        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &visual_state, &yank_highlight, &register_mgr, allocator, &debugger_state, 10);
+        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &pending_register, &visual_state, &yank_highlight, &register_mgr, allocator, &debugger_state, 10);
 
         // Render after input (something changed)
         const status = if (mode_manager.isCommand())
@@ -402,6 +481,19 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     // Clean exit
     try display.clearScreen();
     try display.moveCursor(0, 0);
+
+    // CRITICAL: Close the file watcher and let event loop process the close callback
+    // This properly cleans up the libuv handle and frees all memory without leaks
+    if (watcher) |w| {
+        w.close();
+
+        // Run event loop a few times to ensure close callback is processed
+        // The close callback will free all memory and destroy the struct
+        var i: u8 = 0;
+        while (i < 10) : (i += 1) {
+            _ = event_loop.runOnce();
+        }
+    }
 }
 
 /// Launch Chrome DevTools automatically (like React Native does)
@@ -462,6 +554,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     var cmd_buffer = CommandBuffer.init(allocator);
     defer cmd_buffer.deinit();
     var pending_cmd = PendingCommand{};
+    var pending_register = PendingRegister{};
 
     // Visual mode state (initialized but not active)
     var visual_state = VisualState{
@@ -621,7 +714,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
         // Handle input with short timeout to keep UI responsive
         // libuv handles timer firing, so we just need to poll for input
-        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &visual_state, &yank_highlight, &register_mgr, allocator, &debugger_state, 10);
+        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &pending_register, &visual_state, &yank_highlight, &register_mgr, allocator, &debugger_state, 10);
 
         const status = if (mode_manager.isCommand())
             try std.fmt.allocPrint(allocator, ":{s}", .{cmd_buffer.getString()})
@@ -670,6 +763,7 @@ fn handleInputWithTimeout(
     mode_manager: *ModeManager,
     cmd_buffer: *CommandBuffer,
     pending_cmd: *PendingCommand,
+    pending_register: *PendingRegister,
     visual_state: *VisualState,
     yank_highlight: *YankHighlight,
     register_mgr: *RegisterManager,
@@ -783,11 +877,11 @@ fn handleInputWithTimeout(
 
     // Handle based on mode
     if (mode_manager.isNormal()) {
-        return try handleNormalMode(buffer, display, mode_manager, cmd_buffer, pending_cmd, visual_state, yank_highlight, register_mgr, allocator, input);
+        return try handleNormalMode(buffer, display, mode_manager, cmd_buffer, pending_cmd, pending_register, visual_state, yank_highlight, register_mgr, allocator, input);
     } else if (mode_manager.isInsert()) {
         return try handleInsertMode(buffer, mode_manager, input);
     } else if (mode_manager.isVisual()) {
-        return try handleVisualMode(buffer, mode_manager, visual_state, yank_highlight, register_mgr, allocator, input);
+        return try handleVisualMode(buffer, mode_manager, pending_register, visual_state, yank_highlight, register_mgr, allocator, input);
     } else if (mode_manager.isCommand()) {
         return try handleCommandMode(buffer, mode_manager, cmd_buffer, allocator, input, debugger_state);
     }
@@ -802,6 +896,7 @@ fn handleNormalMode(
     mode_manager: *ModeManager,
     cmd_buffer: *CommandBuffer,
     pending_cmd: *PendingCommand,
+    pending_register: *PendingRegister,
     visual_state: *VisualState,
     yank_highlight: *YankHighlight,
     register_mgr: *RegisterManager,
@@ -809,6 +904,23 @@ fn handleNormalMode(
     input: []const u8,
 ) !bool {
     _ = allocator; // Reserved for future use
+
+    // Check for pending register selection first (e.g., after pressing ")
+    if (pending_register.isWaitingForName()) {
+        if (input.len == 1) {
+            const regchar = input[0];
+            // Validate register name (a-z, A-Z, ", 0-9, -, *, +)
+            if (RegisterManager.charToIndex(regchar)) |_| {
+                // Valid register - store it and wait for operation (y, d, p, etc.)
+                pending_register.setRegister(regchar);
+                return true;
+            }
+        }
+        // Invalid register or escape - clear and continue
+        pending_register.clear();
+        return true;
+    }
+
     // Check for pending command first (e.g., waiting for second 'd' in 'dd', 'yy')
     if (pending_cmd.get()) |pending| {
         if (input.len == 1) {
@@ -832,6 +944,7 @@ fn handleNormalMode(
                         const line_num = buffer.cursor.row;
                         const line = buffer.getLine(line_num) orelse {
                             pending_cmd.clear();
+                            pending_register.clear();
                             return true;
                         };
 
@@ -841,15 +954,18 @@ fn handleNormalMode(
                         else
                             line;
 
-                        // Yank to unnamed register (line-wise)
+                        // Yank to selected register (or unnamed if none selected)
+                        const reg = pending_register.getSelected() orelse '"';
                         const lines = [_][]const u8{text};
-                        try register_mgr.yank('"', &lines, .line_wise);
+                        try register_mgr.yank(reg, &lines, .line_wise);
 
                         // Create yank highlight (flash the line)
                         const start_pos = Position{ .line = line_num, .col = 0 };
                         const end_col = if (text.len > 0) text.len - 1 else 0;
                         const end_pos = Position{ .line = line_num, .col = end_col };
                         yank_highlight.* = YankHighlight.init(start_pos, end_pos, .line);
+
+                        pending_register.clear();
                     },
                     else => {}, // Invalid combo, just ignore
                 }
@@ -892,6 +1008,11 @@ fn handleNormalMode(
                 pending_cmd.set('d');
             },
 
+            // Register selection
+            '"' => {
+                pending_register.startSelection();
+            },
+
             // Yank operations
             'y' => {
                 // Wait for next character (yy, yw, etc.)
@@ -900,10 +1021,14 @@ fn handleNormalMode(
 
             // Paste operations
             'p' => { // paste after cursor
-                _ = try paste.pasteAfter(buffer, register_mgr, '"');
+                const reg = pending_register.getSelected() orelse '"';
+                _ = try paste.pasteAfter(buffer, register_mgr, reg);
+                pending_register.clear();
             },
             'P' => { // paste before cursor
-                _ = try paste.pasteBefore(buffer, register_mgr, '"');
+                const reg = pending_register.getSelected() orelse '"';
+                _ = try paste.pasteBefore(buffer, register_mgr, reg);
+                pending_register.clear();
             },
 
             // Undo/redo
@@ -1069,12 +1194,29 @@ fn handleInsertMode(
 fn handleVisualMode(
     buffer: *Buffer,
     mode_manager: *ModeManager,
+    pending_register: *PendingRegister,
     visual_state: *VisualState,
     yank_highlight: *YankHighlight,
     register_mgr: *RegisterManager,
     allocator: std.mem.Allocator,
     input: []const u8,
 ) !bool {
+    // Check for pending register selection first (e.g., after pressing ")
+    if (pending_register.isWaitingForName()) {
+        if (input.len == 1) {
+            const regchar = input[0];
+            // Validate register name (a-z, A-Z, ", 0-9, -, *, +)
+            if (RegisterManager.charToIndex(regchar)) |_| {
+                // Valid register - store it and wait for operation (y, d, p, etc.)
+                pending_register.setRegister(regchar);
+                return true;
+            }
+        }
+        // Invalid register or escape - clear and continue
+        pending_register.clear();
+        return true;
+    }
+
     // Escape exits visual mode
     if (input.len == 1 and input[0] == 27) { // ESC
         visual_state.deactivate();
@@ -1106,6 +1248,11 @@ fn handleVisualMode(
             // File movement
             'G' => movement.moveToFileEnd(buffer),
 
+            // Register selection
+            '"' => {
+                pending_register.startSelection();
+            },
+
             // Exit visual mode (toggle off)
             'v' => {
                 visual_state.deactivate();
@@ -1122,8 +1269,9 @@ fn handleVisualMode(
                 // Get selection range before yanking
                 const range = visual_state.getRange(cursor_pos);
 
-                // Yank to unnamed register (")
-                try yank.yankVisualSelection(buffer, visual_state.*, cursor_pos, register_mgr, '"', allocator);
+                // Yank to selected register (or unnamed if none selected)
+                const reg = pending_register.getSelected() orelse '"';
+                try yank.yankVisualSelection(buffer, visual_state.*, cursor_pos, register_mgr, reg, allocator);
 
                 // Create yank highlight (brief flash)
                 yank_highlight.* = YankHighlight.init(range.start, range.end, visual_state.mode);
@@ -1131,6 +1279,7 @@ fn handleVisualMode(
                 // Exit visual mode after yank
                 visual_state.deactivate();
                 mode_manager.enterNormal();
+                pending_register.clear();
             },
 
             else => {},

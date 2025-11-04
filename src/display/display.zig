@@ -571,12 +571,14 @@ pub const Display = struct {
                     self.grid.setCell(row, fill_col, .{ .char = ' ', .bg = bg_color });
                 }
             } else {
-                // Empty line indicator (Vim-style ~) - render after gutter
+                // Empty line indicator (Vim-style ~) - render after gutter with Normal colors
                 // Gutter already rendered above (if gutter_width > 0)
-                self.grid.setCell(row, gutter_width, .{ .char = '~', .bg = null });
-                // Clear rest of line - explicitly set no background
+                const normal_fg = if (config.normal) |n| n.fg else null;
+                const normal_bg = if (config.normal) |n| n.bg else null;
+                self.grid.setCell(row, gutter_width, .{ .char = '~', .fg = normal_fg, .bg = normal_bg });
+                // Fill rest of line with Normal background
                 for ((gutter_width + 1)..self.terminal_cols) |col| {
-                    self.grid.setCell(row, col, .{ .char = ' ', .bg = null });
+                    self.grid.setCell(row, col, .{ .char = ' ', .bg = normal_bg });
                 }
             }
         }

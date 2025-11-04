@@ -1,11 +1,12 @@
 /// <reference types="@openvim/types" />
 
 const colors = {
-  bg: '#1e1e1e',
+  bg: '#1A1B26',
+  fg: '#ABB2BF',
   bgAlt: '#252526',
-  bgHighlight: '#1E202F',
+  cursorLine: '#1E202F',
 
-  fg: '#d4d4d4',
+  // fg: '#d4d4d4',
   fgAlt: '#808080',
   lineNumber: '#343543',
   activeLineNumber: '#51afef',
@@ -20,14 +21,18 @@ const colors = {
 };
 
 const highlights = {
-  CursorLine: {
-    bg: colors.bgHighlight,
+  Normal: {
+    bg: colors.bg,
+    fg: colors.fg,
   },
-  CursorLineNr: {
-    fg: colors.activeLineNumber,
+  CursorLine: {
+    bg: colors.cursorLine,
   },
   LineNr: {
     fg: colors.lineNumber,
+  },
+  CursorLineNr: {
+    fg: colors.activeLineNumber,
   },
   Comment: {
     fg: colors.gray,
