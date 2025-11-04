@@ -152,6 +152,96 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(ovdb);
 
     // ============================================================================
+    // Benchmark Suite
+    // ============================================================================
+    // Create a module for benchmark that can access all openvim modules
+    const bench_root_module = b.createModule(.{
+        .root_source_file = b.path("src/benchmark/main.zig"),
+        .target = target,
+        .optimize = .ReleaseFast, // Use optimized build for benchmarks
+    });
+
+    // Add openvim modules as imports (with uucode dependency)
+    const openvim_module_for_bench = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+    });
+    openvim_module_for_bench.addImport("uucode", uucode_module);
+
+    bench_root_module.addImport("openvim", openvim_module_for_bench);
+
+    const bench = b.addExecutable(.{
+        .name = "openvim-bench",
+        .root_module = bench_root_module,
+    });
+
+    // Link C and C++ for Hermes
+    bench.linkLibC();
+    bench.linkLibCpp();
+
+    // Ghostty components
+    bench.addIncludePath(b.path("vendor/ghostty/src"));
+
+    // Hermes include paths
+    bench.addIncludePath(b.path("src"));
+    bench.addIncludePath(b.path("vendor/hermes/API"));
+    bench.addIncludePath(b.path("vendor/hermes/API/jsi"));
+    bench.addIncludePath(b.path("vendor/hermes/public"));
+
+    // Add uucode module
+    bench.root_module.addImport("uucode", uucode_module);
+
+    // Add C++ source files
+    bench.addCSourceFile(.{
+        .file = b.path("src/jsi/hermes_c_api.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    bench.addCSourceFile(.{
+        .file = b.path("vendor/hermes/API/jsi/jsi/jsi.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    bench.addCSourceFile(.{
+        .file = b.path("src/debug/websocket_server.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    bench.addCSourceFile(.{
+        .file = b.path("src/debug/cdp_debugger.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    // Link Hermes and libuv
+    bench.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
+    bench.addLibraryPath(b.path("vendor/hermes/build/jsi"));
+    bench.linkSystemLibrary("hermes_lean");
+    bench.linkSystemLibrary("jsi");
+
+    bench.addIncludePath(b.path("vendor/libuv/include"));
+    bench.addLibraryPath(b.path("vendor/libuv/build"));
+    bench.linkSystemLibrary("uv");
+
+    b.installArtifact(bench);
+
+    const run_bench = b.addRunArtifact(bench);
+    run_bench.step.dependOn(b.getInstallStep());
+
+    const bench_step = b.step("bench", "Run performance benchmarks");
+    bench_step.dependOn(&run_bench.step);
+
+    // ============================================================================
     // Run command
     // ============================================================================
     const run_cmd = b.addRunArtifact(exe);

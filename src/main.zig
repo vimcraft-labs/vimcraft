@@ -1591,3 +1591,14 @@ test "main: imports" {
     _ = ModeManager;
     _ = movement;
 }
+
+// ============================================================================
+// Public exports for benchmarks and other tools
+// ============================================================================
+pub const __Buffer = Buffer;
+pub const __Display = Display;
+pub const __VisualState = VisualState;
+pub const __YankHighlight = YankHighlight;
+pub const __RegisterManager = RegisterManager;
+pub const __paste = paste;
+pub const __highlights = highlights;
