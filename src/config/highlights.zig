@@ -52,6 +52,7 @@ pub const HighlightConfig = struct {
     visual: ?Highlight = null,
     yank_flash: ?Highlight = null,  // Brief flash after yank
     line_nr: ?Highlight = null,
+    cursorline_nr: ?Highlight = null, // Line number on cursor line (CursorLineNr)
 
     // Options
     cursorline_enabled: bool = false,
@@ -84,6 +85,8 @@ pub const HighlightConfig = struct {
             self.yank_flash = hl;
         } else if (std.mem.eql(u8, name, "LineNr")) {
             self.line_nr = hl;
+        } else if (std.mem.eql(u8, name, "CursorLineNr")) {
+            self.cursorline_nr = hl;
         }
         // Add more highlight groups as needed
     }
@@ -100,6 +103,8 @@ pub const HighlightConfig = struct {
             return self.yank_flash;
         } else if (std.mem.eql(u8, name, "LineNr")) {
             return self.line_nr;
+        } else if (std.mem.eql(u8, name, "CursorLineNr")) {
+            return self.cursorline_nr;
         }
         return null;
     }

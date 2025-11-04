@@ -402,8 +402,17 @@ pub const Display = struct {
                 const gutter_str = gutter_buf[0..gutter_str_len];
 
                 // Render gutter to grid with line number highlight
-                const gutter_fg = if (config.line_nr) |ln| ln.fg else null;
-                const gutter_bg = if (config.line_nr) |ln| ln.bg else null;
+                // Use CursorLineNr for cursor line, LineNr for others
+                const is_cursor_line = (line_num == buffer.cursor.row);
+                const line_nr_hl = if (is_cursor_line and config.cursorline_nr != null)
+                    config.cursorline_nr.?
+                else if (config.line_nr != null)
+                    config.line_nr.?
+                else
+                    null;
+
+                const gutter_fg = if (line_nr_hl) |hl| hl.fg else null;
+                const gutter_bg = if (line_nr_hl) |hl| hl.bg else null;
 
                 var gutter_col: usize = 0;
                 var byte_idx: usize = 0;

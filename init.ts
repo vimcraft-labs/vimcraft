@@ -7,6 +7,8 @@ const colors = {
 
   fg: '#d4d4d4',
   fgAlt: '#808080',
+  lineNumber: '#343543',
+  activeLineNumber: '#51afef',
 
   red: '#e06c75',
   green: '#98c379',
@@ -21,8 +23,11 @@ const highlights = {
   CursorLine: {
     bg: colors.bgHighlight,
   },
+  CursorLineNr: {
+    fg: colors.activeLineNumber,
+  },
   LineNr: {
-    fg: colors.fgAlt,
+    fg: colors.lineNumber,
   },
   Comment: {
     fg: colors.gray,
