@@ -383,18 +383,150 @@ fn pasteLineWiseBefore(buffer: *Buffer, reg: *const YankReg) !Cursor {
     return new_cursor;
 }
 
-// ===== Block-wise Paste (Stubs for Week 5) =====
+// ===== Block-wise Paste =====
 
 /// Paste block-wise text after cursor
-fn pasteBlockWiseAfter(_: *Buffer, _: *const YankReg) !Cursor {
-    // TODO: Week 5
-    return error.NotImplemented;
+/// Inserts rectangular block of text starting one column after cursor
+fn pasteBlockWiseAfter(buffer: *Buffer, reg: *const YankReg) !Cursor {
+    if (reg.lines.items.len == 0) return buffer.cursor;
+
+    const cursor_before = buffer.cursor;
+    const start_row = cursor_before.row;
+    const start_col = cursor_before.col + 1; // Paste AFTER cursor
+
+    // For each line in the block, insert at the same column
+    var line_num: usize = 0;
+    while (line_num < reg.lines.items.len) : (line_num += 1) {
+        const target_row = start_row + line_num;
+        const block_text = reg.lines.items[line_num];
+
+        if (block_text.len == 0) continue; // Skip empty lines in block
+
+        // Ensure target line exists
+        while (buffer.lineCount() <= target_row) {
+            const offset = buffer.content.items.len;
+            try buffer.content.append(buffer.allocator, '\n');
+            try buffer.line_starts.append(buffer.allocator, offset);
+        }
+
+        const target_line = buffer.getLine(target_row) orelse continue;
+
+        // Calculate offset for insertion
+        var line_start_offset: usize = 0;
+        if (target_row < buffer.line_starts.items.len) {
+            line_start_offset = buffer.line_starts.items[target_row];
+        }
+
+        // If line is shorter than start_col, pad with spaces
+        const line_len_without_newline = if (target_line.len > 0 and target_line[target_line.len - 1] == '\n')
+            target_line.len - 1
+        else
+            target_line.len;
+
+        if (start_col > line_len_without_newline) {
+            // Need to pad with spaces
+            const padding_needed = start_col - line_len_without_newline;
+            const insert_offset = line_start_offset + line_len_without_newline;
+
+            // Insert padding + block text
+            var padded_text = try buffer.allocator.alloc(u8, padding_needed + block_text.len);
+            defer buffer.allocator.free(padded_text);
+
+            @memset(padded_text[0..padding_needed], ' ');
+            @memcpy(padded_text[padding_needed..], block_text);
+
+            try buffer.content.insertSlice(buffer.allocator, insert_offset, padded_text);
+        } else {
+            // Insert at start_col
+            const insert_offset = line_start_offset + start_col;
+            try buffer.content.insertSlice(buffer.allocator, insert_offset, block_text);
+        }
+    }
+
+    // Rebuild line index
+    try buffer.buildLineIndex();
+
+    // Cursor lands at start of pasted block
+    const new_cursor = Cursor{
+        .row = start_row,
+        .col = start_col,
+    };
+    buffer.cursor = new_cursor;
+
+    buffer.modified = true;
+    return new_cursor;
 }
 
 /// Paste block-wise text before cursor
-fn pasteBlockWiseBefore(_: *Buffer, _: *const YankReg) !Cursor {
-    // TODO: Week 5
-    return error.NotImplemented;
+/// Inserts rectangular block of text starting at cursor column
+fn pasteBlockWiseBefore(buffer: *Buffer, reg: *const YankReg) !Cursor {
+    if (reg.lines.items.len == 0) return buffer.cursor;
+
+    const cursor_before = buffer.cursor;
+    const start_row = cursor_before.row;
+    const start_col = cursor_before.col; // Paste AT cursor
+
+    // For each line in the block, insert at the same column
+    var line_num: usize = 0;
+    while (line_num < reg.lines.items.len) : (line_num += 1) {
+        const target_row = start_row + line_num;
+        const block_text = reg.lines.items[line_num];
+
+        if (block_text.len == 0) continue; // Skip empty lines in block
+
+        // Ensure target line exists
+        while (buffer.lineCount() <= target_row) {
+            const offset = buffer.content.items.len;
+            try buffer.content.append(buffer.allocator, '\n');
+            try buffer.line_starts.append(buffer.allocator, offset);
+        }
+
+        const target_line = buffer.getLine(target_row) orelse continue;
+
+        // Calculate offset for insertion
+        var line_start_offset: usize = 0;
+        if (target_row < buffer.line_starts.items.len) {
+            line_start_offset = buffer.line_starts.items[target_row];
+        }
+
+        // If line is shorter than start_col, pad with spaces
+        const line_len_without_newline = if (target_line.len > 0 and target_line[target_line.len - 1] == '\n')
+            target_line.len - 1
+        else
+            target_line.len;
+
+        if (start_col > line_len_without_newline) {
+            // Need to pad with spaces
+            const padding_needed = start_col - line_len_without_newline;
+            const insert_offset = line_start_offset + line_len_without_newline;
+
+            // Insert padding + block text
+            var padded_text = try buffer.allocator.alloc(u8, padding_needed + block_text.len);
+            defer buffer.allocator.free(padded_text);
+
+            @memset(padded_text[0..padding_needed], ' ');
+            @memcpy(padded_text[padding_needed..], block_text);
+
+            try buffer.content.insertSlice(buffer.allocator, insert_offset, padded_text);
+        } else {
+            // Insert at start_col
+            const insert_offset = line_start_offset + start_col;
+            try buffer.content.insertSlice(buffer.allocator, insert_offset, block_text);
+        }
+    }
+
+    // Rebuild line index
+    try buffer.buildLineIndex();
+
+    // Cursor lands at start of pasted block (same as before)
+    const new_cursor = Cursor{
+        .row = start_row,
+        .col = start_col,
+    };
+    buffer.cursor = new_cursor;
+
+    buffer.modified = true;
+    return new_cursor;
 }
 
 // ===== Tests =====
@@ -545,4 +677,138 @@ test "paste: empty register returns unchanged cursor" {
     // Cursor should be unchanged
     try std.testing.expectEqual(cursor_before.row, cursor_after.row);
     try std.testing.expectEqual(cursor_before.col, cursor_after.col);
+}
+
+test "paste: block-wise after cursor" {
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    var register_mgr = RegisterManager.init(allocator);
+    defer register_mgr.deinit();
+
+    // Create buffer with content
+    const tmp_path = "/tmp/openvim_paste_block_after.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll("abcdef\nghijkl\nmnopqr\n");
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Set cursor to column 2 on line 0
+    buffer.moveCursorTo(0, 2);
+
+    // Put block text in register (3 lines of "XXX")
+    const block_text = [_][]const u8{ "XXX", "YYY", "ZZZ" };
+    try register_mgr.setRegister('"', &block_text, .block_wise);
+
+    // Paste block after cursor (should insert after column 2)
+    _ = try pasteAfter(&buffer, &register_mgr, '"');
+
+    // Check result:
+    // Line 0: "abcXXXdef\n"
+    // Line 1: "ghiYYYjkl\n"
+    // Line 2: "mnoZZZpqr\n"
+    const line0 = buffer.getLine(0).?;
+    const line1 = buffer.getLine(1).?;
+    const line2 = buffer.getLine(2).?;
+
+    try std.testing.expectEqualStrings("abcXXXdef\n", line0);
+    try std.testing.expectEqualStrings("ghiYYYjkl\n", line1);
+    try std.testing.expectEqualStrings("mnoZZZpqr\n", line2);
+
+    // Cursor should be at start of pasted block (row 0, col 3)
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 3), buffer.cursor.col);
+}
+
+test "paste: block-wise before cursor" {
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    var register_mgr = RegisterManager.init(allocator);
+    defer register_mgr.deinit();
+
+    // Create buffer with content
+    const tmp_path = "/tmp/openvim_paste_block_before.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll("abcdef\nghijkl\nmnopqr\n");
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Set cursor to column 2 on line 0
+    buffer.moveCursorTo(0, 2);
+
+    // Put block text in register
+    const block_text = [_][]const u8{ "XXX", "YYY", "ZZZ" };
+    try register_mgr.setRegister('"', &block_text, .block_wise);
+
+    // Paste block before cursor (should insert at column 2)
+    _ = try pasteBefore(&buffer, &register_mgr, '"');
+
+    // Check result:
+    // Line 0: "abXXXcdef\n"
+    // Line 1: "ghYYYijkl\n"
+    // Line 2: "mnZZZopqr\n"
+    const line0 = buffer.getLine(0).?;
+    const line1 = buffer.getLine(1).?;
+    const line2 = buffer.getLine(2).?;
+
+    try std.testing.expectEqualStrings("abXXXcdef\n", line0);
+    try std.testing.expectEqualStrings("ghYYYijkl\n", line1);
+    try std.testing.expectEqualStrings("mnZZZopqr\n", line2);
+
+    // Cursor should be at start of pasted block (row 0, col 2)
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 2), buffer.cursor.col);
+}
+
+test "paste: block-wise with padding (short lines)" {
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    var register_mgr = RegisterManager.init(allocator);
+    defer register_mgr.deinit();
+
+    // Create buffer with short lines
+    const tmp_path = "/tmp/openvim_paste_block_pad.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll("ab\ncd\nef\n");
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Set cursor to column 5 (beyond line end)
+    buffer.moveCursorTo(0, 5);
+
+    // Put block text in register
+    const block_text = [_][]const u8{ "XXX", "YYY", "ZZZ" };
+    try register_mgr.setRegister('"', &block_text, .block_wise);
+
+    // Paste block after cursor (should pad with spaces)
+    _ = try pasteAfter(&buffer, &register_mgr, '"');
+
+    // Check result - lines should be padded to column 6, then block inserted
+    // Line 0: "ab    XXX\n" (4 spaces padding to get to col 6)
+    // Line 1: "cd    YYY\n"
+    // Line 2: "ef    ZZZ\n"
+    const line0 = buffer.getLine(0).?;
+    const line1 = buffer.getLine(1).?;
+    const line2 = buffer.getLine(2).?;
+
+    try std.testing.expectEqualStrings("ab    XXX\n", line0);
+    try std.testing.expectEqualStrings("cd    YYY\n", line1);
+    try std.testing.expectEqualStrings("ef    ZZZ\n", line2);
 }
