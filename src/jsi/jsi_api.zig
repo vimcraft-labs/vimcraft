@@ -604,7 +604,7 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
     const source = try file.readToEndAlloc(allocator, 1_000_000);
     defer allocator.free(source);
 
-    // Wrap in vim API setup
+    // Wrap in vim API setup (React Native style)
     const wrapped_source = try std.fmt.allocPrint(allocator,
         \\// console object (for debugging)
         \\const console = {{
@@ -627,6 +627,33 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
         \\function clearInterval(id) {{
         \\  zigClearTimer(id);
         \\}}
+        \\
+        \\// Performance API (React Native style)
+        \\// This enables Chrome DevTools Performance timeline!
+        \\const performance = {{
+        \\  _marks: {{}},
+        \\  _measures: [],
+        \\  now: function() {{
+        \\    return Date.now(); // Milliseconds since epoch
+        \\  }},
+        \\  mark: function(name) {{
+        \\    this._marks[name] = this.now();
+        \\  }},
+        \\  measure: function(name, startMark, endMark) {{
+        \\    const start = this._marks[startMark] || 0;
+        \\    const end = endMark ? (this._marks[endMark] || this.now()) : this.now();
+        \\    const duration = end - start;
+        \\    this._measures.push({{ name, duration, startTime: start }});
+        \\  }},
+        \\  clearMarks: function(name) {{
+        \\    if (name) delete this._marks[name];
+        \\    else this._marks = {{}};
+        \\  }},
+        \\  getEntriesByType: function(type) {{
+        \\    if (type === 'measure') return this._measures;
+        \\    return [];
+        \\  }}
+        \\}};
         \\
         \\// vim API object
         \\const vim = {{

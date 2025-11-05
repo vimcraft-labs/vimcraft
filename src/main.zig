@@ -779,8 +779,10 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         render_stats.loop_iterations += 1;
 
         // Run libuv event loop to process timers and async events (non-blocking)
-        const had_events = event_loop.runOnce();
-        if (had_events) needs_render = true; // Timer fired or async event
+        // NOTE: runOnce() returns true if there are ACTIVE handles (WebSocket server, file watcher, timers),
+        // not whether events actually fired. So we don't use it to trigger renders.
+        // Instead, timers and events update state directly (e.g., yank_highlight, config reload).
+        _ = event_loop.runOnce();
 
         // Check if config needs reload (triggered by file watcher)
         if (reload_state.needs_reload) {
@@ -796,11 +798,8 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         // Only render if something changed
         if (needs_render) {
             // Track render source for debugging/profiling
-            // In debug mode, we treat had_events (timers) specially
             const render_source: RenderSource = if (reload_state.needs_reload)
                 .config
-            else if (had_events)
-                .timer
             else
                 .input;
             render_stats.recordRender(render_source);
@@ -822,30 +821,8 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
             }
 
             try display.flush();
+
             needs_render = false; // Reset flag after rendering
-        }
-
-        // Report performance stats to Chrome DevTools (every ~1 second)
-        if (render_stats.loop_iterations % 60 == 0 and debugger.isConnected()) {
-            const rps = render_stats.getRendersPerSecond();
-            const idle = render_stats.getIdlePercentage();
-            const uptime_seconds = @as(f64, @floatFromInt(std.time.milliTimestamp() - render_stats.start_time_ms)) / 1000.0;
-
-            const msg = try std.fmt.allocPrint(
-                allocator,
-                "[Performance] Renders: {d} total ({d:.1}/sec) | Idle: {d:.1}% | Input:{d} Config:{d} Timer:{d} | Uptime:{d:.1}s",
-                .{
-                    render_stats.total_renders,
-                    rps,
-                    idle,
-                    render_stats.renders_from_input,
-                    render_stats.renders_from_config,
-                    render_stats.renders_from_timer,
-                    uptime_seconds,
-                },
-            );
-            defer allocator.free(msg);
-            debugger.log(msg, .info);
         }
     }
 
