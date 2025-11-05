@@ -327,10 +327,21 @@ pub const Display = struct {
         else
             self.terminal_cols;
 
-        if (buffer.cursor.col >= self.viewport_left + text_cols) {
-            self.viewport_left = buffer.cursor.col - text_cols + 1;
-        } else if (buffer.cursor.col < self.viewport_left) {
-            self.viewport_left = buffer.cursor.col;
+        // Convert cursor byte position to display column (account for wide chars like emoji)
+        // This is needed for both horizontal scroll and cursor positioning
+        const cursor_display_col = if (buffer.cursor.row < buffer.lineCount()) blk: {
+            const line = buffer.getLine(buffer.cursor.row) orelse break :blk buffer.cursor.col;
+            const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
+                line[0 .. line.len - 1]
+            else
+                line;
+            break :blk char_width.byteToDisplayColumn(line_without_newline, buffer.cursor.col);
+        } else buffer.cursor.col;
+
+        if (cursor_display_col >= self.viewport_left + text_cols) {
+            self.viewport_left = cursor_display_col - text_cols + 1;
+        } else if (cursor_display_col < self.viewport_left) {
+            self.viewport_left = cursor_display_col;
         }
 
         // STEP 1: Update grid from buffer content (render to memory)
@@ -354,8 +365,8 @@ pub const Display = struct {
         else
             0;
 
-        const screen_col_text = if (buffer.cursor.col >= self.viewport_left)
-            buffer.cursor.col - self.viewport_left
+        const screen_col_text = if (cursor_display_col >= self.viewport_left)
+            cursor_display_col - self.viewport_left
         else
             0;
 
