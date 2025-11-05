@@ -444,38 +444,51 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         try display.flush();
     }
 
-    // Main event loop - render only after state changes
+    // Main event loop - render only after state changes (lazy rendering)
     var running = true;
+    var needs_render = false; // Track whether rendering is needed
+
     while (running) {
         // Run libuv event loop to process timers and async events (non-blocking)
+        // NOTE: runOnce() returns true if there are ACTIVE handles (file watcher, timers),
+        // not whether events actually fired. So we don't use it to trigger renders.
+        // Instead, timers and events update state directly (e.g., yank_highlight, config reload).
         _ = event_loop.runOnce();
 
         // Check if config needs reload (triggered by file watcher)
-        reload_state.reload() catch {};
+        if (reload_state.needs_reload) {
+            reload_state.reload() catch {};
+            needs_render = true;
+        }
 
         // Handle input with short timeout to keep UI responsive
         // libuv handles timer firing, so we just need to poll for input
-        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &pending_register, &visual_state, &yank_highlight, &register_mgr, allocator, &debugger_state, 10);
+        // Returns false to quit, sets needs_render if state changed
+        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &pending_register, &visual_state, &yank_highlight, &register_mgr, allocator, &debugger_state, 10, &needs_render);
 
-        // Render after input (something changed)
-        const status = if (mode_manager.isCommand())
-            try std.fmt.allocPrint(allocator, ":{s}", .{cmd_buffer.getString()})
-        else if (mode_manager.isVisual() and visual_state.active)
-            try allocator.dupe(u8, visual_state.mode.toString())
-        else
-            try allocator.dupe(u8, mode_manager.getModeString());
-        defer allocator.free(status);
+        // Only render if something changed
+        if (needs_render) {
 
-        try display.render(&buffer, status, &highlight_config, &visual_state, &yank_highlight);
+            const status = if (mode_manager.isCommand())
+                try std.fmt.allocPrint(allocator, ":{s}", .{cmd_buffer.getString()})
+            else if (mode_manager.isVisual() and visual_state.active)
+                try allocator.dupe(u8, visual_state.mode.toString())
+            else
+                try allocator.dupe(u8, mode_manager.getModeString());
+            defer allocator.free(status);
 
-        // Set cursor shape based on mode
-        if (mode_manager.isInsert()) {
-            try display.setCursorBar(); // Thin bar in insert mode
-        } else {
-            try display.setCursorBlock(); // Block in normal/command mode
+            try display.render(&buffer, status, &highlight_config, &visual_state, &yank_highlight);
+
+            // Set cursor shape based on mode
+            if (mode_manager.isInsert()) {
+                try display.setCursorBar(); // Thin bar in insert mode
+            } else {
+                try display.setCursorBlock(); // Block in normal/command mode
+            }
+
+            try display.flush();
+            needs_render = false; // Reset flag after rendering
         }
-
-        try display.flush();
     }
 
     // Clean exit
@@ -703,36 +716,46 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         try display.flush();
     }
 
-    // Main event loop
+    // Main event loop - render only after state changes (lazy rendering)
     var running = true;
+    var needs_render = false; // Track whether rendering is needed
     while (running) {
         // Run libuv event loop to process timers and async events (non-blocking)
-        _ = event_loop.runOnce();
+        const had_events = event_loop.runOnce();
+        if (had_events) needs_render = true; // Timer fired or async event
 
         // Check if config needs reload (triggered by file watcher)
-        reload_state.reload() catch {};
+        if (reload_state.needs_reload) {
+            reload_state.reload() catch {};
+            needs_render = true;
+        }
 
         // Handle input with short timeout to keep UI responsive
         // libuv handles timer firing, so we just need to poll for input
-        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &pending_register, &visual_state, &yank_highlight, &register_mgr, allocator, &debugger_state, 10);
+        // Returns false to quit, sets needs_render if state changed
+        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &pending_register, &visual_state, &yank_highlight, &register_mgr, allocator, &debugger_state, 10, &needs_render);
 
-        const status = if (mode_manager.isCommand())
-            try std.fmt.allocPrint(allocator, ":{s}", .{cmd_buffer.getString()})
-        else if (mode_manager.isVisual() and visual_state.active)
-            try allocator.dupe(u8, visual_state.mode.toString())
-        else
-            try allocator.dupe(u8, mode_manager.getModeString());
-        defer allocator.free(status);
+        // Only render if something changed
+        if (needs_render) {
+            const status = if (mode_manager.isCommand())
+                try std.fmt.allocPrint(allocator, ":{s}", .{cmd_buffer.getString()})
+            else if (mode_manager.isVisual() and visual_state.active)
+                try allocator.dupe(u8, visual_state.mode.toString())
+            else
+                try allocator.dupe(u8, mode_manager.getModeString());
+            defer allocator.free(status);
 
-        try display.render(&buffer, status, &highlight_config, &visual_state, &yank_highlight);
+            try display.render(&buffer, status, &highlight_config, &visual_state, &yank_highlight);
 
-        if (mode_manager.isInsert()) {
-            try display.setCursorBar();
-        } else {
-            try display.setCursorBlock();
+            if (mode_manager.isInsert()) {
+                try display.setCursorBar();
+            } else {
+                try display.setCursorBlock();
+            }
+
+            try display.flush();
+            needs_render = false; // Reset flag after rendering
         }
-
-        try display.flush();
     }
 
     // Clean exit
@@ -757,6 +780,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
 /// Handle keyboard input with timeout (for timer support)
 /// Returns false to quit
+/// Sets needs_render flag if state changed
 fn handleInputWithTimeout(
     buffer: *Buffer,
     display: *Display,
@@ -770,6 +794,7 @@ fn handleInputWithTimeout(
     allocator: std.mem.Allocator,
     debugger_state: *DebuggerState,
     timeout_ms: ?i64,
+    needs_render: *bool,
 ) !bool {
     const stdin = std.fs.File.stdin();
     var buf: [16]u8 = undefined;
@@ -795,14 +820,17 @@ fn handleInputWithTimeout(
 
     // If no input available (timeout or no data), return true (continue)
     if (poll_result == 0 or poll_fds[0].revents == 0) {
-        return true;
+        return true; // No input, no state change, don't render
     }
 
     // Read input (non-blocking)
     const bytes_read = try stdin.read(&buf);
     if (bytes_read == 0) {
-        return true;
+        return true; // No actual data, no state change
     }
+
+    // We have input - state will change, need to render
+    needs_render.* = true;
 
     const input = buf[0..bytes_read];
 
