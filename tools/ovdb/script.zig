@@ -17,7 +17,6 @@ pub const ScriptCommand = struct {
             .assert_visual_mode => |a| allocator.free(a.mode),
             .assert_register => |a| allocator.free(a.text),
             .assert_line => |a| allocator.free(a.text),
-            .benchmark => |a| allocator.free(a.operation),
             else => {},
         }
         allocator.free(self.raw_line);

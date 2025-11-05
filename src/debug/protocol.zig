@@ -29,9 +29,6 @@ pub const CommandType = enum {
     assert_register,
     assert_line,
 
-    // Performance
-    benchmark,
-
     // Control
     ping,
     shutdown,
@@ -69,7 +66,6 @@ pub const CommandArgs = union(enum) {
     assert_visual_mode: struct { mode: []const u8 }, // "char", "line", "block"
     assert_register: struct { name: u8, text: []const u8 },
     assert_line: struct { line: usize, text: []const u8 },
-    benchmark: struct { operation: []const u8, iterations: usize },
 };
 
 /// Command message
@@ -102,7 +98,6 @@ pub const Command = struct {
             .assert_line => |a| {
                 allocator.free(a.text);
             },
-            .benchmark => |a| allocator.free(a.operation),
             else => {},
         }
     }
@@ -130,7 +125,6 @@ pub const ResponseResult = union(enum) {
     buffer: BufferState,
     execute_keys: struct { keys_processed: usize },
     assertion: AssertionResult,
-    benchmark: BenchmarkResult,
     pong: struct { version: []const u8 },
 };
 
@@ -261,18 +255,6 @@ pub const AssertionResult = struct {
     expected: ?[]const u8,
     actual: ?[]const u8,
     diff: ?[]const u8,
-};
-
-/// Benchmark result
-pub const BenchmarkResult = struct {
-    iterations: usize,
-    total_ns: u64,
-    avg_ns: u64,
-    avg_ms: f64,
-    min_ns: u64,
-    max_ns: u64,
-    within_target: bool,
-    target_ms: f64,
 };
 
 // Tests

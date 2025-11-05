@@ -99,6 +99,50 @@ const DebuggerState = struct {
     }
 };
 
+/// Render source type
+pub const RenderSource = enum {
+    input,
+    config,
+    timer,
+};
+
+/// Render statistics for debugging and profiling
+pub const RenderStats = struct {
+    total_renders: usize = 0,
+    renders_from_input: usize = 0,
+    renders_from_config: usize = 0,
+    renders_from_timer: usize = 0,
+    loop_iterations: usize = 0,
+    start_time_ms: i64 = 0,
+
+    pub fn init() RenderStats {
+        return .{
+            .start_time_ms = std.time.milliTimestamp(),
+        };
+    }
+
+    pub fn recordRender(self: *RenderStats, source: RenderSource) void {
+        self.total_renders += 1;
+        switch (source) {
+            .input => self.renders_from_input += 1,
+            .config => self.renders_from_config += 1,
+            .timer => self.renders_from_timer += 1,
+        }
+    }
+
+    pub fn getRendersPerSecond(self: *const RenderStats) f64 {
+        const elapsed_ms = std.time.milliTimestamp() - self.start_time_ms;
+        if (elapsed_ms <= 0) return 0.0;
+        return @as(f64, @floatFromInt(self.total_renders)) / (@as(f64, @floatFromInt(elapsed_ms)) / 1000.0);
+    }
+
+    pub fn getIdlePercentage(self: *const RenderStats) f64 {
+        if (self.loop_iterations == 0) return 100.0;
+        const idle_iterations = self.loop_iterations - self.total_renders;
+        return (@as(f64, @floatFromInt(idle_iterations)) / @as(f64, @floatFromInt(self.loop_iterations))) * 100.0;
+    }
+};
+
 /// State for configuration hot reload
 const ReloadState = struct {
     highlight_config: *highlights.HighlightConfig,
@@ -447,8 +491,11 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     // Main event loop - render only after state changes (lazy rendering)
     var running = true;
     var needs_render = false; // Track whether rendering is needed
+    var render_stats = RenderStats.init();
 
     while (running) {
+        render_stats.loop_iterations += 1;
+
         // Run libuv event loop to process timers and async events (non-blocking)
         // NOTE: runOnce() returns true if there are ACTIVE handles (file watcher, timers),
         // not whether events actually fired. So we don't use it to trigger renders.
@@ -468,6 +515,13 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
         // Only render if something changed
         if (needs_render) {
+            // Track render source for debugging/profiling
+            // NOTE: We prioritize config reload over input since config affects everything
+            const render_source: RenderSource = if (reload_state.needs_reload or reload_state.needs_reload)
+                .config
+            else
+                .input;
+            render_stats.recordRender(render_source);
 
             const status = if (mode_manager.isCommand())
                 try std.fmt.allocPrint(allocator, ":{s}", .{cmd_buffer.getString()})
@@ -719,7 +773,11 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     // Main event loop - render only after state changes (lazy rendering)
     var running = true;
     var needs_render = false; // Track whether rendering is needed
+    var render_stats = RenderStats.init();
+
     while (running) {
+        render_stats.loop_iterations += 1;
+
         // Run libuv event loop to process timers and async events (non-blocking)
         const had_events = event_loop.runOnce();
         if (had_events) needs_render = true; // Timer fired or async event
@@ -737,6 +795,16 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
         // Only render if something changed
         if (needs_render) {
+            // Track render source for debugging/profiling
+            // In debug mode, we treat had_events (timers) specially
+            const render_source: RenderSource = if (reload_state.needs_reload)
+                .config
+            else if (had_events)
+                .timer
+            else
+                .input;
+            render_stats.recordRender(render_source);
+
             const status = if (mode_manager.isCommand())
                 try std.fmt.allocPrint(allocator, ":{s}", .{cmd_buffer.getString()})
             else if (mode_manager.isVisual() and visual_state.active)
@@ -755,6 +823,29 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
             try display.flush();
             needs_render = false; // Reset flag after rendering
+        }
+
+        // Report performance stats to Chrome DevTools (every ~1 second)
+        if (render_stats.loop_iterations % 60 == 0 and debugger.isConnected()) {
+            const rps = render_stats.getRendersPerSecond();
+            const idle = render_stats.getIdlePercentage();
+            const uptime_seconds = @as(f64, @floatFromInt(std.time.milliTimestamp() - render_stats.start_time_ms)) / 1000.0;
+
+            const msg = try std.fmt.allocPrint(
+                allocator,
+                "[Performance] Renders: {d} total ({d:.1}/sec) | Idle: {d:.1}% | Input:{d} Config:{d} Timer:{d} | Uptime:{d:.1}s",
+                .{
+                    render_stats.total_renders,
+                    rps,
+                    idle,
+                    render_stats.renders_from_input,
+                    render_stats.renders_from_config,
+                    render_stats.renders_from_timer,
+                    uptime_seconds,
+                },
+            );
+            defer allocator.free(msg);
+            debugger.log(msg, .info);
         }
     }
 

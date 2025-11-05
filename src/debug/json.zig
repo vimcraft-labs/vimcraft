@@ -62,9 +62,6 @@ fn serializeCommandArgs(args: protocol.CommandArgs, writer: anytype) !void {
         .assert_line => |a| {
             try writer.print("{{\"line\":{d},\"text\":\"{s}\"}}", .{ a.line, a.text });
         },
-        .benchmark => |a| {
-            try writer.print("{{\"operation\":\"{s}\",\"iterations\":{d}}}", .{ a.operation, a.iterations });
-        },
     }
 }
 
@@ -129,18 +126,6 @@ fn serializeResponseResult(result: protocol.ResponseResult, writer: anytype) !vo
                 try writer.print("\"diff\":\"{s}\"", .{d});
             }
             try writer.writeAll("}");
-        },
-        .benchmark => |b| {
-            try writer.print("{{\"iterations\":{d},\"total_ns\":{d},\"avg_ns\":{d},\"avg_ms\":{d:.3},\"min_ns\":{d},\"max_ns\":{d},\"within_target\":{},\"target_ms\":{d:.1}}}", .{
-                b.iterations,
-                b.total_ns,
-                b.avg_ns,
-                b.avg_ms,
-                b.min_ns,
-                b.max_ns,
-                b.within_target,
-                b.target_ms,
-            });
         },
         .pong => |p| {
             try writer.print("{{\"version\":\"{s}\"}}", .{p.version});
@@ -241,13 +226,6 @@ fn parseCommandArgs(cmd: protocol.CommandType, args_obj: std.json.Value, allocat
             const text = args_obj.object.get("text").?.string;
             const owned = try allocator.dupe(u8, text);
             break :blk .{ .assert_line = .{ .line = line, .text = owned } };
-        },
-
-        .benchmark => blk: {
-            const operation = args_obj.object.get("operation").?.string;
-            const iterations = @as(usize, @intCast(args_obj.object.get("iterations").?.integer));
-            const owned = try allocator.dupe(u8, operation);
-            break :blk .{ .benchmark = .{ .operation = owned, .iterations = iterations } };
         },
     };
 }

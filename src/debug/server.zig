@@ -203,12 +203,6 @@ pub const Server = struct {
                 // TODO: Verify line content
                 return error.NotImplemented;
             },
-
-            // Performance
-            .benchmark => {
-                // TODO: Run benchmark
-                return error.NotImplemented;
-            },
         };
     }
 };
