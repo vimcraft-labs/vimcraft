@@ -5,6 +5,7 @@ const colors = {
   fg: '#ABB2BF',
   bgAlt: '#252526',
   cursorLine: '#1E202F',
+  visual: '#283457',
 
   // fg: '#d4d4d4',
   fgAlt: '#808080',
@@ -24,6 +25,9 @@ const highlights = {
   Normal: {
     bg: colors.bg,
     fg: colors.fg,
+  },
+  Visual: {
+    bg: colors.visual,
   },
   CursorLine: {
     bg: colors.cursorLine,
