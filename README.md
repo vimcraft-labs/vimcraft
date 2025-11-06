@@ -134,7 +134,7 @@ OpenVim follows a **four-layer architecture**:
 ┌─────────────────────────────────────────────────────┐
 │  Layer 4: User Configuration (init.js)              │
 │  - User's ~/.config/openvim/init.js                 │
-│  - JavaScript/TypeScript for maximum flexibility     │
+│  - JavaScript/TypeScript for maximum flexibility    │
 └─────────────────────────────────────────────────────┘
                         ↓↑
 ┌─────────────────────────────────────────────────────┐
@@ -148,8 +148,8 @@ OpenVim follows a **four-layer architecture**:
 ┌─────────────────────────────────────────────────────┐
 │  Layer 2: JSI Bridge (Zero-copy)                    │
 │  - Hermes C API wrapper (hermes_c_api.cpp)          │
-│  - Zig FFI bindings (src/jsi/hermes.zig)           │
-│  - Direct function calls, no serialization         │
+│  - Zig FFI bindings (src/jsi/hermes.zig)            │
+│  - Direct function calls, no serialization          │
 └─────────────────────────────────────────────────────┘
                         ↓↑
 ┌─────────────────────────────────────────────────────┐

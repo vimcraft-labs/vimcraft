@@ -1,5 +1,6 @@
 const std = @import("std");
 const Buffer = @import("../buffer/buffer.zig").Buffer;
+const grapheme = @import("ghostty_grapheme");
 
 /// Movement primitives for cursor navigation
 /// Implements Vim-style movement commands
@@ -7,15 +8,86 @@ const Buffer = @import("../buffer/buffer.zig").Buffer;
 /// Move left (h)
 pub fn moveLeft(buffer: *Buffer) void {
     if (buffer.cursor.col > 0) {
-        buffer.cursor.col -= 1;
+        const line = buffer.getLine(buffer.cursor.row) orelse {
+            buffer.cursor.col -= 1;
+            return;
+        };
+
+        // Find the start of the current grapheme cluster by walking backwards
+        var pos = buffer.cursor.col;
+
+        // Move back one byte to start searching
+        pos -= 1;
+        while (pos > 0 and (line[pos] & 0b1100_0000) == 0b1000_0000) {
+            pos -= 1; // Skip UTF-8 continuation bytes to find codepoint start
+        }
+
+        // Now walk backwards through codepoints until we find a grapheme break
+        var state: grapheme.BreakState = .{};
+        var cluster_start = pos;
+
+        while (cluster_start > 0) {
+            // Find previous codepoint start
+            var prev_pos = cluster_start - 1;
+            while (prev_pos > 0 and (line[prev_pos] & 0b1100_0000) == 0b1000_0000) {
+                prev_pos -= 1;
+            }
+
+            // Decode both codepoints
+            const cp1 = std.unicode.utf8Decode(line[prev_pos..cluster_start]) catch break;
+
+            const curr_len = std.unicode.utf8ByteSequenceLength(line[cluster_start]) catch break;
+            if (cluster_start + curr_len > line.len) break;
+            const cp2 = std.unicode.utf8Decode(line[cluster_start..][0..curr_len]) catch break;
+
+            // Check for grapheme break
+            if (grapheme.graphemeBreak(cp1, cp2, &state)) {
+                break; // Found a break, cluster starts here
+            }
+
+            // No break, this codepoint is part of the cluster
+            cluster_start = prev_pos;
+        }
+
+        buffer.cursor.col = cluster_start;
     }
 }
 
 /// Move right (l)
 pub fn moveRight(buffer: *Buffer) void {
+    const line = buffer.getLine(buffer.cursor.row) orelse return;
     const line_len = buffer.getLineLength(buffer.cursor.row);
+
     if (line_len > 0 and buffer.cursor.col < line_len - 1) {
-        buffer.cursor.col += 1;
+        var pos = buffer.cursor.col;
+        var state: grapheme.BreakState = .{};
+
+        // Skip the first UTF-8 character
+        var prev_start = pos;
+        const first_len = std.unicode.utf8ByteSequenceLength(line[pos]) catch 1;
+        pos += first_len;
+
+        // Keep going until we find a grapheme break
+        while (pos < line_len - 1) {
+            // Decode previous codepoint (from prev_start to pos)
+            const cp1 = std.unicode.utf8Decode(line[prev_start..pos]) catch break;
+
+            // Decode current codepoint
+            const curr_len = std.unicode.utf8ByteSequenceLength(line[pos]) catch break;
+            if (pos + curr_len > line_len) break;
+            const cp2 = std.unicode.utf8Decode(line[pos..][0..curr_len]) catch break;
+
+            // Check for grapheme break
+            if (grapheme.graphemeBreak(cp1, cp2, &state)) {
+                break; // Found a break, stop here
+            }
+
+            // No break, update prev_start and keep going
+            prev_start = pos;
+            pos += curr_len;
+        }
+
+        buffer.cursor.col = @min(pos, line_len - 1);
     }
 }
 

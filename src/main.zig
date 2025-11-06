@@ -19,6 +19,7 @@ const YankHighlight = @import("visual/yank_highlight.zig").YankHighlight;
 const RegisterManager = @import("register/register.zig").RegisterManager;
 const yank = @import("buffer/yank.zig");
 const paste = @import("buffer/paste.zig");
+const cellwidth = @import("display/cellwidth.zig");
 
 // Import Hermes C API (use hermes_c namespace to avoid shadowing)
 const hermes_c = @cImport({
@@ -377,6 +378,10 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
 /// Run the interactive editor (normal mode)
 fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
+    // Initialize cellwidth system for proper character width handling
+    try cellwidth.initGlobal(allocator);
+    defer cellwidth.deinitGlobal(allocator);
+
     // Initialize components
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
@@ -609,6 +614,10 @@ fn launchChromeDevTools(port: u16) !void {
 /// Run the interactive editor with Chrome DevTools debugging enabled
 fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !void {
     const Debugger = @import("debug/debugger.zig").Debugger;
+
+    // Initialize cellwidth system for proper character width handling
+    try cellwidth.initGlobal(allocator);
+    defer cellwidth.deinitGlobal(allocator);
 
     // Initialize components
     var buffer = Buffer.init(allocator);

@@ -20,6 +20,7 @@ pub const Cell = struct {
     /// Check if two cells are equal (for diffing)
     pub fn eql(self: Cell, other: Cell) bool {
         if (self.char != other.char) return false;
+        if (self.is_continuation != other.is_continuation) return false;
         if (self.bold != other.bold) return false;
         if (self.italic != other.italic) return false;
         if (self.underline != other.underline) return false;
@@ -90,11 +91,15 @@ pub const ScreenGrid = struct {
         }
 
         // Allocate previous buffer
+        // IMPORTANT: Initialize with a sentinel value (char=0) instead of blank (char=' ')
+        // This ensures that on first render, ALL cells are detected as changed by diff(),
+        // even cells that happen to be spaces with null colors. Without this, spaces
+        // with fg=null/bg=null would be equal to blank cells and wouldn't render.
         const previous = try allocator.alloc([]Cell, height);
         for (previous) |*row| {
             row.* = try allocator.alloc(Cell, width);
             for (row.*) |*cell| {
-                cell.* = Cell.blank();
+                cell.* = Cell{ .char = 0 }; // Sentinel: char=0 (NUL) won't match any real content
             }
         }
 
@@ -160,7 +165,7 @@ pub const ScreenGrid = struct {
         for (self.previous) |*row| {
             row.* = try self.allocator.alloc(Cell, new_width);
             for (row.*) |*cell| {
-                cell.* = Cell.blank();
+                cell.* = Cell{ .char = 0 }; // Sentinel value like in init()
             }
         }
 
@@ -300,7 +305,8 @@ pub const ScreenGrid = struct {
             current_col += 1;
 
             // For double-width characters, fill the second column with a continuation marker
-            // This marks the cell as part of a double-width character
+            // The cellwidth system now returns the correct width for all characters,
+            // including emoji that may have been problematic before
             if (width == 2 and current_col < self.width) {
                 self.current[row][current_col] = .{
                     .char = ' ', // Placeholder (not rendered to terminal)

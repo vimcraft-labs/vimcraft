@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // ============================================================================
-    // Unicode Support: Ghostty's uucode library
+    // Unicode Support: Ghostty's uucode library + grapheme module
     // ============================================================================
     // Load uucode dependency for production-quality Unicode width calculations
     // Uses East Asian Width property (UAX #11) + grapheme boundary detection
@@ -14,12 +14,40 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .@"build_config.zig" =
             \\const config = @import("config.zig");
+            \\const config_x = @import("config.x.zig");
             \\const d = config.default;
+            \\const wcwidth = config_x.wcwidth;
+            \\
+            \\fn computeWidth(
+            \\    alloc: @import("std").mem.Allocator,
+            \\    cp: u21,
+            \\    data: anytype,
+            \\    backing: anytype,
+            \\    tracking: anytype,
+            \\) @import("std").mem.Allocator.Error!void {
+            \\    _ = alloc;
+            \\    _ = cp;
+            \\    _ = backing;
+            \\    _ = tracking;
+            \\    data.width = @intCast(@min(2, @max(0, data.wcwidth)));
+            \\}
+            \\
+            \\const width = config.Extension{
+            \\    .inputs = &.{"wcwidth"},
+            \\    .compute = &computeWidth,
+            \\    .fields = &.{
+            \\        .{ .name = "width", .type = u2 },
+            \\    },
+            \\};
+            \\
             \\pub const tables = [_]config.Table{
             \\    .{
+            \\        .extensions = &.{ wcwidth, width },
             \\        .fields = &.{
-            \\            d.field("east_asian_width"),
+            \\            width.field("width"),
             \\            d.field("grapheme_break"),
+            \\            d.field("is_emoji"),
+            \\            d.field("is_emoji_presentation"),
             \\            d.field("is_emoji_modifier"),
             \\            d.field("is_emoji_modifier_base"),
             \\        },
@@ -28,6 +56,40 @@ pub fn build(b: *std.Build) void {
         ,
     });
     const uucode_module = uucode_dep.module("uucode");
+
+    // ============================================================================
+    // Ghostty Unicode Tables Generation
+    // ============================================================================
+    // Generate unicode property tables at build time using Ghostty's table generator
+    // This provides grapheme cluster boundary detection (emoji, ZWJ, modifiers, etc.)
+    const unicode_tables = blk: {
+        // Create executable to generate unicode property tables
+        const props_exe = b.addExecutable(.{
+            .name = "props-unigen",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("vendor/ghostty/src/unicode/props_uucode.zig"),
+                .target = b.graph.host,
+            }),
+        });
+
+        // Add uucode dependency to the generator
+        props_exe.root_module.addImport("uucode", uucode_module);
+
+        // Add lut.zig and Properties.zig from Ghostty
+        props_exe.root_module.addAnonymousImport("lut.zig", .{
+            .root_source_file = b.path("vendor/ghostty/src/unicode/lut.zig"),
+        });
+        props_exe.root_module.addAnonymousImport("Properties.zig", .{
+            .root_source_file = b.path("vendor/ghostty/src/unicode/Properties.zig"),
+        });
+
+        // Run the generator and capture output
+        const props_run = b.addRunArtifact(props_exe);
+        const wf = b.addWriteFiles();
+        const props_output = wf.addCopyFile(props_run.captureStdOut(), "unicode_props.zig");
+
+        break :blk props_output;
+    };
 
     // ============================================================================
     // C Library: libvterm (from Neovim) - DEFERRED
@@ -80,6 +142,44 @@ pub fn build(b: *std.Build) void {
 
     // Add uucode module for Unicode width calculations
     exe.root_module.addImport("uucode", uucode_module);
+
+    // Add unicode_tables import for grapheme cluster detection
+    unicode_tables.addStepDependencies(&exe.step);
+    exe.root_module.addAnonymousImport("unicode_tables", .{
+        .root_source_file = unicode_tables,
+    });
+
+    // Add Ghostty's grapheme module with its dependencies
+    const ghostty_unicode_path = "vendor/ghostty/src/unicode";
+
+    // Create a single shared Properties module
+    const properties_mod = b.createModule(.{
+        .root_source_file = b.path(ghostty_unicode_path ++ "/Properties.zig"),
+    });
+
+    // Create lut module (standalone)
+    const lut_mod = b.createModule(.{
+        .root_source_file = b.path(ghostty_unicode_path ++ "/lut.zig"),
+    });
+
+    // Create props_table module with all its deps
+    const props_table_mod = b.createModule(.{
+        .root_source_file = b.path(ghostty_unicode_path ++ "/props_table.zig"),
+    });
+    props_table_mod.addAnonymousImport("unicode_tables", .{
+        .root_source_file = unicode_tables,
+    });
+    props_table_mod.addImport("lut.zig", lut_mod);
+    props_table_mod.addImport("Properties.zig", properties_mod);
+
+    // Create grapheme module that imports props_table and Properties
+    const ghostty_grapheme_mod = b.createModule(.{
+        .root_source_file = b.path(ghostty_unicode_path ++ "/grapheme.zig"),
+    });
+    ghostty_grapheme_mod.addImport("props_table.zig", props_table_mod);
+    ghostty_grapheme_mod.addImport("Properties.zig", properties_mod);
+
+    exe.root_module.addImport("ghostty_grapheme", ghostty_grapheme_mod);
 
     // Add C++ source files for Hermes+JSI wrapper
     exe.addCSourceFile(.{
@@ -150,6 +250,34 @@ pub fn build(b: *std.Build) void {
     });
 
     b.installArtifact(ovdb);
+
+    // ============================================================================
+    // debug-grid - Grid Layout Debugging Tool
+    // ============================================================================
+    // TODO: Fix module imports - temporarily disabled
+    // const debug_grid = b.addExecutable(.{
+    //     .name = "debug-grid",
+    //     .root_module = b.createModule(.{
+    //         .root_source_file = b.path("tools/debug_grid.zig"),
+    //         .target = target,
+    //         .optimize = optimize,
+    //     }),
+    // });
+
+    // // Add uucode module for width calculations
+    // debug_grid.root_module.addImport("uucode", uucode_module);
+
+    // // Provide screen_grid module as an anonymous import
+    // // Note: screen_grid.zig imports char_width.zig internally, so we need to ensure
+    // // the import context allows relative file imports within src/display/
+    // debug_grid.root_module.addAnonymousImport("screen_grid", .{
+    //     .root_source_file = b.path("src/display/screen_grid.zig"),
+    //     .imports = &.{
+    //         .{ .name = "uucode", .module = uucode_module },
+    //     },
+    // });
+
+    // b.installArtifact(debug_grid);
 
     // ============================================================================
     // Benchmark Suite

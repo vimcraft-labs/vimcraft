@@ -329,6 +329,7 @@ pub const Display = struct {
 
         // Convert cursor byte position to display column (account for wide chars like emoji)
         // This is needed for both horizontal scroll and cursor positioning
+        // Use the padding-aware version to account for visual padding in grid
         const cursor_display_col = if (buffer.cursor.row < buffer.lineCount()) blk: {
             const line = buffer.getLine(buffer.cursor.row) orelse break :blk buffer.cursor.col;
             const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
@@ -352,6 +353,7 @@ pub const Display = struct {
         defer self.allocator.free(updates);
 
         debug_log.log("Diff found {} changed cells", .{updates.len});
+
 
         // STEP 3: Render only changed cells with optimizations
         try self.renderUpdates(updates);
@@ -461,9 +463,13 @@ pub const Display = struct {
                 else
                     line;
 
-                // Apply horizontal scroll only to cursor line
+                // Apply horizontal scroll only to cursor line (convert display column to byte position)
+                // Use padding-aware version to handle visual padding correctly
                 const h_offset = if (line_num == buffer.cursor.row) self.viewport_left else 0;
-                const start_col = @min(h_offset, line_without_newline.len);
+                const start_col = if (h_offset > 0)
+                    char_width.displayColumnToByte(line_without_newline, h_offset)
+                else
+                    0;
                 const remaining = line_without_newline[start_col..];
 
                 // Apply background colors: Normal -> CursorLine (if on cursor line)
@@ -559,6 +565,8 @@ pub const Display = struct {
                         screen_col += 1;
 
                         // For double-width characters, fill the second column with continuation marker
+                        // The cellwidth system now returns the correct width for all characters,
+                        // including emoji that may have been problematic before
                         if (width == 2 and screen_col < (gutter_width + text_cols)) {
                             self.grid.setCell(row, screen_col, .{
                                 .char = ' ', // Placeholder (not rendered to terminal)
@@ -640,18 +648,25 @@ pub const Display = struct {
         var current_italic: bool = false;
         var current_underline: bool = false;
         var last_pos: ?struct { row: usize, col: usize } = null;
+        var last_had_combining: bool = false; // Track if last rendered cell had combining chars
 
         for (updates) |update| {
             // Skip continuation cells - terminals handle double-width chars automatically
             // The double-width character's background extends across both columns
             if (update.cell.is_continuation) {
+                // DON'T update last_pos here! We didn't send anything to the terminal,
+                // so the terminal cursor is still where the double-width char left it.
+                // The last_pos was already correctly set after rendering the emoji.
                 continue;
             }
 
             // HELIX OPTIMIZATION 1: Skip cursor movement if adjacent
-            // If we're printing at (last_col + 1, same_row), terminal auto-advances
+            // Terminal cursor auto-advances after rendering a character
+            // last_pos tracks where the terminal cursor currently is
+            // EXCEPTION: After writing combining characters, always reposition cursor
+            // because some terminals may have undefined cursor position after combining chars
             const is_adjacent = if (last_pos) |pos|
-                (update.row == pos.row and update.col == pos.col + 1)
+                (update.row == pos.row and update.col == pos.col and !last_had_combining)
             else
                 false;
 
@@ -728,8 +743,22 @@ pub const Display = struct {
                 try buf_writer.writeAll(buf[0..combining_len]);
             }
 
-            // Track position for adjacent detection
-            last_pos = .{ .row = update.row, .col = update.col };
+            // Track where the terminal cursor is after rendering this character
+            // For single-width: cursor advances from col to col+1
+            // For double-width: cursor advances from col to col+2
+            const char_display_width: usize = if (update.col + 1 < self.grid.width and
+                self.grid.current[update.row][update.col + 1].is_continuation)
+                2
+            else
+                1;
+
+            // Store where the terminal cursor IS (not where we rendered)
+            // This is used for the adjacency check to skip unnecessary cursor movements
+            last_pos = .{ .row = update.row, .col = update.col + char_display_width };
+
+            // Track if this cell had combining characters
+            // This affects cursor positioning for the next update
+            last_had_combining = (update.cell.combining_count > 0);
         }
 
         // Reset all attributes at end
