@@ -406,6 +406,15 @@ pub fn build(b: *std.Build) void {
     // Add uucode module for tests
     unit_tests.root_module.addImport("uucode", uucode_module);
 
+    // Add unicode_tables import for tests
+    unicode_tables.addStepDependencies(&unit_tests.step);
+    unit_tests.root_module.addAnonymousImport("unicode_tables", .{
+        .root_source_file = unicode_tables,
+    });
+
+    // Add ghostty_grapheme module for tests (same as main exe)
+    unit_tests.root_module.addImport("ghostty_grapheme", ghostty_grapheme_mod);
+
     // Add C++ source files for tests
     unit_tests.addCSourceFile(.{
         .file = b.path("src/jsi/hermes_c_api.cpp"),

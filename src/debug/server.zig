@@ -2,6 +2,7 @@ const std = @import("std");
 const protocol = @import("protocol.zig");
 const json = @import("json.zig");
 const state = @import("state.zig");
+const Editor = @import("../core/editor.zig").Editor;
 
 /// Debug server configuration
 pub const ServerConfig = struct {
@@ -14,12 +15,14 @@ pub const Server = struct {
     allocator: std.mem.Allocator,
     config: ServerConfig,
     running: bool,
+    editor: *Editor, // Reference to editor core
 
-    pub fn init(allocator: std.mem.Allocator, config: ServerConfig) Server {
+    pub fn init(allocator: std.mem.Allocator, config: ServerConfig, editor: *Editor) Server {
         return .{
             .allocator = allocator,
             .config = config,
             .running = false,
+            .editor = editor,
         };
     }
 
@@ -49,22 +52,37 @@ pub const Server = struct {
 
     /// Run server using stdin/stdout
     fn runStdio(self: *Server) !void {
-        var stdin_buf: [4096]u8 = undefined;
-        var stdin_reader = std.fs.File.stdin().reader(&stdin_buf);
-        const stdin = &stdin_reader.interface;
-        var stdout_buf: [4096]u8 = undefined;
-        var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
-        const stdout = &stdout_writer.interface;
+        const stdin = std.fs.File.stdin();
+        const stdout = std.fs.File.stdout();
+
+        var line_buffer: [8192]u8 = undefined;
+        var line_pos: usize = 0;
 
         while (self.running) {
-            // Read line from stdin
-            const line = stdin.*.takeDelimiterExclusive('\n') catch |err| {
+            // Read one byte at a time
+            var char_buf: [1]u8 = undefined;
+            const bytes_read = stdin.read(&char_buf) catch |err| {
                 if (err == error.EndOfStream) break;
                 return err;
             };
 
-            // Parse command
-            var cmd = json.parseCommand(line, self.allocator) catch |err| {
+            if (bytes_read == 0) break; // EOF
+
+            const ch = char_buf[0];
+
+            if (ch == '\n') {
+                // End of line - process the command
+                const line_str = line_buffer[0..line_pos];
+
+                // Skip empty lines and whitespace-only lines
+                const trimmed = std.mem.trim(u8, line_str, " \t\r");
+                if (trimmed.len == 0) {
+                    line_pos = 0;
+                    continue;
+                }
+
+                // Parse command (use trimmed line)
+                var cmd = json.parseCommand(trimmed, self.allocator) catch |err| {
                 // Send error response for parse failure
                 const err_str = try std.fmt.allocPrint(self.allocator, "Failed to parse command: {}", .{err});
                 defer self.allocator.free(err_str);
@@ -83,7 +101,9 @@ pub const Server = struct {
                 const response_json = try json.serializeResponse(response, self.allocator);
                 defer self.allocator.free(response_json);
 
-                try stdout.print("{s}\n", .{response_json});
+                try stdout.writeAll(response_json);
+                try stdout.writeAll("\n");
+                line_pos = 0; // Reset for next line
                 continue;
             };
             defer cmd.deinit(self.allocator);
@@ -96,7 +116,39 @@ pub const Server = struct {
             const response_json = try json.serializeResponse(response, self.allocator);
             defer self.allocator.free(response_json);
 
-            try stdout.print("{s}\n", .{response_json});
+            try stdout.writeAll(response_json);
+            try stdout.writeAll("\n");
+
+            // Reset line buffer for next line
+            line_pos = 0;
+            } else {
+                // Accumulate character into line buffer
+                if (line_pos < line_buffer.len) {
+                    line_buffer[line_pos] = ch;
+                    line_pos += 1;
+                } else {
+                    // Line too long - send error and reset
+                    const err_str = "Line too long (max 8192 bytes)";
+                    const response = try json.createErrorResponse(
+                        self.allocator,
+                        "unknown",
+                        err_str,
+                        0,
+                    );
+                    defer {
+                        var mut_response = response;
+                        mut_response.deinit(self.allocator);
+                    }
+
+                    const response_json = try json.serializeResponse(response, self.allocator);
+                    defer self.allocator.free(response_json);
+
+                    try stdout.writeAll(response_json);
+                    try stdout.writeAll("\n");
+
+                    line_pos = 0; // Reset for next line
+                }
+            }
         }
     }
 
@@ -133,13 +185,15 @@ pub const Server = struct {
             },
 
             .get_cursor => {
-                // TODO: Get actual cursor position from editor
-                return error.NotImplemented;
+                return .{ .cursor = .{
+                    .line = self.editor.buffer.cursor.row,
+                    .col = self.editor.buffer.cursor.col,
+                } };
             },
 
             .get_mode => {
-                // TODO: Get actual mode from editor
-                return error.NotImplemented;
+                const mode_str = try self.allocator.dupe(u8, self.editor.mode_manager.getModeString());
+                return .{ .mode = .{ .mode = mode_str } };
             },
 
             .get_visual => {
@@ -162,26 +216,74 @@ pub const Server = struct {
                 return error.NotImplemented;
             },
 
-            // Commands - these need to be hooked up to actual editor operations
+            // Commands - execute keys in the editor
             .execute_keys => {
-                // TODO: Execute keys in editor
-                return error.NotImplemented;
+                const keys = cmd.args.execute_keys.keys;
+                try self.editor.executeKeys(keys);
+                return .{ .execute_keys = .{ .keys_processed = keys.len } };
             },
 
             .load_file => {
-                // TODO: Load file in editor
-                return error.NotImplemented;
+                const path = cmd.args.load_file.path;
+                try self.editor.buffer.loadFile(path);
+                return .{ .none = {} };
             },
 
-            // Assertions - these need to query editor state and compare
+            // Assertions - verify editor state matches expectations
             .assert_cursor => {
-                // TODO: Verify cursor position
-                return error.NotImplemented;
+                const expected_line = cmd.args.assert_cursor.line;
+                const expected_col = cmd.args.assert_cursor.col;
+                const actual_line = self.editor.buffer.cursor.row;
+                const actual_col = self.editor.buffer.cursor.col;
+
+                const match = (expected_line == actual_line and expected_col == actual_col);
+
+                if (!match) {
+                    const expected = try std.fmt.allocPrint(self.allocator, "({d},{d})", .{ expected_line, expected_col });
+                    const actual = try std.fmt.allocPrint(self.allocator, "({d},{d})", .{ actual_line, actual_col });
+                    const diff = try std.fmt.allocPrint(self.allocator, "Expected ({d},{d}), got ({d},{d})", .{ expected_line, expected_col, actual_line, actual_col });
+
+                    return .{ .assertion = .{
+                        .match = false,
+                        .expected = expected,
+                        .actual = actual,
+                        .diff = diff,
+                    } };
+                }
+
+                return .{ .assertion = .{
+                    .match = true,
+                    .expected = null,
+                    .actual = null,
+                    .diff = null,
+                } };
             },
 
             .assert_mode => {
-                // TODO: Verify mode
-                return error.NotImplemented;
+                const expected_mode = cmd.args.assert_mode.mode;
+                const actual_mode = self.editor.mode_manager.getModeString();
+
+                const match = std.mem.eql(u8, expected_mode, actual_mode);
+
+                if (!match) {
+                    const expected = try self.allocator.dupe(u8, expected_mode);
+                    const actual = try self.allocator.dupe(u8, actual_mode);
+                    const diff = try std.fmt.allocPrint(self.allocator, "Expected '{s}', got '{s}'", .{ expected_mode, actual_mode });
+
+                    return .{ .assertion = .{
+                        .match = false,
+                        .expected = expected,
+                        .actual = actual,
+                        .diff = diff,
+                    } };
+                }
+
+                return .{ .assertion = .{
+                    .match = true,
+                    .expected = null,
+                    .actual = null,
+                    .diff = null,
+                } };
             },
 
             .assert_visual_active => {
@@ -200,8 +302,46 @@ pub const Server = struct {
             },
 
             .assert_line => {
-                // TODO: Verify line content
-                return error.NotImplemented;
+                const line_num = cmd.args.assert_line.line;
+                const expected_text = cmd.args.assert_line.text;
+
+                const line = self.editor.buffer.getLine(line_num) orelse {
+                    const diff = try std.fmt.allocPrint(self.allocator, "Line {d} does not exist", .{line_num});
+                    return .{ .assertion = .{
+                        .match = false,
+                        .expected = try self.allocator.dupe(u8, expected_text),
+                        .actual = try self.allocator.dupe(u8, "(line does not exist)"),
+                        .diff = diff,
+                    } };
+                };
+
+                // Remove trailing newline if present
+                const actual_text = if (line.len > 0 and line[line.len - 1] == '\n')
+                    line[0 .. line.len - 1]
+                else
+                    line;
+
+                const match = std.mem.eql(u8, expected_text, actual_text);
+
+                if (!match) {
+                    const expected = try self.allocator.dupe(u8, expected_text);
+                    const actual = try self.allocator.dupe(u8, actual_text);
+                    const diff = try std.fmt.allocPrint(self.allocator, "Line {d}: Expected [{s}], got [{s}]", .{ line_num, expected_text, actual_text });
+
+                    return .{ .assertion = .{
+                        .match = false,
+                        .expected = expected,
+                        .actual = actual,
+                        .diff = diff,
+                    } };
+                }
+
+                return .{ .assertion = .{
+                    .match = true,
+                    .expected = null,
+                    .actual = null,
+                    .diff = null,
+                } };
             },
         };
     }

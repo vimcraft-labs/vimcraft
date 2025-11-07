@@ -20,6 +20,7 @@ const RegisterManager = @import("register/register.zig").RegisterManager;
 const yank = @import("buffer/yank.zig");
 const paste = @import("buffer/paste.zig");
 const cellwidth = @import("display/cellwidth.zig");
+const EditOps = @import("buffer/edit.zig").EditOps;
 
 // Import Hermes C API (use hermes_c namespace to avoid shadowing)
 const hermes_c = @cImport({
@@ -365,10 +366,16 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
 
 /// Run debug protocol server (headless, stdin/stdout communication)
 fn runDebugProtocol(allocator: std.mem.Allocator) !void {
-    // Create debug server
+    const Editor = @import("core/editor.zig").Editor;
+
+    // Create headless editor core
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    // Create debug server with editor core
     var server = debug_protocol.server.Server.init(allocator, .{
         .use_stdio = true,
-    });
+    }, &editor);
     defer server.deinit();
 
     // Start server (blocks until shutdown command received)
@@ -377,37 +384,27 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
 
 /// Run the interactive editor (normal mode)
 fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
+    const Editor = @import("core/editor.zig").Editor;
+    const TerminalBackend = @import("terminal/backend.zig").TerminalBackend;
 
     // Initialize cellwidth system for proper character width handling
     try cellwidth.initGlobal(allocator);
     defer cellwidth.deinitGlobal(allocator);
 
-    // Initialize components
-    var buffer = Buffer.init(allocator);
-    defer buffer.deinit();
+    // Create headless editor core
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
 
-    var display = try Display.init(allocator);
-    defer display.deinit();
-    try display.setLineNumbers(true); // Enable line numbers
-    var mode_manager = ModeManager.init();
-    var cmd_buffer = CommandBuffer.init(allocator);
-    defer cmd_buffer.deinit();
-    var pending_cmd = PendingCommand{};
-    var pending_register = PendingRegister{};
-
-    // Visual mode state (initialized but not active)
-    var visual_state = VisualState{
-        .active = false,
-        .mode = .char,
-        .anchor = .{ .line = 0, .col = 0 },
+    // Load file into editor
+    editor.buffer.loadFile(filepath) catch |err| {
+        std.debug.print("Error loading file: {}\n", .{err});
+        return;
     };
 
-    // Yank highlight state (brief flash after yank)
-    var yank_highlight = YankHighlight{};
-
-    // Initialize register manager (for yank/paste)
-    var register_mgr = RegisterManager.init(allocator);
-    defer register_mgr.deinit();
+    // Initialize display (terminal-specific)
+    var display = try Display.init(allocator);
+    defer display.deinit();
+    try display.setLineNumbers(true);
 
     // Initialize debugger state (for :debug command)
     var debugger_state = DebuggerState{ .allocator = allocator };
@@ -431,18 +428,12 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         .config_path = paths.init_js_path,
     };
 
-    // Load configuration from init.js (Phase 4!)
+    // Load configuration from init.js
     try loadConfigFromJs(allocator, &highlight_config, &debugger_state);
-    defer jsi_api.deinitTimers(); // Clean up timers on exit (even on error)
+    defer jsi_api.deinitTimers();
 
     // Apply sign column config from JS to display
     try display.setSignColumn(highlight_config.signcolumn_mode);
-
-    // Load file
-    buffer.loadFile(filepath) catch |err| {
-        std.debug.print("Error loading file: {}\n", .{err});
-        return;
-    };
 
     // Enter raw terminal mode
     try display.enterRawMode();
@@ -468,12 +459,9 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
             &reload_state,
         )) |w| {
             if (w.start()) {
-                watcher = w; // Successfully started
+                watcher = w;
             } else |_| {
-                // Cleanup failed watcher - even though start() failed,
-                // the fs_event handle was initialized, so we need to close it properly
                 w.close();
-                // Run event loop briefly to process the close callback
                 var i: u8 = 0;
                 while (i < 5) : (i += 1) {
                     _ = event_loop.runOnce();
@@ -481,72 +469,48 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
             }
         } else |_| {}
     }
-    // NOTE: watcher cleanup uses uv_close() callback for proper libuv handle cleanup
-    // We call close() and run the event loop to process the callback before other cleanup
+
+    // Create terminal backend (wraps Editor core with terminal I/O)
+    var backend = TerminalBackend.init(
+        allocator,
+        &editor,
+        &display,
+        &highlight_config,
+    );
 
     // Initial render
-    {
-        const status = try allocator.dupe(u8, mode_manager.getModeString());
-        defer allocator.free(status);
-        try display.render(&buffer, status, &highlight_config, &visual_state, &yank_highlight);
-        try display.setCursorBlock(); // Start in normal mode with block cursor
-        try display.flush();
-    }
+    try backend.render();
 
-    // Main event loop - render only after state changes (lazy rendering)
+    // Main event loop - simplified!
     var running = true;
-    var needs_render = false; // Track whether rendering is needed
+    var needs_render = false;
     var render_stats = RenderStats.init();
 
     while (running) {
         render_stats.loop_iterations += 1;
 
-        // Run libuv event loop to process timers and async events (non-blocking)
-        // NOTE: runOnce() returns true if there are ACTIVE handles (file watcher, timers),
-        // not whether events actually fired. So we don't use it to trigger renders.
-        // Instead, timers and events update state directly (e.g., yank_highlight, config reload).
+        // Run libuv event loop (timers, watchers)
         _ = event_loop.runOnce();
 
-        // Check if config needs reload (triggered by file watcher)
+        // Check if config needs reload
         if (reload_state.needs_reload) {
             reload_state.reload() catch {};
             needs_render = true;
         }
 
-        // Handle input with short timeout to keep UI responsive
-        // libuv handles timer firing, so we just need to poll for input
-        // Returns false to quit, sets needs_render if state changed
-        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &pending_register, &visual_state, &yank_highlight, &register_mgr, allocator, &debugger_state, 10, &needs_render);
+        // Handle input via TerminalBackend (all vim logic in Editor core!)
+        running = try backend.handleInput(10, &needs_render);
 
-        // Only render if something changed
+        // Render if state changed
         if (needs_render) {
-            // Track render source for debugging/profiling
-            // NOTE: We prioritize config reload over input since config affects everything
-            const render_source: RenderSource = if (reload_state.needs_reload or reload_state.needs_reload)
+            const render_source: RenderSource = if (reload_state.needs_reload)
                 .config
             else
                 .input;
             render_stats.recordRender(render_source);
 
-            const status = if (mode_manager.isCommand())
-                try std.fmt.allocPrint(allocator, ":{s}", .{cmd_buffer.getString()})
-            else if (mode_manager.isVisual() and visual_state.active)
-                try allocator.dupe(u8, visual_state.mode.toString())
-            else
-                try allocator.dupe(u8, mode_manager.getModeString());
-            defer allocator.free(status);
-
-            try display.render(&buffer, status, &highlight_config, &visual_state, &yank_highlight);
-
-            // Set cursor shape based on mode
-            if (mode_manager.isInsert()) {
-                try display.setCursorBar(); // Thin bar in insert mode
-            } else {
-                try display.setCursorBlock(); // Block in normal/command mode
-            }
-
-            try display.flush();
-            needs_render = false; // Reset flag after rendering
+            try backend.render();
+            needs_render = false;
         }
     }
 
@@ -554,13 +518,9 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     try display.clearScreen();
     try display.moveCursor(0, 0);
 
-    // CRITICAL: Close the file watcher and let event loop process the close callback
-    // This properly cleans up the libuv handle and frees all memory without leaks
+    // Close file watcher
     if (watcher) |w| {
         w.close();
-
-        // Run event loop a few times to ensure close callback is processed
-        // The close callback will free all memory and destroy the struct
         var i: u8 = 0;
         while (i < 10) : (i += 1) {
             _ = event_loop.runOnce();
@@ -613,40 +573,30 @@ fn launchChromeDevTools(port: u16) !void {
 
 /// Run the interactive editor with Chrome DevTools debugging enabled
 fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !void {
+    const Editor = @import("core/editor.zig").Editor;
+    const TerminalBackend = @import("terminal/backend.zig").TerminalBackend;
     const Debugger = @import("debug/debugger.zig").Debugger;
 
-    // Initialize cellwidth system for proper character width handling
+    // Initialize cellwidth system
     try cellwidth.initGlobal(allocator);
     defer cellwidth.deinitGlobal(allocator);
 
-    // Initialize components
-    var buffer = Buffer.init(allocator);
-    defer buffer.deinit();
+    // Create headless editor core
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
 
-    var display = try Display.init(allocator);
-    defer display.deinit();
-    try display.setLineNumbers(true); // Enable line numbers
-    var mode_manager = ModeManager.init();
-    var cmd_buffer = CommandBuffer.init(allocator);
-    defer cmd_buffer.deinit();
-    var pending_cmd = PendingCommand{};
-    var pending_register = PendingRegister{};
-
-    // Visual mode state (initialized but not active)
-    var visual_state = VisualState{
-        .active = false,
-        .mode = .char,
-        .anchor = .{ .line = 0, .col = 0 },
+    // Load file into editor
+    editor.buffer.loadFile(filepath) catch |err| {
+        std.debug.print("Error loading file: {}\n", .{err});
+        return;
     };
 
-    // Yank highlight state (brief flash after yank)
-    var yank_highlight = YankHighlight{};
+    // Initialize display (terminal-specific)
+    var display = try Display.init(allocator);
+    defer display.deinit();
+    try display.setLineNumbers(true);
 
-    // Initialize register manager (for yank/paste)
-    var register_mgr = RegisterManager.init(allocator);
-    defer register_mgr.deinit();
-
-    // Initialize debugger state (already have debugger running)
+    // Initialize debugger state
     var debugger_state = DebuggerState{};
 
     // Initialize highlight configuration
@@ -676,28 +626,25 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     const runtime = runtime_nullable.?;
     defer hermes_c.hermes_runtime_destroy(runtime);
 
-    // Store runtime in debugger state for hot reload
+    // Store runtime in debugger state
     debugger_state.runtime = runtime;
 
     // Register JSI host functions
-    // Timer system is also initialized here
     jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config);
-    defer jsi_api.deinitTimers(); // Clean up timers on exit (even on error)
+    defer jsi_api.deinitTimers();
 
     // Create and start CDP debugger BEFORE loading config
-    // This allows Chrome to see console.log from init.js
     var debugger = try Debugger.init(runtime, 9229);
     defer debugger.deinit();
-
     try debugger.start();
 
-    // Re-register console.log with debugger pointer so messages go to Chrome Console
+    // Re-register console.log with debugger
     jsi_api.registerConsoleWithDebugger(@ptrCast(runtime), debugger.handle);
 
-    // Auto-launch Chrome DevTools (silently)
+    // Auto-launch Chrome DevTools
     launchChromeDevTools(9229) catch {};
 
-    // Wait up to 5 seconds for debugger to connect (silently)
+    // Wait for debugger to connect
     var wait_count: usize = 0;
     while (wait_count < 50 and !debugger.isConnected()) {
         std.Thread.sleep(100 * std.time.ns_per_ms);
@@ -707,28 +654,19 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     // Load configuration from init.js
     if (paths.initJsExists()) {
         debugger.log("OpenVim: Loading init.js...", .info);
-
         jsi_api.loadConfig(@ptrCast(runtime), paths.init_js_path, allocator) catch |err| {
             const msg = try std.fmt.allocPrint(allocator, "Failed to load init.js: {}", .{err});
             defer allocator.free(msg);
             debugger.log(msg, .err);
-
             std.debug.print("WARNING: Failed to load init.js: {}\n", .{err});
-            // Fall back to defaults
             const cursorline_bg = try highlights.Color.fromHex("#2b2b2b");
             highlight_config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
             highlight_config.cursorline_enabled = true;
         };
     }
 
-    // Apply sign column config from JS to display
+    // Apply sign column config
     try display.setSignColumn(highlight_config.signcolumn_mode);
-
-    // Load file
-    buffer.loadFile(filepath) catch |err| {
-        std.debug.print("Error loading file: {}\n", .{err});
-        return;
-    };
 
     // Enter raw terminal mode
     try display.enterRawMode();
@@ -737,7 +675,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     // Get terminal size
     try display.getTerminalSize();
 
-    // Set up hot reload watcher AFTER entering raw mode
+    // Set up hot reload watcher
     const reloadCallback = struct {
         fn callback(user_data: ?*anyopaque) void {
             const state: *ReloadState = @ptrCast(@alignCast(user_data.?));
@@ -754,12 +692,9 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
             &reload_state,
         )) |w| {
             if (w.start()) {
-                watcher = w; // Successfully started
+                watcher = w;
             } else |_| {
-                // Cleanup failed watcher - even though start() failed,
-                // the fs_event handle was initialized, so we need to close it properly
                 w.close();
-                // Run event loop briefly to process the close callback
                 var i: u8 = 0;
                 while (i < 5) : (i += 1) {
                     _ = event_loop.runOnce();
@@ -767,71 +702,48 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
             }
         } else |_| {}
     }
-    // NOTE: watcher cleanup uses uv_close() callback for proper libuv handle cleanup
-    // We call close() and run the event loop to process the callback before other cleanup
+
+    // Create terminal backend (wraps Editor core)
+    var backend = TerminalBackend.init(
+        allocator,
+        &editor,
+        &display,
+        &highlight_config,
+    );
 
     // Initial render
-    {
-        const status = try allocator.dupe(u8, mode_manager.getModeString());
-        defer allocator.free(status);
-        try display.render(&buffer, status, &highlight_config, &visual_state, &yank_highlight);
-        try display.setCursorBlock();
-        try display.flush();
-    }
+    try backend.render();
 
-    // Main event loop - render only after state changes (lazy rendering)
+    // Main event loop - simplified!
     var running = true;
-    var needs_render = false; // Track whether rendering is needed
+    var needs_render = false;
     var render_stats = RenderStats.init();
 
     while (running) {
         render_stats.loop_iterations += 1;
 
-        // Run libuv event loop to process timers and async events (non-blocking)
-        // NOTE: runOnce() returns true if there are ACTIVE handles (WebSocket server, file watcher, timers),
-        // not whether events actually fired. So we don't use it to trigger renders.
-        // Instead, timers and events update state directly (e.g., yank_highlight, config reload).
+        // Run libuv event loop
         _ = event_loop.runOnce();
 
-        // Check if config needs reload (triggered by file watcher)
+        // Check config reload
         if (reload_state.needs_reload) {
             reload_state.reload() catch {};
             needs_render = true;
         }
 
-        // Handle input with short timeout to keep UI responsive
-        // libuv handles timer firing, so we just need to poll for input
-        // Returns false to quit, sets needs_render if state changed
-        running = try handleInputWithTimeout(&buffer, &display, &mode_manager, &cmd_buffer, &pending_cmd, &pending_register, &visual_state, &yank_highlight, &register_mgr, allocator, &debugger_state, 10, &needs_render);
+        // Handle input via TerminalBackend
+        running = try backend.handleInput(10, &needs_render);
 
-        // Only render if something changed
+        // Render if needed
         if (needs_render) {
-            // Track render source for debugging/profiling
             const render_source: RenderSource = if (reload_state.needs_reload)
                 .config
             else
                 .input;
             render_stats.recordRender(render_source);
 
-            const status = if (mode_manager.isCommand())
-                try std.fmt.allocPrint(allocator, ":{s}", .{cmd_buffer.getString()})
-            else if (mode_manager.isVisual() and visual_state.active)
-                try allocator.dupe(u8, visual_state.mode.toString())
-            else
-                try allocator.dupe(u8, mode_manager.getModeString());
-            defer allocator.free(status);
-
-            try display.render(&buffer, status, &highlight_config, &visual_state, &yank_highlight);
-
-            if (mode_manager.isInsert()) {
-                try display.setCursorBar();
-            } else {
-                try display.setCursorBlock();
-            }
-
-            try display.flush();
-
-            needs_render = false; // Reset flag after rendering
+            try backend.render();
+            needs_render = false;
         }
     }
 
@@ -839,13 +751,9 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     try display.clearScreen();
     try display.moveCursor(0, 0);
 
-    // CRITICAL: Close the file watcher and let event loop process the close callback
-    // This properly cleans up the libuv handle and frees all memory without leaks
+    // Close watcher
     if (watcher) |w| {
         w.close();
-
-        // Run event loop a few times to ensure close callback is processed
-        // The close callback will free all memory and destroy the struct
         var i: u8 = 0;
         while (i < 10) : (i += 1) {
             _ = event_loop.runOnce();
@@ -868,6 +776,7 @@ fn handleInputWithTimeout(
     visual_state: *VisualState,
     yank_highlight: *YankHighlight,
     register_mgr: *RegisterManager,
+    edit_ops: *EditOps,
     allocator: std.mem.Allocator,
     debugger_state: *DebuggerState,
     timeout_ms: ?i64,
@@ -982,7 +891,7 @@ fn handleInputWithTimeout(
 
     // Handle based on mode
     if (mode_manager.isNormal()) {
-        return try handleNormalMode(buffer, display, mode_manager, cmd_buffer, pending_cmd, pending_register, visual_state, yank_highlight, register_mgr, allocator, input);
+        return try handleNormalMode(buffer, display, mode_manager, cmd_buffer, pending_cmd, pending_register, visual_state, yank_highlight, register_mgr, edit_ops, allocator, input);
     } else if (mode_manager.isInsert()) {
         return try handleInsertMode(buffer, mode_manager, input);
     } else if (mode_manager.isVisual()) {
@@ -1005,10 +914,10 @@ fn handleNormalMode(
     visual_state: *VisualState,
     yank_highlight: *YankHighlight,
     register_mgr: *RegisterManager,
+    edit_ops: *EditOps,
     allocator: std.mem.Allocator,
     input: []const u8,
 ) !bool {
-    _ = allocator; // Reserved for future use
 
     // Check for pending register selection first (e.g., after pressing ")
     if (pending_register.isWaitingForName()) {
@@ -1034,8 +943,16 @@ fn handleNormalMode(
             // Handle pending 'd' commands
             if (pending == 'd') {
                 switch (char) {
-                    'd' => try buffer.deleteLine(), // dd - delete line
-                    'w' => try buffer.deleteWord(), // dw - delete word
+                    'd' => { // dd - delete line
+                        const result = try edit_ops.deleteCurrentLine(buffer);
+                        defer allocator.free(result.deleted_text);
+                        // TODO: Store deleted text in register
+                    },
+                    'w' => { // dw - delete word
+                        const result = try edit_ops.deleteWord(buffer);
+                        defer allocator.free(result.deleted_text);
+                        // TODO: Store deleted text in register
+                    },
                     else => {}, // Invalid combo, just ignore
                 }
                 pending_cmd.clear();
@@ -1107,7 +1024,11 @@ fn handleNormalMode(
             'e' => movement.moveWordEnd(buffer),
 
             // Delete operations
-            'x' => try buffer.deleteChar(),
+            'x' => { // x - delete character under cursor
+                const result = try edit_ops.deleteCharAtCursor(buffer);
+                defer allocator.free(result.deleted_text);
+                // TODO: Store deleted text in register
+            },
             'd' => {
                 // Wait for next character (dd, dw, etc.)
                 pending_cmd.set('d');
@@ -1512,7 +1433,11 @@ fn runTestMode(allocator: std.mem.Allocator, test_file_path: []const u8) !void {
     defer display.deinit();
     try display.setLineNumbers(true); // Enable line numbers
     var mode_manager = ModeManager.init();
-    var harness = TestHarness.init(allocator, &buffer, &display, &mode_manager, stdout_file);
+
+    // Initialize edit operations (delete, change, yank)
+    var edit_ops = EditOps.init(allocator);
+
+    var harness = TestHarness.init(allocator, &buffer, &display, &mode_manager, &edit_ops, stdout_file);
 
     try stdout.print("=== OpenVim Test Mode ===\n", .{});
     try stdout.print("Running: {s}\n\n", .{test_file_path});
@@ -1602,7 +1527,11 @@ fn runREPL(allocator: std.mem.Allocator) !void {
     defer display.deinit();
     try display.setLineNumbers(true); // Enable line numbers
     var mode_manager = ModeManager.init();
-    var harness = TestHarness.init(allocator, &buffer, &display, &mode_manager, stdout_file);
+
+    // Initialize edit operations (delete, change, yank)
+    var edit_ops = EditOps.init(allocator);
+
+    var harness = TestHarness.init(allocator, &buffer, &display, &mode_manager, &edit_ops, stdout_file);
 
     while (true) {
         try stdout.writeAll("> ");

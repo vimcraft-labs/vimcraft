@@ -3,6 +3,7 @@ const Buffer = @import("../buffer/buffer.zig").Buffer;
 const Display = @import("../display/display.zig").Display;
 const ModeManager = @import("../mode/mode.zig").ModeManager;
 const movement = @import("../movement/movement.zig");
+const EditOps = @import("../buffer/edit.zig").EditOps;
 
 /// Test harness for headless testing
 /// Allows scripting editor commands and seeing visual output
@@ -10,6 +11,7 @@ pub const TestHarness = struct {
     buffer: *Buffer,
     display: *Display,
     mode_manager: *ModeManager,
+    edit_ops: *EditOps,
     pending_cmd: ?u8 = null,
     allocator: std.mem.Allocator,
     output_file: std.fs.File,
@@ -20,12 +22,14 @@ pub const TestHarness = struct {
         buffer: *Buffer,
         display: *Display,
         mode_manager: *ModeManager,
+        edit_ops: *EditOps,
         output_file: std.fs.File,
     ) TestHarness {
         return .{
             .buffer = buffer,
             .display = display,
             .mode_manager = mode_manager,
+            .edit_ops = edit_ops,
             .allocator = allocator,
             .output_file = output_file,
             .output_buf = undefined,
@@ -89,8 +93,14 @@ pub const TestHarness = struct {
                 const char = input[0];
                 if (pending == 'd') {
                     switch (char) {
-                        'd' => try self.buffer.deleteLine(),
-                        'w' => try self.buffer.deleteWord(),
+                        'd' => { // dd - delete line
+                            const result = try self.edit_ops.deleteCurrentLine(self.buffer);
+                            defer self.allocator.free(result.deleted_text);
+                        },
+                        'w' => { // dw - delete word
+                            const result = try self.edit_ops.deleteWord(self.buffer);
+                            defer self.allocator.free(result.deleted_text);
+                        },
                         else => {},
                     }
                 }
@@ -110,7 +120,10 @@ pub const TestHarness = struct {
                 '$' => movement.moveToLineEnd(self.buffer),
                 'w' => movement.moveWordForward(self.buffer),
                 'b' => movement.moveWordBackward(self.buffer),
-                'x' => try self.buffer.deleteChar(),
+                'x' => { // x - delete character under cursor
+                    const result = try self.edit_ops.deleteCharAtCursor(self.buffer);
+                    defer self.allocator.free(result.deleted_text);
+                },
                 'd' => self.pending_cmd = 'd',
                 'u' => try self.buffer.undo(),
                 'i' => self.mode_manager.enterInsert(),

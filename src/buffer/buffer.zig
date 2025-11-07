@@ -199,7 +199,7 @@ pub const Buffer = struct {
     // ===== Text Modification Functions =====
 
     /// Record a change for undo/redo
-    fn recordChange(self: *Buffer, change: Change) !void {
+    pub fn recordChange(self: *Buffer, change: Change) !void {
         try self.undo_stack.append(self.allocator, change);
         // Clear redo stack when new change is made
         for (self.redo_stack.items) |*c| {

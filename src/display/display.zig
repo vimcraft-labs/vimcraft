@@ -583,6 +583,11 @@ pub const Display = struct {
                     break :blk screen_col;
                 };
 
+                // TODO: Neovim-style wide cursor for double-width chars (Phase 5: Polish)
+                // Currently disabled - needs investigation into JSI config loading timing
+                // The logic below should apply cursor background to both cells of double-width chars
+                // if (is_cursor_line and config.cursor) |cursor_hl| { ... }
+
                 // Fill rest of line from where text ended
                 // Extend cursorline background to full width (Vim/Neovim behavior)
                 // bg_color already has cursorline applied if is_cursor_line is true
