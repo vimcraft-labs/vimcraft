@@ -48,6 +48,7 @@ pub const Highlight = struct {
 /// Global highlight configuration
 pub const HighlightConfig = struct {
     normal: ?Highlight = null,      // Normal text (background/foreground)
+    cursor: ?Highlight = null,      // Cursor highlight
     cursorline: ?Highlight = null,
     visual: ?Highlight = null,
     yank_flash: ?Highlight = null,  // Brief flash after yank
@@ -77,6 +78,8 @@ pub const HighlightConfig = struct {
     pub fn setHighlight(self: *HighlightConfig, name: []const u8, hl: Highlight) void {
         if (std.mem.eql(u8, name, "Normal")) {
             self.normal = hl;
+        } else if (std.mem.eql(u8, name, "Cursor")) {
+            self.cursor = hl;
         } else if (std.mem.eql(u8, name, "CursorLine")) {
             self.cursorline = hl;
         } else if (std.mem.eql(u8, name, "Visual")) {
@@ -95,6 +98,8 @@ pub const HighlightConfig = struct {
     pub fn getHighlight(self: *const HighlightConfig, name: []const u8) ?Highlight {
         if (std.mem.eql(u8, name, "Normal")) {
             return self.normal;
+        } else if (std.mem.eql(u8, name, "Cursor")) {
+            return self.cursor;
         } else if (std.mem.eql(u8, name, "CursorLine")) {
             return self.cursorline;
         } else if (std.mem.eql(u8, name, "Visual")) {
