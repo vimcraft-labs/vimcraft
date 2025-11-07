@@ -101,6 +101,14 @@ pub const TestHarness = struct {
                             const result = try self.edit_ops.deleteWord(self.buffer);
                             defer self.allocator.free(result.deleted_text);
                         },
+                        '$' => { // d$ - delete to end of line
+                            const result = try self.edit_ops.deleteToEndOfLine(self.buffer);
+                            defer self.allocator.free(result.deleted_text);
+                        },
+                        '0' => { // d0 - delete to start of line
+                            const result = try self.edit_ops.deleteToStartOfLine(self.buffer);
+                            defer self.allocator.free(result.deleted_text);
+                        },
                         else => {},
                     }
                 }

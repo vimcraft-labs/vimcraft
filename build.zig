@@ -143,6 +143,12 @@ pub fn build(b: *std.Build) void {
     // Add uucode module for Unicode width calculations
     exe.root_module.addImport("uucode", uucode_module);
 
+    // Add animation module
+    const animation_module = b.createModule(.{
+        .root_source_file = b.path("src/animation.zig"),
+    });
+    exe.root_module.addImport("animation", animation_module);
+
     // Add unicode_tables import for grapheme cluster detection
     unicode_tables.addStepDependencies(&exe.step);
     exe.root_module.addAnonymousImport("unicode_tables", .{
@@ -405,6 +411,9 @@ pub fn build(b: *std.Build) void {
 
     // Add uucode module for tests
     unit_tests.root_module.addImport("uucode", uucode_module);
+
+    // Add animation module for tests
+    unit_tests.root_module.addImport("animation", animation_module);
 
     // Add unicode_tables import for tests
     unicode_tables.addStepDependencies(&unit_tests.step);

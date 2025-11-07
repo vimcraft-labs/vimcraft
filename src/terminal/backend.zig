@@ -184,6 +184,12 @@ pub const TerminalBackend = struct {
 
     /// Render the editor state to terminal
     pub fn render(self: *TerminalBackend) !void {
+        // Check if yank highlight has expired and deactivate it (passive timer approach)
+        // This matches Neovim's pattern: check during render, deactivate when expired
+        if (self.editor.yank_highlight.active and !self.editor.yank_highlight.isVisible()) {
+            self.editor.yank_highlight.deactivate();
+        }
+
         // Build status string based on mode
         const status = if (self.editor.mode_manager.isCommand())
             try std.fmt.allocPrint(self.allocator, ":{s}", .{self.editor.getCommandString()})

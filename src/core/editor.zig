@@ -213,6 +213,16 @@ pub const Editor = struct {
                             defer self.allocator.free(result.deleted_text);
                             // TODO: Store in register
                         },
+                        '$' => { // d$ - delete to end of line
+                            const result = try self.edit_ops.deleteToEndOfLine(&self.buffer);
+                            defer self.allocator.free(result.deleted_text);
+                            // TODO: Store in register
+                        },
+                        '0' => { // d0 - delete to start of line
+                            const result = try self.edit_ops.deleteToStartOfLine(&self.buffer);
+                            defer self.allocator.free(result.deleted_text);
+                            // TODO: Store in register
+                        },
                         else => {},
                     }
                 }
@@ -241,6 +251,56 @@ pub const Editor = struct {
                             const end_col = if (text.len > 0) text.len - 1 else 0;
                             const end_pos = Position{ .line = line_num, .col = end_col };
                             self.yank_highlight = YankHighlight.init(start_pos, end_pos, .line);
+
+                            self.pending_register.clear();
+                        },
+                        '$' => { // y$ - yank to end of line
+                            const text = try self.edit_ops.yankToEndOfLine(&self.buffer);
+                            defer self.allocator.free(text);
+
+                            if (text.len > 0) {
+                                const reg = self.pending_register.getSelected() orelse '"';
+                                const lines = [_][]const u8{text};
+                                try self.register_mgr.yank(reg, &lines, .char_wise);
+
+                                const start_pos = Position{ .line = self.buffer.cursor.row, .col = self.buffer.cursor.col };
+                                const end_col = self.buffer.cursor.col + text.len - 1;
+                                const end_pos = Position{ .line = self.buffer.cursor.row, .col = end_col };
+                                self.yank_highlight = YankHighlight.init(start_pos, end_pos, .char);
+                            }
+
+                            self.pending_register.clear();
+                        },
+                        '0' => { // y0 - yank to start of line
+                            const text = try self.edit_ops.yankToStartOfLine(&self.buffer);
+                            defer self.allocator.free(text);
+
+                            if (text.len > 0) {
+                                const reg = self.pending_register.getSelected() orelse '"';
+                                const lines = [_][]const u8{text};
+                                try self.register_mgr.yank(reg, &lines, .char_wise);
+
+                                const start_pos = Position{ .line = self.buffer.cursor.row, .col = 0 };
+                                const end_pos = Position{ .line = self.buffer.cursor.row, .col = self.buffer.cursor.col };
+                                self.yank_highlight = YankHighlight.init(start_pos, end_pos, .char);
+                            }
+
+                            self.pending_register.clear();
+                        },
+                        'w' => { // yw - yank word
+                            const text = try self.edit_ops.yankWord(&self.buffer);
+                            defer self.allocator.free(text);
+
+                            if (text.len > 0) {
+                                const reg = self.pending_register.getSelected() orelse '"';
+                                const lines = [_][]const u8{text};
+                                try self.register_mgr.yank(reg, &lines, .char_wise);
+
+                                const start_pos = Position{ .line = self.buffer.cursor.row, .col = self.buffer.cursor.col };
+                                const end_col = self.buffer.cursor.col + text.len - 1;
+                                const end_pos = Position{ .line = self.buffer.cursor.row, .col = end_col };
+                                self.yank_highlight = YankHighlight.init(start_pos, end_pos, .char);
+                            }
 
                             self.pending_register.clear();
                         },

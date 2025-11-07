@@ -267,14 +267,14 @@ pub const EditOps = struct {
             col += 1;
         }
 
-        // Skip whitespace after word
-        while (col < line.len and !isWordChar(line[col]) and line[col] != '\n') {
+        // Skip only actual whitespace (space/tab) after word, not punctuation
+        while (col < line.len and isWhitespace(line[col]) and line[col] != '\n') {
             col += 1;
         }
 
         // If we didn't move, we're at whitespace - skip to next word
         if (col == buffer.cursor.col) {
-            while (col < line.len and !isWordChar(line[col]) and line[col] != '\n') {
+            while (col < line.len and isWhitespace(line[col]) and line[col] != '\n') {
                 col += 1;
             }
         }
@@ -326,12 +326,86 @@ pub const EditOps = struct {
         return result.deleted_text;
     }
 
+    // ========== Yank Operations (read-only text extraction) ==========
+
+    /// Extract text from cursor to end of line (y$ command)
+    /// Returns text (caller must free)
+    pub fn yankToEndOfLine(self: *EditOps, buffer: *const Buffer) ![]const u8 {
+        const line = buffer.getLine(buffer.cursor.row) orelse {
+            return try self.allocator.alloc(u8, 0);
+        };
+
+        const start_col = buffer.cursor.col;
+        var end_col = line.len;
+
+        // Exclude trailing newline
+        if (end_col > 0 and line[end_col - 1] == '\n') {
+            end_col -= 1;
+        }
+
+        if (start_col >= end_col) {
+            return try self.allocator.alloc(u8, 0);
+        }
+
+        return try self.allocator.dupe(u8, line[start_col..end_col]);
+    }
+
+    /// Extract text from start of line to cursor (y0 command)
+    /// Returns text (caller must free)
+    pub fn yankToStartOfLine(self: *EditOps, buffer: *const Buffer) ![]const u8 {
+        const line = buffer.getLine(buffer.cursor.row) orelse {
+            return try self.allocator.alloc(u8, 0);
+        };
+
+        const end_col = @min(buffer.cursor.col, line.len);
+        return try self.allocator.dupe(u8, line[0..end_col]);
+    }
+
+    /// Extract word from cursor position (yw command)
+    /// Returns text (caller must free)
+    pub fn yankWord(self: *EditOps, buffer: *const Buffer) ![]const u8 {
+        const line = buffer.getLine(buffer.cursor.row) orelse {
+            return try self.allocator.alloc(u8, 0);
+        };
+
+        const start_col = buffer.cursor.col;
+        var col = start_col;
+
+        // Skip current word
+        while (col < line.len and isWordChar(line[col])) {
+            col += 1;
+        }
+
+        // Skip only actual whitespace (space/tab) after word, not punctuation
+        while (col < line.len and isWhitespace(line[col]) and line[col] != '\n') {
+            col += 1;
+        }
+
+        // If we didn't move, we're at whitespace - skip to next word
+        if (col == start_col) {
+            while (col < line.len and isWhitespace(line[col]) and line[col] != '\n') {
+                col += 1;
+            }
+        }
+
+        if (start_col >= col) {
+            return try self.allocator.alloc(u8, 0);
+        }
+
+        return try self.allocator.dupe(u8, line[start_col..col]);
+    }
+
     /// Helper: Check if character is word constituent
     fn isWordChar(c: u8) bool {
         return (c >= 'a' and c <= 'z') or
             (c >= 'A' and c <= 'Z') or
             (c >= '0' and c <= '9') or
             c == '_';
+    }
+
+    /// Helper: Check if character is whitespace (space or tab)
+    fn isWhitespace(c: u8) bool {
+        return c == ' ' or c == '\t';
     }
 };
 
