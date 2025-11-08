@@ -2,6 +2,27 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Table of Contents
+
+**Critical Workflows** (read these first):
+- [LLM-Driven Debugging Workflow](#llm-driven-debugging-workflow-critical-study-case) - **MOST IMPORTANT**: Proven systematic approach for bug fixing
+- [Debug Protocol & Verification System](#debug-protocol--verification-system-critical) - LLM-optimized testing framework
+- [Build Commands](#build-commands) - How to build and run OpenVim
+
+**Project Information**:
+- [Project Overview](#project-overview) - Current status and architecture
+- [Architecture](#architecture) - Three-layer design (Zig + JSI + JavaScript)
+- [Development Workflow](#development-workflow) - Adding features, testing changes
+- [Common Issues](#common-issues) - Troubleshooting guide
+
+**Reference**:
+- [Documentation Organization](#documentation-organization-invisible-but-critical) - How docs are structured
+- [Key Files](#key-files) - Important source files
+- [Navigation Commands](#navigation-commands-phase-12) - Vim keybindings implemented
+- [Project Goals & Roadmap](#project-goals--roadmap) - Development phases
+
+---
+
 ## Project Overview
 
 OpenVim is a Neovim-compatible text editor written in Zig with Hermes JavaScript engine for plugin support via JSI (JavaScript Interface). The core innovation is enabling zero-copy bidirectional communication between Zig (editor core) and JavaScript (plugins).
@@ -269,6 +290,227 @@ $ cat result.json  # Claude parses this
 - Deterministic (reproducible)
 
 This debug system is **optimized for LLM cognition**, not human debugging. It provides the structured, deterministic feedback that LLMs need for efficient development iteration.
+
+## LLM-Driven Debugging Workflow (CRITICAL STUDY CASE!)
+
+**IMPORTANT**: This workflow was proven highly effective during the Smear Cursor crash fix (2025-11-08). It demonstrates the power of using Debug Backend for iterative bug fixing.
+
+### The Proven Workflow
+
+When debugging crashes or complex bugs, follow this systematic approach:
+
+```
+1. REPRODUCE with Debug Backend
+   ↓
+2. READ error output (structured, detailed)
+   ↓
+3. ZONE the scope (narrow down to exact function/line)
+   ↓
+4. IMPLEMENT fix
+   ↓
+5. VERIFY with Debug Backend
+   ↓
+6. ITERATE until resolved
+```
+
+### Why This Works for LLMs
+
+**Traditional Debugging (Inefficient)**:
+- ❌ Run → crash → guess → fix → run → crash (slow)
+- ❌ Vague error messages (hard to interpret)
+- ❌ No structured output (string parsing)
+- ❌ Can't reproduce reliably
+- ❌ Wastes iteration cycles
+
+**Debug Backend Workflow (Highly Efficient)**:
+- ✅ **Reproduce reliably**: Same input → same crash
+- ✅ **Rich error output**: Stack traces, line numbers, exact panic messages
+- ✅ **Zone the scope**: Narrow from "something crashes" to "line 342 in jsi_api.zig"
+- ✅ **Fast iteration**: Compile → test → read output → fix (< 30 seconds)
+- ✅ **Structured data**: Easy to parse and understand
+- ✅ **Verifiable fixes**: Test passes = bug fixed (deterministic)
+
+### Case Study: Smear Cursor Crash (2025-11-08)
+
+**Problem**: Segmentation fault when smear cursor animation runs
+
+**Traditional Approach Would Have Been**:
+1. User reports crash
+2. Claude guesses it's resource management
+3. Implements fix #1 (wrong)
+4. User tests → still crashes
+5. Claude guesses it's C++ templates
+6. Implements fix #2 (wrong)
+7. User tests → still crashes
+8. ... (many iterations, frustration)
+
+**Actual Workflow Using Debug Backend**:
+
+```bash
+# Step 1: Create test config that triggers the crash
+cat > /tmp/test_nan_config.js << 'EOF'
+// Call zigSetCursorRenderPosition with NaN values
+zigSetCursorRenderPosition(NaN, 5);
+zigSetCursorRenderPosition(5, Infinity);
+zigSetCursorRenderPosition(-1, 5);
+EOF
+
+# Step 2: Run with debug backend and capture output
+./zig-out/bin/openvim --debug-protocol /tmp/test.txt 2>&1
+
+# Step 3: Read structured error output
+thread 12180465 panic: integer part of floating point value out of bounds
+/Users/le/projects/openvim/src/jsi/jsi_api.zig:342:24
+
+# Step 4: ZONE THE SCOPE - Exact function and line!
+# Not "somewhere in timer code"
+# Not "maybe resource management"
+# EXACTLY: Line 342 in zig_set_cursor_render_position
+
+# Step 5: Implement fix (NaN/Infinity validation)
+const row_f = c.hermes_value_get_number(row_val);
+if (std.math.isNan(row_f) or std.math.isInf(row_f) or row_f < 0) {
+    return null;
+}
+
+# Step 6: Rebuild and verify
+zig build
+./zig-out/bin/openvim --debug-protocol /tmp/test.txt 2>&1
+# Process runs for 3+ seconds without crash ✅
+
+# Step 7: FIXED in ONE iteration!
+```
+
+**Result**: Bug fixed in **1 iteration** instead of 5-10 guesses.
+
+### Key Principles
+
+**1. Always Use Debug Backend for Crashes**
+
+Don't rely on user descriptions like "it crashes". Run it yourself with debug backend:
+
+```bash
+# Bad: Guess based on description
+user: "The smear cursor crashes!"
+claude: "Maybe it's resource management?" [WRONG GUESS]
+
+# Good: Reproduce with debug backend
+claude: "Let me run this with debug backend..."
+./zig-out/bin/openvim --debug-protocol test.txt 2>&1
+# Output shows EXACT line: "src/jsi/jsi_api.zig:342:24"
+claude: "The crash is at line 342, @intFromFloat() with NaN!" [EXACT FIX]
+```
+
+**2. Read Error Output Carefully**
+
+Error messages contain critical clues:
+
+```
+panic: integer part of floating point value out of bounds
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       This clearly indicates @intFromFloat() failure, NOT resource issues!
+```
+
+**3. Zone the Scope Aggressively**
+
+Move from vague to specific:
+- ❌ "Something crashes in the editor"
+- ⚠️ "Something crashes in JSI code"
+- ✅ "Line 342 in zig_set_cursor_render_position panics on @intFromFloat()"
+
+**4. Create Minimal Reproductions**
+
+Strip away everything except the crash:
+
+```javascript
+// Bad: Run full smear cursor animation
+// - Takes time
+// - Many variables
+// - Hard to isolate
+
+// Good: Direct function call with bad values
+zigSetCursorRenderPosition(NaN, 5);  // Crashes immediately!
+```
+
+**5. Verify Fixes Immediately**
+
+Don't implement multiple fixes and hope one works. Fix → verify → iterate:
+
+```bash
+# Bad workflow:
+# - Implement fix #1
+# - Implement fix #2
+# - Implement fix #3
+# - Test → which one worked? (confusion)
+
+# Good workflow:
+# - Implement fix #1
+# - zig build && test → still crashes
+# - Implement fix #2
+# - zig build && test → WORKS! ✅
+```
+
+### Debug Backend Limitations (Important!)
+
+**Timer Processing**: Debug protocol mode (`--debug-protocol`) does NOT process timers!
+
+**Location**: `src/main.zig:414-419`
+
+```zig
+// TODO: Integrate event loop with server.start() to process timers
+```
+
+**Impact**:
+- Timer-based code paths don't execute in debug protocol mode
+- For timer bugs, create direct test cases that call functions without timers
+
+**Workaround**:
+```javascript
+// Instead of testing via timer callback:
+setInterval(() => {
+    zigSetCursorRenderPosition(row, col);  // Won't fire in debug mode!
+}, 16);
+
+// Test function directly:
+zigSetCursorRenderPosition(NaN, 5);  // Calls immediately!
+```
+
+### When to Use This Workflow
+
+**Always use for**:
+- ✅ Crashes (segfaults, panics)
+- ✅ Assertion failures
+- ✅ Type conversion errors
+- ✅ Resource leaks (memory, file handles)
+- ✅ JavaScript exceptions
+
+**Also useful for**:
+- ✅ Logic bugs (wrong behavior)
+- ✅ Performance issues (measure durations)
+- ✅ State corruption (inspect editor state)
+
+**Not useful for**:
+- ❌ UI rendering issues (need visual inspection)
+- ❌ User experience questions (subjective)
+- ❌ Terminal-specific bugs (TTY required)
+
+### Success Metrics
+
+**Before Debug Backend Workflow**:
+- 🐌 5-10 iterations to fix bugs
+- 😓 Many wrong guesses
+- 🤷 "Try this and let me know if it works"
+
+**After Debug Backend Workflow**:
+- ⚡ 1-2 iterations to fix bugs
+- 🎯 Exact root cause identified
+- ✅ "Fixed and verified"
+
+### Remember
+
+**"Reproduce, Read, Zone, Fix, Verify, Iterate"**
+
+This workflow transforms debugging from guesswork into systematic problem-solving. The debug backend is your most powerful tool for understanding crashes - use it first, not as a last resort!
 
 ## Reference Codebases
 

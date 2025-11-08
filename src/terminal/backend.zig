@@ -199,6 +199,9 @@ pub const TerminalBackend = struct {
             try self.allocator.dupe(u8, self.editor.mode_manager.getModeString());
         defer self.allocator.free(status);
 
+        // Get cursor override if active (for animated cursor plugins)
+        const cursor_override = self.editor.cursor_render_override.get();
+
         // Render to display
         try self.display.render(
             &self.editor.buffer,
@@ -206,6 +209,7 @@ pub const TerminalBackend = struct {
             self.highlight_config,
             &self.editor.visual_state,
             &self.editor.yank_highlight,
+            cursor_override,
         );
 
         // Set cursor shape based on mode

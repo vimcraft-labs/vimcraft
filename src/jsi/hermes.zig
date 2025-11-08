@@ -65,6 +65,21 @@ pub const HermesRuntime = struct {
             self.editor,
         );
 
+        // Register cursor position hooks (for animated cursor plugins)
+        c.hermes_register_host_function(
+            self.runtime,
+            "zigGetCursorPosition",
+            zigGetCursorPosition,
+            self.editor,
+        );
+
+        c.hermes_register_host_function(
+            self.runtime,
+            "zigSetCursorRenderPosition",
+            zigSetCursorRenderPosition,
+            self.editor,
+        );
+
         std.debug.print("[Hermes] Registered nvim API functions\n", .{});
     }
 
@@ -234,6 +249,69 @@ export fn nvimBufferGetLine(
             return c.hermes_value_create_string(runtime, text.ptr, text.len);
         }
     }
+
+    return null; // Return undefined
+}
+
+/// zigGetCursorPosition() -> {row, col}
+/// Returns current buffer cursor position as JavaScript object
+export fn zigGetCursorPosition(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.C) ?*c.OVHermesValue {
+    _ = args;
+    _ = count;
+
+    const editor: *Editor = @ptrCast(@alignCast(context.?));
+
+    // Get cursor position from buffer
+    const row = editor.buffer.cursor.row;
+    const col = editor.buffer.cursor.col;
+
+    // Create JavaScript object: {row, col}
+    const obj = c.hermes_value_create_object(runtime) orelse return null;
+
+    // Create number values for row and col
+    const row_val = c.hermes_value_create_number(runtime, @floatFromInt(row));
+    const col_val = c.hermes_value_create_number(runtime, @floatFromInt(col));
+
+    if (row_val != null and col_val != null) {
+        // Set properties on the object
+        c.hermes_value_set_property(runtime, obj, "row", row_val);
+        c.hermes_value_set_property(runtime, obj, "col", col_val);
+
+        // Clean up temporary values
+        c.hermes_value_destroy(row_val);
+        c.hermes_value_destroy(col_val);
+    }
+
+    return obj;
+}
+
+/// zigSetCursorRenderPosition(row, col)
+/// Sets the cursor render position override (for animations)
+export fn zigSetCursorRenderPosition(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.C) ?*c.OVHermesValue {
+    _ = runtime;
+
+    if (count < 2) return null;
+
+    const editor: *Editor = @ptrCast(@alignCast(context.?));
+
+    const row_val = args[0] orelse return null;
+    const col_val = args[1] orelse return null;
+
+    const row: usize = @intFromFloat(c.hermes_value_get_number(row_val));
+    const col: usize = @intFromFloat(c.hermes_value_get_number(col_val));
+
+    // Store override position in editor
+    editor.cursor_render_override.set(row, col);
 
     return null; // Return undefined
 }

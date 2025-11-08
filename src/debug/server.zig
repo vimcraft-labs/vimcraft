@@ -216,6 +216,16 @@ pub const Server = struct {
                 return error.NotImplemented;
             },
 
+            .get_layers => {
+                // TODO: Get layer system state from Display
+                return error.NotImplemented;
+            },
+
+            .get_layer => {
+                // TODO: Get specific layer state from Display
+                return error.NotImplemented;
+            },
+
             // Commands - execute keys in the editor
             .execute_keys => {
                 const keys = cmd.args.execute_keys.keys;

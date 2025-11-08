@@ -38,6 +38,9 @@ fn serializeCommandArgs(args: protocol.CommandArgs, writer: anytype) !void {
         .get_register => |a| {
             try writer.print("{{\"name\":\"{c}\"}}", .{a.name});
         },
+        .get_layer => |a| {
+            try writer.print("{{\"name\":\"{s}\"}}", .{a.name});
+        },
         .execute_keys => |a| {
             try writer.print("{{\"keys\":\"{s}\"}}", .{a.keys});
         },
@@ -145,7 +148,43 @@ fn serializeResponseResult(result: protocol.ResponseResult, writer: anytype) !vo
         .registers => |r| {
             try state.serializeRegistersState(r, writer);
         },
+        .layers => |l| {
+            try serializeLayersState(l, writer);
+        },
+        .layer => |l| {
+            try serializeLayerState(l, writer);
+        },
     }
+}
+
+fn serializeLayerState(layer: protocol.LayerState, writer: anytype) !void {
+    try writer.print("{{\"id\":{d},", .{layer.id});
+    try writer.print("\"name\":\"{s}\",", .{layer.name});
+    try writer.print("\"z_index\":{d},", .{layer.z_index});
+    try writer.print("\"enabled\":{},", .{layer.enabled});
+    try writer.print("\"opacity\":{d:.2},", .{layer.opacity});
+    try writer.print("\"dirty\":{},", .{layer.dirty});
+    try writer.print("\"width\":{d},", .{layer.width});
+    try writer.print("\"height\":{d}}}", .{layer.height});
+}
+
+fn serializeLayersState(layers: protocol.LayersState, writer: anytype) !void {
+    try writer.writeAll("{\"layers\":[");
+    for (layers.layers, 0..) |layer, i| {
+        if (i > 0) try writer.writeAll(",");
+        try serializeLayerState(layer, writer);
+    }
+    try writer.writeAll("],\"compositor_stats\":");
+    try serializeCompositorStats(layers.compositor_stats, writer);
+    try writer.writeAll("}");
+}
+
+fn serializeCompositorStats(stats: protocol.CompositorStats, writer: anytype) !void {
+    try writer.print("{{\"layers_composited\":{d},", .{stats.layers_composited});
+    try writer.print("\"layers_skipped\":{d},", .{stats.layers_skipped});
+    try writer.print("\"cells_blended\":{d},", .{stats.cells_blended});
+    try writer.print("\"cells_skipped\":{d},", .{stats.cells_skipped});
+    try writer.print("\"composite_time_ns\":{d}}}", .{stats.composite_time_ns});
 }
 
 /// Parse Command from JSON
@@ -172,11 +211,17 @@ pub fn parseCommand(json_str: []const u8, allocator: std.mem.Allocator) !protoco
 
 fn parseCommandArgs(cmd: protocol.CommandType, args_obj: std.json.Value, allocator: std.mem.Allocator) !protocol.CommandArgs {
     return switch (cmd) {
-        .ping, .shutdown, .get_state, .get_cursor, .get_mode, .get_visual, .get_registers, .get_buffer => .{ .none = {} },
+        .ping, .shutdown, .get_state, .get_cursor, .get_mode, .get_visual, .get_registers, .get_buffer, .get_layers => .{ .none = {} },
 
         .get_register => blk: {
             const name = args_obj.object.get("name").?.string[0];
             break :blk .{ .get_register = .{ .name = name } };
+        },
+
+        .get_layer => blk: {
+            const name = args_obj.object.get("name").?.string;
+            const owned = try allocator.dupe(u8, name);
+            break :blk .{ .get_layer = .{ .name = owned } };
         },
 
         .execute_keys => blk: {

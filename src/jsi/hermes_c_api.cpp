@@ -245,7 +245,7 @@ void hermes_register_host_function(
             *runtime->runtime,
             PropNameID::forAscii(*runtime->runtime, name),
             0, // parameter count (variable)
-            [func_name](Runtime& rt, const Value& thisVal, const Value* args, size_t count) -> Value {
+            [func_name = func_name](Runtime& rt, const Value& thisVal, const Value* args, size_t count) -> Value {
                 // Get context from global map
                 auto it = g_host_function_contexts.find(func_name);
                 if (it == g_host_function_contexts.end()) {
@@ -370,21 +370,30 @@ OVHermesValue* hermes_call_function(
 
         Function func = function->value.asObject(rt).getFunction(rt);
 
-        // Convert arguments
-        std::vector<Value> argValues;
+        // Call the function with proper argument handling
+        Value result = Value::undefined();
+
         if (args && arg_count > 0) {
+            // Create arguments array
+            std::vector<Value> argValues;
             argValues.reserve(arg_count);
+
             for (size_t i = 0; i < arg_count; i++) {
                 if (args[i]) {
-                    argValues.push_back(Value(rt, args[i]->value));
+                    argValues.emplace_back(Value(rt, args[i]->value));
                 } else {
-                    argValues.push_back(Value::undefined());
+                    argValues.emplace_back(Value::undefined());
                 }
             }
-        }
 
-        // Call the function
-        Value result = func.call(rt, (const Value*)argValues.data(), argValues.size());
+            // Call with pointer to vector data
+            // IMPORTANT: Cast to const Value* to select the correct overload
+            // Otherwise variadic template overload is selected
+            result = func.call(rt, static_cast<const Value*>(argValues.data()), static_cast<size_t>(argValues.size()));
+        } else {
+            // No arguments - call with nullptr
+            result = func.call(rt, nullptr, 0);
+        }
 
         return new OVHermesValue(std::move(result));
     } catch (const facebook::jsi::JSIException& e) {
@@ -480,9 +489,97 @@ OVHermesValue* hermes_value_create_string(
     }
 }
 
+OVHermesValue* hermes_value_create_object(OVHermesRuntime* runtime) {
+    if (!runtime) return nullptr;
+
+    try {
+        Object obj(*runtime->runtime);
+        return new OVHermesValue(Value(*runtime->runtime, std::move(obj)));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 void hermes_value_destroy(OVHermesValue* value) {
     if (value) {
         delete value;
+    }
+}
+
+//
+// Global Object Access
+//
+
+OVHermesObject* hermes_get_global_object(OVHermesRuntime* runtime) {
+    if (!runtime) return nullptr;
+
+    try {
+        Object global = runtime->runtime->global();
+        return new OVHermesObject(std::move(global));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void hermes_object_destroy(OVHermesObject* object) {
+    if (object) {
+        delete object;
+    }
+}
+
+OVHermesValue* hermes_object_get_property(
+    OVHermesRuntime* runtime,
+    OVHermesObject* object,
+    const char* property_name
+) {
+    if (!runtime || !object || !property_name) return nullptr;
+
+    try {
+        Value value = object->object.getProperty(*runtime->runtime, property_name);
+        return new OVHermesValue(std::move(value));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void hermes_object_set_property(
+    OVHermesRuntime* runtime,
+    OVHermesObject* object,
+    const char* property_name,
+    OVHermesValue* value
+) {
+    if (!runtime || !object || !property_name || !value) return;
+
+    try {
+        object->object.setProperty(
+            *runtime->runtime,
+            property_name,
+            Value(*runtime->runtime, value->value)
+        );
+    } catch (...) {
+        // Silently ignore errors
+    }
+}
+
+void hermes_value_set_property(
+    OVHermesRuntime* runtime,
+    OVHermesValue* object_value,
+    const char* property_name,
+    OVHermesValue* value
+) {
+    if (!runtime || !object_value || !property_name || !value) return;
+
+    try {
+        if (!object_value->value.isObject()) return;
+
+        Object obj = object_value->value.asObject(*runtime->runtime);
+        obj.setProperty(
+            *runtime->runtime,
+            property_name,
+            Value(*runtime->runtime, value->value)
+        );
+    } catch (...) {
+        // Silently ignore errors
     }
 }
 

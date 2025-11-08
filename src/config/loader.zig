@@ -83,6 +83,52 @@ pub const ConfigPaths = struct {
 
         try file.writeAll(default_config);
     }
+
+    /// Get all .js files in config directory (non-recursive, excluding init.js)
+    /// Returns an ArrayList of absolute paths that must be freed by caller
+    pub fn getPluginFiles(self: *const ConfigPaths, allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
+        var plugins = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (plugins.items) |path| {
+                allocator.free(path);
+            }
+            plugins.deinit(allocator);
+        }
+
+        // Open config directory
+        var dir = std.fs.openDirAbsolute(self.config_dir, .{ .iterate = true }) catch {
+            // Directory doesn't exist, return empty list
+            return plugins;
+        };
+        defer dir.close();
+
+        // Iterate over files in directory (non-recursive)
+        var iter = dir.iterate();
+        while (try iter.next()) |entry| {
+            // Skip directories and non-regular files
+            if (entry.kind != .file) continue;
+
+            // Skip init.js (loaded separately)
+            if (std.mem.eql(u8, entry.name, "init.js")) continue;
+
+            // Skip temporary/generated files
+            if (std.mem.endsWith(u8, entry.name, ".wrapped.js")) continue;
+            if (std.mem.endsWith(u8, entry.name, ".hbc")) continue;
+
+            // Skip example and backup files
+            if (std.mem.endsWith(u8, entry.name, ".example.js")) continue;
+            if (std.mem.endsWith(u8, entry.name, ".backup")) continue;
+
+            // Check if filename ends with .js
+            if (std.mem.endsWith(u8, entry.name, ".js")) {
+                // Build absolute path
+                const abs_path = try std.fs.path.join(allocator, &[_][]const u8{ self.config_dir, entry.name });
+                try plugins.append(allocator, abs_path);
+            }
+        }
+
+        return plugins;
+    }
 };
 
 /// Print config paths for debugging

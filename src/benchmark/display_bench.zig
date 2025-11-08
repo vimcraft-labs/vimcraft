@@ -30,7 +30,7 @@ fn benchRender(
     visual_state: *VisualState,
     yank_highlight: *YankHighlight,
 ) !void {
-    try display.render(buffer, status, config, visual_state, yank_highlight);
+    try display.render(buffer, status, config, visual_state, yank_highlight, null);
 }
 
 /// Run display rendering benchmarks
@@ -172,7 +172,7 @@ pub fn runDisplayBenchmarks(allocator: std.mem.Allocator) !void {
             // Simulate scrolling by changing viewport
             display.viewport_top = scroll_test_count * 10;
             buffer.cursor.row = display.viewport_top + 10;
-            try display.render(&buffer, status, &config, &visual_state, &yank_highlight);
+            try display.render(&buffer, status, &config, &visual_state, &yank_highlight, null);
         }
 
         const end = std.time.nanoTimestamp();

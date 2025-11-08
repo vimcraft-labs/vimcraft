@@ -8,8 +8,16 @@ const Update = @import("screen_grid.zig").Update;
 const VisualState = @import("../visual/visual.zig").VisualState;
 const YankHighlight = @import("../visual/yank_highlight.zig").YankHighlight;
 const Position = @import("../visual/visual.zig").Position;
+const CursorPosition = @import("../core/editor.zig").CursorPosition;
 const char_width = @import("char_width.zig");
 const gutter = @import("gutter.zig");
+const VirtualTextRenderer = @import("virtual_text.zig").VirtualTextRenderer;
+
+// Multi-layer rendering system (Phase 2)
+const Layer = @import("layer.zig").Layer;
+const LayerManager = @import("layer.zig").LayerManager;
+const ZIndex = @import("layer.zig").ZIndex;
+const Compositor = @import("compositor.zig").Compositor;
 
 /// Terminal display manager
 /// Handles rendering buffer content to terminal using ANSI escape codes
@@ -23,9 +31,19 @@ pub const Display = struct {
     viewport_top: usize, // First visible line number
     viewport_left: usize, // Horizontal scroll offset for current line
 
-    // Grid-based rendering
+    // Grid-based rendering (legacy - will be replaced by compositor output)
     grid: ScreenGrid,
     output_buf: std.ArrayList(u8), // Batch output (Neovim + Helix pattern)
+
+    // Multi-layer rendering system (Phase 2)
+    layer_manager: LayerManager,
+    compositor: Compositor,
+    base_layer: *Layer,          // Buffer content (z=0)
+    gutter_layer: *Layer,        // Line numbers, signs (z=100)
+    cursor_layer: *Layer,        // Cursor highlight (z=200)
+    virtual_text_layer: *Layer,  // Plugin overlays (z=300)
+    selection_layer: *Layer,     // Visual mode (z=400)
+    yank_layer: *Layer,          // Yank highlight (z=500)
 
     // Gutter system (line numbers, signs, etc.)
     gutter_manager: gutter.GutterManager,
@@ -35,9 +53,29 @@ pub const Display = struct {
     // Cache for gutter width calculation (Neovim optimization)
     cached_line_count: usize, // Track line count for cache invalidation
 
+    // Virtual text renderer (Neovim-style extmarks/virt_text)
+    // Plugins can use this to overlay arbitrary text on the screen
+    virtual_text: VirtualTextRenderer,
+
     pub fn init(allocator: std.mem.Allocator) !Display {
         const grid = try ScreenGrid.init(allocator, 80, 24);
         const gutter_mgr = gutter.GutterManager.init(allocator);
+
+        // Create layer manager and layers (Phase 2)
+        var layer_manager = LayerManager.init(allocator);
+        errdefer layer_manager.deinit();
+
+        // Create layers with default terminal size (24x80)
+        const base = try layer_manager.createLayer(ZIndex.BASE, 24, 80, "buffer");
+        const gutter_layer = try layer_manager.createLayer(ZIndex.GUTTER, 24, 80, "gutter");
+        const cursor = try layer_manager.createLayer(ZIndex.CURSOR, 24, 80, "cursor");
+        const virtual_text = try layer_manager.createLayer(ZIndex.VIRTUAL_TEXT, 24, 80, "virtual_text");
+        const selection = try layer_manager.createLayer(ZIndex.SELECTION, 24, 80, "selection");
+        const yank = try layer_manager.createLayer(ZIndex.SEARCH, 24, 80, "yank"); // Reuse SEARCH z-index
+
+        // Create compositor
+        var compositor = try Compositor.init(allocator, 24, 80);
+        errdefer compositor.deinit();
 
         return .{
             .allocator = allocator,
@@ -49,10 +87,19 @@ pub const Display = struct {
             .viewport_left = 0,
             .grid = grid,
             .output_buf = .empty,
+            .layer_manager = layer_manager,
+            .compositor = compositor,
+            .base_layer = base,
+            .gutter_layer = gutter_layer,
+            .cursor_layer = cursor,
+            .virtual_text_layer = virtual_text,
+            .selection_layer = selection,
+            .yank_layer = yank,
             .gutter_manager = gutter_mgr,
             .line_number_config = .{}, // Default: no line numbers
             .sign_column_config = .{}, // Default: no sign column
             .cached_line_count = 0,
+            .virtual_text = VirtualTextRenderer.init(allocator),
         };
     }
 
@@ -60,6 +107,11 @@ pub const Display = struct {
         self.grid.deinit();
         self.output_buf.deinit(self.allocator);
         self.gutter_manager.deinit();
+        self.virtual_text.deinit();
+
+        // Cleanup layer system (Phase 2)
+        self.compositor.deinit();
+        self.layer_manager.deinit();
     }
 
     /// Helper to get a buffered writer for stdout
@@ -289,6 +341,11 @@ pub const Display = struct {
                     // Resize grid if terminal size changed
                     if (new_rows != self.terminal_rows or new_cols != self.terminal_cols) {
                         try self.grid.resize(new_cols, new_rows);
+
+                        // Resize all layers (Phase 2)
+                        try self.layer_manager.resizeAll(new_rows, new_cols);
+                        try self.compositor.resize(new_rows, new_cols);
+
                         self.terminal_rows = new_rows;
                         self.terminal_cols = new_cols;
                     }
@@ -301,7 +358,16 @@ pub const Display = struct {
 
     /// Render buffer content to screen using grid-based rendering
     /// This is the main rendering function following Neovim's architecture
-    pub fn render(self: *Display, buffer: *const Buffer, status: []const u8, config: *const highlights.HighlightConfig, visual_state: *const VisualState, yank_highlight: *const YankHighlight) !void {
+    /// If cursor_override is provided and active, it will be used instead of buffer.cursor for cursor positioning
+    pub fn render(
+        self: *Display,
+        buffer: *const Buffer,
+        status: []const u8,
+        config: *const highlights.HighlightConfig,
+        visual_state: *const VisualState,
+        yank_highlight: *const YankHighlight,
+        cursor_override: ?CursorPosition,
+    ) !void {
         // Update terminal size (handles resize and ensures correct dimensions)
         try self.getTerminalSize();
 
@@ -345,30 +411,45 @@ pub const Display = struct {
             self.viewport_left = cursor_display_col;
         }
 
-        // STEP 1: Update grid from buffer content (render to memory)
-        try self.updateGridFromBuffer(buffer, status, config, visual_state, yank_highlight);
+        // PHASE 2.5: Multi-layer rendering pipeline (ACTIVATED!)
+        // STEP 1: Update all layers from buffer state
+        try self.updateLayers(buffer, status, config, visual_state, yank_highlight);
 
-        // STEP 2: Compute diff (what changed since last frame)
-        const updates = try self.grid.diff(self.allocator);
+        // STEP 1.5: Apply virtual text overlay (Neovim-style extmarks)
+        // Plugins render arbitrary text via virtual_text_layer
+        self.virtual_text.applyToGrid(&self.virtual_text_layer.grid);
+
+        // STEP 2: Composite all layers using Porter-Duff blending
+        try self.compositor.composite(self.layer_manager.layers.items);
+
+        // STEP 3: Get composited output and compute diff
+        const output = self.compositor.getOutput();
+        const updates = try output.diff(self.allocator);
         defer self.allocator.free(updates);
 
         debug_log.log("Diff found {} changed cells", .{updates.len});
 
-
-        // STEP 3: Render only changed cells with optimizations
+        // STEP 4: Render only changed cells with optimizations
         try self.renderUpdates(updates);
 
-        // STEP 4: Swap buffers (current becomes previous for next frame)
-        self.grid.swapBuffers();
+        // STEP 5: Swap buffers (current becomes previous for next frame)
+        output.swapBuffers();
 
-        // Position cursor at buffer cursor location (add gutter offset)
-        const screen_row = if (buffer.cursor.row >= self.viewport_top)
-            buffer.cursor.row - self.viewport_top
+        // Position cursor at buffer cursor location or override (add gutter offset)
+        // Use cursor_override if provided (for animated cursor plugins)
+        const cursor_row = if (cursor_override) |override| override.row else buffer.cursor.row;
+        const cursor_col_display = if (cursor_override) |override|
+            override.col
+        else
+            cursor_display_col;
+
+        const screen_row = if (cursor_row >= self.viewport_top)
+            cursor_row - self.viewport_top
         else
             0;
 
-        const screen_col_text = if (cursor_display_col >= self.viewport_left)
-            cursor_display_col - self.viewport_left
+        const screen_col_text = if (cursor_col_display >= self.viewport_left)
+            cursor_col_display - self.viewport_left
         else
             0;
 
@@ -637,6 +718,333 @@ pub const Display = struct {
         }
     }
 
+    // ============================================================================
+    // PHASE 2.5: Layer-based Rendering Pipeline
+    // ============================================================================
+    // These functions replace the monolithic updateGridFromBuffer with clean
+    // separation of concerns - each layer handles one visual aspect
+
+    /// Update all layers from buffer state (Phase 2.5)
+    /// This is the new rendering entry point that replaces updateGridFromBuffer
+    fn updateLayers(
+        self: *Display,
+        buffer: *const Buffer,
+        _: []const u8, // status - not used yet, will be for status layer
+        config: *const highlights.HighlightConfig,
+        visual_state: *const VisualState,
+        yank_highlight: *const YankHighlight,
+    ) !void {
+        const text_rows = if (self.terminal_rows > 1) self.terminal_rows - 1 else 1;
+
+        // Clear all layers
+        self.base_layer.clear();
+        self.gutter_layer.clear();
+        self.cursor_layer.clear();
+        self.selection_layer.clear();
+        self.yank_layer.clear();
+        // Note: virtual_text_layer is managed by plugins via JSI
+
+        // Update each layer in logical order (not z-order)
+        try self.updateBaseLayer(buffer, config, text_rows);
+        try self.updateGutterLayer(buffer, config, text_rows);
+        try self.updateSelectionLayer(buffer, visual_state, config, text_rows);
+        try self.updateYankLayer(buffer, yank_highlight, config, text_rows);
+        try self.updateCursorLayer(buffer, config, text_rows);
+
+        // Virtual text layer is updated by plugins, so skip it here
+    }
+
+    /// Update base layer: Render buffer text content (z=0)
+    fn updateBaseLayer(
+        self: *Display,
+        buffer: *const Buffer,
+        config: *const highlights.HighlightConfig,
+        text_rows: usize,
+    ) !void {
+        const gutter_width = self.gutter_manager.getTotalWidth();
+
+        const fg_color = if (config.normal) |n| n.fg else null;
+        const bg_color = if (config.normal) |n| n.bg else null;
+
+        var row: usize = 0;
+        while (row < text_rows) : (row += 1) {
+            const line_num = self.viewport_top + row;
+
+            if (line_num < buffer.lineCount()) {
+                const line = buffer.getLine(line_num).?;
+                const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
+                    line[0 .. line.len - 1]
+                else
+                    line;
+
+                // Apply horizontal scroll
+                const h_offset = if (line_num == buffer.cursor.row) self.viewport_left else 0;
+                const start_col = if (h_offset > 0)
+                    char_width.displayColumnToByte(line_without_newline, h_offset)
+                else
+                    0;
+                const remaining = line_without_newline[start_col..];
+
+                // Render text to base layer
+                _ = self.base_layer.grid.setString(row, gutter_width, remaining, fg_color, bg_color);
+
+                // Fill rest of line
+                for ((gutter_width + remaining.len)..self.terminal_cols) |col| {
+                    self.base_layer.grid.setCell(row, col, .{ .char = ' ', .bg = bg_color });
+                }
+            } else {
+                // Empty line indicator (~)
+                self.base_layer.grid.setCell(row, gutter_width, .{ .char = '~', .fg = fg_color, .bg = bg_color });
+                for ((gutter_width + 1)..self.terminal_cols) |col| {
+                    self.base_layer.grid.setCell(row, col, .{ .char = ' ', .bg = bg_color });
+                }
+            }
+        }
+
+        self.base_layer.markDirty();
+    }
+
+    /// Update gutter layer: Render line numbers and signs (z=100)
+    fn updateGutterLayer(
+        self: *Display,
+        buffer: *const Buffer,
+        config: *const highlights.HighlightConfig,
+        text_rows: usize,
+    ) !void {
+        const gutter_width = self.gutter_manager.getTotalWidth();
+        if (gutter_width == 0) return;
+
+        var row: usize = 0;
+        while (row < text_rows) : (row += 1) {
+            const line_num = self.viewport_top + row;
+
+            // Render gutter content
+            var gutter_buf: [32]u8 = undefined;
+            const gutter_str_len = self.gutter_manager.renderLine(
+                line_num,
+                buffer.cursor.row,
+                &gutter_buf,
+            );
+            const gutter_str = gutter_buf[0..gutter_str_len];
+
+            // Determine colors
+            const is_cursor_line = (line_num == buffer.cursor.row);
+            const line_nr_hl = if (is_cursor_line and config.cursorline_nr != null)
+                config.cursorline_nr.?
+            else if (config.line_nr != null)
+                config.line_nr.?
+            else
+                null;
+
+            const gutter_fg = if (line_nr_hl) |hl| hl.fg else null;
+            const gutter_bg = if (line_nr_hl) |hl| hl.bg else null;
+
+            // Render gutter characters
+            var gutter_col: usize = 0;
+            var byte_idx: usize = 0;
+            while (byte_idx < gutter_str.len and gutter_col < gutter_width) {
+                const char_len = std.unicode.utf8ByteSequenceLength(gutter_str[byte_idx]) catch 1;
+                if (byte_idx + char_len > gutter_str.len) break;
+
+                const codepoint = std.unicode.utf8Decode(gutter_str[byte_idx..][0..char_len]) catch ' ';
+                self.gutter_layer.grid.setCell(row, gutter_col, .{
+                    .char = codepoint,
+                    .fg = gutter_fg,
+                    .bg = gutter_bg,
+                });
+
+                gutter_col += 1;
+                byte_idx += char_len;
+            }
+
+            // Pad remaining gutter space
+            while (gutter_col < gutter_width) : (gutter_col += 1) {
+                self.gutter_layer.grid.setCell(row, gutter_col, .{
+                    .char = ' ',
+                    .fg = gutter_fg,
+                    .bg = gutter_bg,
+                });
+            }
+        }
+
+        self.gutter_layer.markDirty();
+    }
+
+    /// Update selection layer: Render visual mode selection (z=400)
+    fn updateSelectionLayer(
+        self: *Display,
+        buffer: *const Buffer,
+        visual_state: *const VisualState,
+        config: *const highlights.HighlightConfig,
+        text_rows: usize,
+    ) !void {
+        if (!visual_state.active) return;
+
+        const cursor_pos = Position{
+            .line = buffer.cursor.row,
+            .col = buffer.cursor.col,
+        };
+        const visual_range = visual_state.getRange(cursor_pos);
+
+        const visual_bg = if (config.visual) |v|
+            v.bg
+        else
+            highlights.Color{ .r = 80, .g = 80, .b = 80 };
+
+        const gutter_width = self.gutter_manager.getTotalWidth();
+        const text_cols = if (self.terminal_cols > gutter_width)
+            self.terminal_cols - gutter_width
+        else
+            self.terminal_cols;
+
+        var row: usize = 0;
+        while (row < text_rows) : (row += 1) {
+            const line_num = self.viewport_top + row;
+
+            // Check if line is in selection range
+            if (line_num >= visual_range.start.line and line_num <= visual_range.end.line) {
+                if (line_num < buffer.lineCount()) {
+                    const line = buffer.getLine(line_num).?;
+                    const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
+                        line[0 .. line.len - 1]
+                    else
+                        line;
+
+                    const h_offset = if (line_num == buffer.cursor.row) self.viewport_left else 0;
+                    const start_col = if (h_offset > 0)
+                        char_width.displayColumnToByte(line_without_newline, h_offset)
+                    else
+                        0;
+                    const remaining = line_without_newline[start_col..];
+
+                    // Render selection highlight for each character
+                    var screen_col: usize = gutter_width;
+                    var byte_idx: usize = 0;
+
+                    while (byte_idx < remaining.len and screen_col < (gutter_width + text_cols)) {
+                        const char_len = std.unicode.utf8ByteSequenceLength(remaining[byte_idx]) catch 1;
+                        if (byte_idx + char_len > remaining.len) break;
+
+                        const buffer_col = start_col + byte_idx;
+                        const char_pos = Position{
+                            .line = line_num,
+                            .col = buffer_col,
+                        };
+
+                        if (visual_state.contains(cursor_pos, char_pos)) {
+                            // This character is selected - render with visual background
+                            self.selection_layer.grid.setCell(row, screen_col, .{
+                                .char = ' ', // Transparent char, just background
+                                .bg = visual_bg,
+                            });
+                        }
+
+                        screen_col += 1;
+                        byte_idx += char_len;
+                    }
+                }
+            }
+        }
+
+        self.selection_layer.markDirty();
+    }
+
+    /// Update yank layer: Render yank flash highlight (z=500)
+    fn updateYankLayer(
+        self: *Display,
+        buffer: *const Buffer,
+        yank_highlight: *const YankHighlight,
+        config: *const highlights.HighlightConfig,
+        text_rows: usize,
+    ) !void {
+        if (!yank_highlight.active or !yank_highlight.isVisible()) return;
+
+        const yank_bg = if (config.yank_flash) |y|
+            y.bg
+        else
+            highlights.Color{ .r = 100, .g = 100, .b = 50 };
+
+        const gutter_width = self.gutter_manager.getTotalWidth();
+        const text_cols = if (self.terminal_cols > gutter_width)
+            self.terminal_cols - gutter_width
+        else
+            self.terminal_cols;
+
+        var row: usize = 0;
+        while (row < text_rows) : (row += 1) {
+            const line_num = self.viewport_top + row;
+
+            if (line_num >= yank_highlight.start.line and line_num <= yank_highlight.end.line) {
+                if (line_num < buffer.lineCount()) {
+                    const line = buffer.getLine(line_num).?;
+                    const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
+                        line[0 .. line.len - 1]
+                    else
+                        line;
+
+                    const h_offset = if (line_num == buffer.cursor.row) self.viewport_left else 0;
+                    const start_col = if (h_offset > 0)
+                        char_width.displayColumnToByte(line_without_newline, h_offset)
+                    else
+                        0;
+                    const remaining = line_without_newline[start_col..];
+
+                    var screen_col: usize = gutter_width;
+                    var byte_idx: usize = 0;
+
+                    while (byte_idx < remaining.len and screen_col < (gutter_width + text_cols)) {
+                        const char_len = std.unicode.utf8ByteSequenceLength(remaining[byte_idx]) catch 1;
+                        if (byte_idx + char_len > remaining.len) break;
+
+                        const buffer_col = start_col + byte_idx;
+                        const char_pos = Position{
+                            .line = line_num,
+                            .col = buffer_col,
+                        };
+
+                        if (yank_highlight.contains(char_pos)) {
+                            self.yank_layer.grid.setCell(row, screen_col, .{
+                                .char = ' ',
+                                .bg = yank_bg,
+                            });
+                        }
+
+                        screen_col += 1;
+                        byte_idx += char_len;
+                    }
+                }
+            }
+        }
+
+        self.yank_layer.markDirty();
+    }
+
+    /// Update cursor layer: Render cursor line highlight (z=200)
+    fn updateCursorLayer(
+        self: *Display,
+        buffer: *const Buffer,
+        config: *const highlights.HighlightConfig,
+        text_rows: usize,
+    ) !void {
+        if (!config.cursorline_enabled or config.cursorline == null) return;
+
+        const cursor_line = buffer.cursor.row;
+        if (cursor_line < self.viewport_top or cursor_line >= self.viewport_top + text_rows) return;
+
+        const screen_row = cursor_line - self.viewport_top;
+        const cursorline_bg = config.cursorline.?.bg;
+
+        // Render cursorline background across entire row
+        for (0..self.terminal_cols) |col| {
+            self.cursor_layer.grid.setCell(screen_row, col, .{
+                .char = ' ',
+                .bg = cursorline_bg,
+            });
+        }
+
+        self.cursor_layer.markDirty();
+    }
+
     /// Render updates to terminal (Step 3: optimized output)
     /// This implements Helix's optimizations: adjacent cell skipping and attribute tracking
     fn renderUpdates(self: *Display, updates: []const Update) !void {
@@ -835,5 +1243,30 @@ pub const Display = struct {
     pub fn flush(_: *Display) !void {
         const stdout = std.fs.File.stdout();
         try stdout.sync();
+    }
+
+    /// Update cursor position only (lightweight, for animations)
+    /// This bypasses the full render pipeline and just moves the cursor
+    /// Used by animated cursor plugins to avoid expensive grid updates
+    pub fn updateCursorOnly(self: *Display, row: usize, col: usize) !void {
+        // Get gutter width
+        const gutter_width = self.gutter_manager.getTotalWidth();
+
+        // Calculate screen position
+        const screen_row = if (row >= self.viewport_top)
+            row - self.viewport_top
+        else
+            0;
+
+        const screen_col_text = if (col >= self.viewport_left)
+            col - self.viewport_left
+        else
+            0;
+
+        const screen_col = gutter_width + screen_col_text;
+        const clamped_col = @min(screen_col, self.terminal_cols - 1);
+
+        // Just move cursor - no grid update, no diff
+        try self.moveCursor(screen_row, clamped_col);
     }
 };

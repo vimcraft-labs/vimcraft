@@ -90,6 +90,36 @@ const CommandBuffer = struct {
     }
 };
 
+/// Cursor position for override (for animated cursor plugins)
+pub const CursorPosition = struct {
+    row: usize,
+    col: usize,
+};
+
+/// Cursor render position override (for animated cursor plugins)
+pub const CursorRenderOverride = struct {
+    active: bool = false,
+    row: usize = 0,
+    col: usize = 0,
+
+    pub fn clear(self: *CursorRenderOverride) void {
+        self.active = false;
+    }
+
+    pub fn set(self: *CursorRenderOverride, row: usize, col: usize) void {
+        self.active = true;
+        self.row = row;
+        self.col = col;
+    }
+
+    pub fn get(self: *const CursorRenderOverride) ?CursorPosition {
+        if (self.active) {
+            return CursorPosition{ .row = self.row, .col = self.col };
+        }
+        return null;
+    }
+};
+
 /// Headless editor core - no I/O, pure state and logic
 /// This is the single source of truth for editor behavior
 /// Both Terminal backend and Debug backend use this
@@ -103,6 +133,9 @@ pub const Editor = struct {
     register_mgr: RegisterManager,
     visual_state: VisualState,
     yank_highlight: YankHighlight,
+
+    // Cursor rendering override (for animated cursor plugins)
+    cursor_render_override: CursorRenderOverride = .{},
 
     // Internal state
     pending_cmd: PendingCommand,
@@ -224,6 +257,13 @@ pub const Editor = struct {
                             // TODO: Store in register
                         },
                         else => {},
+                    }
+                }
+
+                // Handle pending 'g' commands (goto)
+                if (pending == 'g') {
+                    if (char == 'g') { // gg - go to file start
+                        movement.moveToFileStart(&self.buffer);
                     }
                 }
 
@@ -352,6 +392,14 @@ pub const Editor = struct {
                     self.pending_cmd.set('y');
                 },
 
+                // Goto operations (gg, G)
+                'g' => {
+                    self.pending_cmd.set('g');
+                },
+                'G' => {
+                    movement.moveToFileEnd(&self.buffer);
+                },
+
                 // Paste operations
                 'p' => {
                     const reg = self.pending_register.getSelected() orelse '"';
@@ -425,13 +473,6 @@ pub const Editor = struct {
 
                 else => {},
             }
-        }
-
-        // Multi-character commands
-        if (input.len == 2 and std.mem.eql(u8, input, "gg")) {
-            movement.moveToFileStart(&self.buffer);
-        } else if (input.len == 1 and input[0] == 'G') {
-            movement.moveToFileEnd(&self.buffer);
         }
 
         // Arrow keys

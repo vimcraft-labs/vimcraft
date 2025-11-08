@@ -16,6 +16,8 @@ pub const CommandType = enum {
     get_registers,
     get_register,
     get_buffer,
+    get_layers,        // NEW: Get layer system state
+    get_layer,         // NEW: Get specific layer state
 
     // Commands
     execute_keys,
@@ -58,6 +60,7 @@ pub const Position = struct {
 pub const CommandArgs = union(enum) {
     none: void,
     get_register: struct { name: u8 },
+    get_layer: struct { name: []const u8 },  // NEW: Get layer by name
     execute_keys: struct { keys: []const u8 },
     load_file: struct { path: []const u8 },
     assert_cursor: Position,
@@ -90,6 +93,7 @@ pub const Command = struct {
         switch (self.args) {
             .execute_keys => |a| allocator.free(a.keys),
             .load_file => |a| allocator.free(a.path),
+            .get_layer => |a| allocator.free(a.name),
             .assert_mode => |a| allocator.free(a.mode),
             .assert_visual_mode => |a| allocator.free(a.mode),
             .assert_register => |a| {
@@ -123,6 +127,8 @@ pub const ResponseResult = union(enum) {
     registers: RegistersState,
     register: RegisterState,
     buffer: BufferState,
+    layers: LayersState,       // NEW: All layers
+    layer: LayerState,         // NEW: Single layer
     execute_keys: struct { keys_processed: usize },
     assertion: AssertionResult,
     pong: struct { version: []const u8 },
@@ -255,6 +261,33 @@ pub const AssertionResult = struct {
     expected: ?[]const u8,
     actual: ?[]const u8,
     diff: ?[]const u8,
+};
+
+/// Single layer state
+pub const LayerState = struct {
+    id: usize,
+    name: []const u8,
+    z_index: i32,
+    enabled: bool,
+    opacity: f32,
+    dirty: bool,
+    width: usize,
+    height: usize,
+};
+
+/// All layers state
+pub const LayersState = struct {
+    layers: []const LayerState,
+    compositor_stats: CompositorStats,
+};
+
+/// Compositor statistics
+pub const CompositorStats = struct {
+    layers_composited: usize,
+    layers_skipped: usize,
+    cells_blended: usize,
+    cells_skipped: usize,
+    composite_time_ns: i64,
 };
 
 // Tests

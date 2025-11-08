@@ -210,6 +210,11 @@ OVHermesValue* hermes_value_create_string(
 );
 
 /**
+ * Create a new empty object
+ */
+OVHermesValue* hermes_value_create_object(OVHermesRuntime* runtime);
+
+/**
  * Destroy a value (release reference)
  */
 void hermes_value_destroy(OVHermesValue* value);
@@ -222,6 +227,11 @@ void hermes_value_destroy(OVHermesValue* value);
  * Get the global object
  */
 OVHermesObject* hermes_get_global_object(OVHermesRuntime* runtime);
+
+/**
+ * Destroy an object (release reference)
+ */
+void hermes_object_destroy(OVHermesObject* object);
 
 /**
  * Get a property from an object
@@ -238,6 +248,16 @@ OVHermesValue* hermes_object_get_property(
 void hermes_object_set_property(
     OVHermesRuntime* runtime,
     OVHermesObject* object,
+    const char* property_name,
+    OVHermesValue* value
+);
+
+/**
+ * Set a property on a value (if it's an object)
+ */
+void hermes_value_set_property(
+    OVHermesRuntime* runtime,
+    OVHermesValue* object_value,
     const char* property_name,
     OVHermesValue* value
 );

@@ -316,7 +316,7 @@ fn printHelp() void {
 }
 
 /// Load configuration from ~/.config/openvim/init.js
-fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightConfig, debugger_state: *DebuggerState) !void {
+fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightConfig, debugger_state: *DebuggerState, editor: *anyopaque, display: ?*Display) !void {
     // Get config paths
     var paths = try ConfigPaths.init(allocator);
     defer paths.deinit();
@@ -342,9 +342,11 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
         // DO NOT defer destroy here - we need it for :debug command
         debugger_state.runtime = runtime;
 
-        // Register JSI host functions (zigSetHighlight, zigSetOption)
+        // Register JSI host functions (zigSetHighlight, zigSetOption, cursor hooks)
         // Timer system is also initialized here
-        jsi_api.initJSI(allocator, @ptrCast(runtime), config);
+        // NOTE: Display is not available in headless debug protocol mode
+        // Trail rendering will be unavailable, but that's OK for headless testing
+        jsi_api.initJSI(allocator, @ptrCast(runtime), config, @ptrCast(@alignCast(editor)), display);
 
         // Load and execute init.js
         jsi_api.loadConfig(@ptrCast(runtime), paths.init_js_path, allocator) catch |err| {
@@ -356,6 +358,29 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
             config.cursorline_enabled = true;
             return;
         };
+
+        // Load all plugin files from ~/.config/openvim/*.js (non-recursive)
+        var plugin_files = try paths.getPluginFiles(allocator);
+        defer {
+            for (plugin_files.items) |path| {
+                allocator.free(path);
+            }
+            plugin_files.deinit(allocator);
+        }
+
+        if (plugin_files.items.len > 0) {
+            std.debug.print("Loading {d} plugin(s) from {s}\n", .{ plugin_files.items.len, paths.config_dir });
+        }
+
+        for (plugin_files.items) |plugin_path| {
+            // Get just the filename for display
+            const filename = std.fs.path.basename(plugin_path);
+            std.debug.print("  Loading plugin: {s}\n", .{filename});
+
+            jsi_api.loadPlugin(@ptrCast(runtime), plugin_path, allocator) catch |err| {
+                std.debug.print("  WARNING: Failed to load {s}: {}\n", .{ filename, err });
+            };
+        }
     } else {
         // Use defaults
         const cursorline_bg = try highlights.Color.fromHex("#2b2b2b");
@@ -372,14 +397,35 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     var editor = try Editor.init(allocator);
     defer editor.deinit();
 
+    // Initialize JavaScript runtime for plugins (headless mode)
+    var debugger_state = DebuggerState{ .allocator = allocator };
+    defer debugger_state.deinit();
+
+    var highlight_config = highlights.HighlightConfig.init(allocator);
+    defer highlight_config.deinit();
+
+    // Load JavaScript config and plugins for headless debugging
+    // NOTE: No display in headless mode, trail rendering will be unavailable
+    try loadConfigFromJs(allocator, &highlight_config, &debugger_state, &editor, null);
+
     // Create debug server with editor core
     var server = debug_protocol.server.Server.init(allocator, .{
         .use_stdio = true,
     }, &editor);
     defer server.deinit();
 
+    // TODO: Integrate event loop with server.start() to process timers
+    // Currently server.start() blocks on stdin - we need to interleave:
+    // 1. Process stdin commands (non-blocking)
+    // 2. Run event_loop.runOnce()
+    // 3. Process timer queue
+    // This enables animated plugins like Smear cursor in headless mode!
+
     // Start server (blocks until shutdown command received)
     try server.start();
+
+    // Cleanup timers after server shuts down
+    jsi_api.deinitTimers();
 }
 
 /// Run the interactive editor (normal mode)
@@ -428,9 +474,8 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         .config_path = paths.init_js_path,
     };
 
-    // Load configuration from init.js
-    try loadConfigFromJs(allocator, &highlight_config, &debugger_state);
-    defer jsi_api.deinitTimers();
+    // Load configuration from init.js (pass editor for cursor hooks and display for trail rendering)
+    try loadConfigFromJs(allocator, &highlight_config, &debugger_state, &editor, &display);
 
     // Apply sign column config from JS to display
     try display.setSignColumn(highlight_config.signcolumn_mode);
@@ -492,9 +537,26 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         // Run libuv event loop (timers, watchers)
         _ = event_loop.runOnce();
 
+        // Process timer queue (React Native pattern: call JS from main thread)
+        // This must be AFTER libuv but BEFORE any rendering
+        jsi_api.processTimerQueue(allocator);
+
         // Check if config needs reload
         if (reload_state.needs_reload) {
             reload_state.reload() catch {};
+            needs_render = true;
+        }
+
+        // Check if cursor override is active (animated cursor plugin)
+        // Use lightweight cursor-only update instead of full render
+        if (editor.cursor_render_override.active) {
+            if (editor.cursor_render_override.get()) |pos| {
+                display.updateCursorOnly(pos.row, pos.col) catch {};
+            }
+        }
+
+        // Check if yank highlight is active and needs rendering
+        if (editor.yank_highlight.active and editor.yank_highlight.isVisible()) {
             needs_render = true;
         }
 
@@ -505,6 +567,8 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         if (needs_render) {
             const render_source: RenderSource = if (reload_state.needs_reload)
                 .config
+            else if (editor.yank_highlight.active)
+                .timer
             else
                 .input;
             render_stats.recordRender(render_source);
@@ -526,6 +590,10 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
             _ = event_loop.runOnce();
         }
     }
+
+    // Deinit timers AFTER event loop is done
+    // This ensures all timer callbacks have been processed
+    jsi_api.deinitTimers();
 }
 
 /// Launch Chrome DevTools automatically (like React Native does)
@@ -629,9 +697,8 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     // Store runtime in debugger state
     debugger_state.runtime = runtime;
 
-    // Register JSI host functions
-    jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config);
-    defer jsi_api.deinitTimers();
+    // Register JSI host functions (including cursor hooks for plugins and trail rendering)
+    jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &editor, &display);
 
     // Create and start CDP debugger BEFORE loading config
     var debugger = try Debugger.init(runtime, 9229);
@@ -663,6 +730,34 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
             highlight_config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
             highlight_config.cursorline_enabled = true;
         };
+
+        // Load all plugin files from ~/.config/openvim/*.js (non-recursive)
+        var plugin_files = try paths.getPluginFiles(allocator);
+        defer {
+            for (plugin_files.items) |path| {
+                allocator.free(path);
+            }
+            plugin_files.deinit(allocator);
+        }
+
+        if (plugin_files.items.len > 0) {
+            const msg = try std.fmt.allocPrint(allocator, "Loading {} plugin(s)", .{plugin_files.items.len});
+            defer allocator.free(msg);
+            debugger.log(msg, .info);
+        }
+
+        for (plugin_files.items) |plugin_path| {
+            const filename = std.fs.path.basename(plugin_path);
+            const msg = try std.fmt.allocPrint(allocator, "  Loading plugin: {s}", .{filename});
+            defer allocator.free(msg);
+            debugger.log(msg, .info);
+
+            jsi_api.loadPlugin(@ptrCast(runtime), plugin_path, allocator) catch |err| {
+                const err_msg = try std.fmt.allocPrint(allocator, "  WARNING: Failed to load {s}: {}", .{ filename, err });
+                defer allocator.free(err_msg);
+                debugger.log(err_msg, .warning);
+            };
+        }
     }
 
     // Apply sign column config
@@ -725,9 +820,25 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         // Run libuv event loop
         _ = event_loop.runOnce();
 
+        // Process timer queue (React Native pattern: call JS from main thread)
+        jsi_api.processTimerQueue(allocator);
+
         // Check config reload
         if (reload_state.needs_reload) {
             reload_state.reload() catch {};
+            needs_render = true;
+        }
+
+        // Check if cursor override is active (animated cursor plugin)
+        // Use lightweight cursor-only update instead of full render
+        if (editor.cursor_render_override.active) {
+            if (editor.cursor_render_override.get()) |pos| {
+                display.updateCursorOnly(pos.row, pos.col) catch {};
+            }
+        }
+
+        // Check if yank highlight is active and needs rendering
+        if (editor.yank_highlight.active and editor.yank_highlight.isVisible()) {
             needs_render = true;
         }
 
@@ -738,6 +849,8 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         if (needs_render) {
             const render_source: RenderSource = if (reload_state.needs_reload)
                 .config
+            else if (editor.yank_highlight.active)
+                .timer
             else
                 .input;
             render_stats.recordRender(render_source);
@@ -759,6 +872,9 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
             _ = event_loop.runOnce();
         }
     }
+
+    // Deinit timers AFTER event loop is done
+    jsi_api.deinitTimers();
 
     std.debug.print("\n🐛 Debugger shutting down...\n", .{});
 }
