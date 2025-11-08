@@ -239,6 +239,26 @@ pub const Display = struct {
         try self.write("\x1b[4 q");
     }
 
+    /// Set cursor color using OSC 12 escape sequence
+    /// Takes a Color from highlights config and applies it to the cursor
+    /// This works in most modern terminals (xterm, iTerm2, kitty, alacritty, etc.)
+    pub fn setCursorColor(self: *Display, color: highlights.Color) !void {
+        // OSC 12 ; color ST
+        // color format: rgb:rr/gg/bb (hex values)
+        var buf: [64]u8 = undefined;
+        const color_str = try std.fmt.bufPrint(&buf, "\x1b]12;rgb:{x:0>2}/{x:0>2}/{x:0>2}\x07", .{
+            color.r,
+            color.g,
+            color.b,
+        });
+        try self.write(color_str);
+    }
+
+    /// Reset cursor color to terminal default
+    pub fn resetCursorColor(self: *Display) !void {
+        try self.write("\x1b]112\x07");
+    }
+
     /// Configure line number display
     pub fn setLineNumbers(self: *Display, enabled: bool) !void {
         self.line_number_config.number = enabled;

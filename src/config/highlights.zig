@@ -56,7 +56,7 @@ pub const HighlightConfig = struct {
     cursorline_nr: ?Highlight = null, // Line number on cursor line (CursorLineNr)
 
     // Options
-    cursorline_enabled: bool = false,
+    cursorline_enabled: bool = true,  // Enabled by default (standard Vim/Neovim behavior)
 
     // Sign column config (stored here temporarily for JSI access)
     signcolumn_mode: []const u8 = "no", // "yes", "no", "auto"

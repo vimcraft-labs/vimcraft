@@ -6,6 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Critical Workflows** (read these first):
 - [LLM-Driven Debugging Workflow](#llm-driven-debugging-workflow-critical-study-case) - **MOST IMPORTANT**: Proven systematic approach for bug fixing
+  - [Universal Debugging Principles](#universal-debugging-principles-lessons-from-cursorline-bug---2025-11-08) - 7 principles from cursorline bug fix
+  - [Debugging Strategy Using Debug Protocol](#debugging-strategy-using-debug-protocol) - Enhanced protocol capabilities
+  - [Quick Reference: Debugging Checklist](#quick-reference-debugging-checklist) - Checklists and templates
 - [Debug Protocol & Verification System](#debug-protocol--verification-system-critical) - LLM-optimized testing framework
 - [Build Commands](#build-commands) - How to build and run OpenVim
 
@@ -293,9 +296,177 @@ This debug system is **optimized for LLM cognition**, not human debugging. It pr
 
 ## LLM-Driven Debugging Workflow (CRITICAL STUDY CASE!)
 
-**IMPORTANT**: This workflow was proven highly effective during the Smear Cursor crash fix (2025-11-08). It demonstrates the power of using Debug Backend for iterative bug fixing.
+**IMPORTANT**: This section documents proven debugging workflows from real bug fixes. Study these patterns to accelerate future debugging.
 
-### The Proven Workflow
+### Universal Debugging Principles (Lessons from Cursorline Bug - 2025-11-08)
+
+**Problem**: User reported "no text rendered on focused line" - cursorline background was hiding text characters
+
+**Root Cause**: Early return optimization in compositor's `blendCell()` function (`src/display/compositor.zig:220-223`) lost text when cursor layer had transparent characters (char=0) with background color
+
+**Key Lesson**: Trust user reports more directly. When user says "no text rendered", believe them - don't spend cycles analyzing diff algorithm when the problem is in blending.
+
+### The 7 Debugging Principles (Proven Effective)
+
+**1. Start with Simplest Test Case**
+```bash
+# Bad: Test full application with complex interactions
+./openvim large_file.txt  # Too many variables!
+
+# Good: Minimal reproduction
+echo "test" > /tmp/test.txt
+./openvim /tmp/test.txt  # Single line, easy to verify
+```
+
+**2. Trust User Reports (Don't Over-Theorize)**
+```
+User: "No text rendered on cursor line"
+❌ Bad: "Maybe diff() isn't detecting changes?" (over-thinking)
+✅ Good: "Text is being lost somewhere in rendering pipeline" (direct)
+```
+
+**3. Check Data Flow at Each Layer**
+
+For rendering bugs, trace data through the pipeline:
+```
+Buffer Layer → Compositor → Diff → Terminal Output
+     ↓              ↓          ↓           ↓
+  Has text?    Blended?   Detected?   Rendered?
+```
+
+**Where to add debug logs**:
+- Before blending: What's in source layer?
+- After blending: What's in output grid?
+- In diff: What changes detected?
+- In render: What ANSI codes sent?
+
+**4. Use Type Information as Red Flag**
+
+Look for type conversions that can lose data:
+```zig
+// Red flag: Early return without checking all fields
+if (opacity >= 1.0) return src;  // What if src.char is 0?
+
+// Safe: Check all relevant fields
+if (opacity >= 1.0 and src.char != 0 and src.char != ' ') return src;
+```
+
+**5. Debug Logs Should Show Transformations**
+
+```zig
+// Bad: Log final state only
+debug_log.log("Cell: char={u}", .{cell.char});
+
+// Good: Log transformation (before → after)
+debug_log.log("Blend: {u}+{u}→{u}, bg={}+{}→{}", .{
+    src.char, dst.char, result.char,
+    src.bg, dst.bg, result.bg
+});
+```
+
+**6. Verify Fix Assumptions with Targeted Tests**
+
+```bash
+# Test 1: Verify text preserved
+echo "test" > /tmp/test.txt
+./openvim /tmp/test.txt
+# Expected: See "test" on cursor line ✅
+
+# Test 2: Verify background applied
+# Expected: Cursor line has different background ✅
+
+# Test 3: Verify no side effects (other lines unaffected)
+# Expected: Lines above/below render normally ✅
+```
+
+**7. Follow User's Breadcrumbs**
+
+User reports often contain critical clues:
+```
+"still don't see current line highlight"
+→ Problem: highlight not showing
+
+"actually on initial render, I couldn't see focused line - no text rendered"
+→ CLARIFICATION: Text is missing entirely (more serious!)
+→ Reframe: Not a "highlight" problem, but a "text loss" problem
+```
+
+### Debugging Strategy Using Debug Protocol
+
+**Architecture Reminder**:
+```
+OpenVim (--debug-protocol) ←→ ovdb (Debugger) ←→ Claude (LLM)
+     ↓ JSON State                  ↓ Query              ↓ Parse
+   Layer state               Compositor state      Understand & Fix
+   Buffer content            Diff results          Verify solution
+   Cursor position           Render output         Iterate quickly
+```
+
+**Key Insight**: Debug protocol exposes **internal state at each layer**, not just final output. This enables pinpointing WHERE data is lost.
+
+**Current Capabilities** (src/debug/protocol.zig):
+
+1. **State Inspection**:
+   - `get_state` → Full editor snapshot (mode, cursor, buffer, visual, registers)
+   - `get_buffer` → All lines with content
+   - `get_cursor` → Current position
+   - `get_compositor_state` → Layer states, blend results (TODO: implement this!)
+   - `get_diff_results` → What changes detected (TODO: implement this!)
+
+2. **Layer Inspection** (Critical for Rendering Bugs):
+   ```json
+   // TODO: Add these commands to debug protocol
+   {"cmd": "get_layer", "args": {"name": "cursor"}}
+   // Response: All cells in cursor layer with char/fg/bg
+
+   {"cmd": "get_compositor_output"}
+   // Response: Final blended result before diff
+
+   {"cmd": "get_diff_output"}
+   // Response: What updates will be sent to terminal
+   ```
+
+3. **Command Execution**:
+   - `execute_keys "viw"` → Simulate keystrokes
+   - `load_file "/tmp/test.txt"` → Load test file
+   - `benchmark "render"` → Performance measurement
+
+**Enhanced Debug Workflow for Rendering Bugs**:
+
+```bash
+# Step 1: Load minimal test case
+echo '{"cmd":"load_file","args":{"path":"/tmp/test.txt"},"id":"1"}' | ./openvim --debug-protocol
+
+# Step 2: Get buffer content (verify source data)
+echo '{"cmd":"get_buffer","id":"2"}' | ./openvim --debug-protocol
+# Response: {"status":"ok","result":{"lines":["test"]}}  ✅ Source data good
+
+# Step 3: Get layer state (verify each layer)
+echo '{"cmd":"get_layer","args":{"name":"buffer"},"id":"3"}' | ./openvim --debug-protocol
+# Response: Shows "test" in buffer layer ✅
+
+echo '{"cmd":"get_layer","args":{"name":"cursor"},"id":"4"}' | ./openvim --debug-protocol
+# Response: Shows char=0 (transparent) with bg=#FF0000 ✅
+
+# Step 4: Get compositor output (verify blending)
+echo '{"cmd":"get_compositor_output","id":"5"}' | ./openvim --debug-protocol
+# Response: Shows char=0 instead of 't' ❌ BUG FOUND!
+
+# Step 5: Get diff results (verify change detection)
+echo '{"cmd":"get_diff_output","id":"6"}' | ./openvim --debug-protocol
+# Response: Shows bg change but no char ✅ Diff is correct (blending is wrong)
+
+# Conclusion: Bug is in blendCell() in compositor (not diff, not buffer)
+```
+
+**Critical Improvement Needed**: Implement these debug protocol commands:
+- `get_layer` → Inspect individual layer cells
+- `get_compositor_output` → See blended result before diff
+- `get_diff_output` → See what updates diff generated
+
+**Why This Matters**: Without layer inspection, we relied on file-based debug logs (`/tmp/openvim_debug.log`) which are unstructured and hard to parse. With structured JSON output, Claude can pinpoint bugs in seconds.
+
+### The Proven Workflow (Crashes & Panics)
 
 When debugging crashes or complex bugs, follow this systematic approach:
 
@@ -511,6 +682,100 @@ zigSetCursorRenderPosition(NaN, 5);  // Calls immediately!
 **"Reproduce, Read, Zone, Fix, Verify, Iterate"**
 
 This workflow transforms debugging from guesswork into systematic problem-solving. The debug backend is your most powerful tool for understanding crashes - use it first, not as a last resort!
+
+### Quick Reference: Debugging Checklist
+
+**Before Starting** (Pre-Debug):
+- [ ] Read user report carefully - what EXACTLY is broken?
+- [ ] Create minimal test case (single file, few lines)
+- [ ] Identify which pipeline stage likely affected (Buffer→Compositor→Diff→Render)
+- [ ] Check if similar bug was fixed before (search CLAUDE.md, git log)
+
+**During Investigation** (Active Debug):
+- [ ] Add debug logs showing transformations (before→after)
+- [ ] Trace data flow through each layer
+- [ ] Check for early returns that skip validation
+- [ ] Verify type conversions handle edge cases (0, null, NaN, Infinity)
+- [ ] Look for "optimization" code that assumes normal cases
+
+**Verification** (Post-Fix):
+- [ ] Test minimal case (does fix work?)
+- [ ] Test edge cases (0, empty, null)
+- [ ] Test side effects (other features still work?)
+- [ ] Run full application (no regressions?)
+- [ ] Document fix rationale (why was this broken? why does fix work?)
+
+**Common Bug Patterns**:
+1. **Early Return Optimization** → Skips validation (e.g., cursorline bug)
+2. **Type Conversion** → Loses data (@intFromFloat with NaN/Infinity)
+3. **Null Handling** → Assumes non-null when optional (e.g., src.bg)
+4. **Layer Ordering** → Z-index wrong, wrong layer on top
+5. **Dirty Tracking** → Changes not marked dirty, diff misses them
+6. **Buffer Initialization** → Previous buffer not sentinel, false equals
+
+**Fastest Debug Paths by Symptom**:
+
+| Symptom | Likely Location | Debug Strategy |
+|---------|----------------|----------------|
+| No text rendered | Compositor blending | Check `blendCell()` for lost chars |
+| Wrong colors | Layer setup or blending | Check layer fg/bg, blend formula |
+| Missing highlights | Dirty tracking or diff | Check dirty flags, diff detection |
+| Partial render | Layer boundaries | Check width/height bounds |
+| Flicker | Double buffering | Check swap timing |
+| Crash on input | JSI bridge validation | Check NaN/Infinity/bounds |
+
+**Debug Log Templates**:
+
+```zig
+// For data transformations
+debug_log.log("TRANSFORM[{s}]: before={} after={}", .{component, before, after});
+
+// For layer processing
+debug_log.log("LAYER[{s}]: enabled={} dirty={} cells={}", .{name, enabled, dirty, count});
+
+// For bug investigation
+debug_log.log("🐛 BUG CHECK[{s}]: condition={} value={}", .{location, condition, value});
+```
+
+**When Stuck** (Escalation):
+1. Re-read user report - did you misunderstand?
+2. Simplify test case even more
+3. Add debug logs at EVERY transformation point
+4. Check git history - was this working before?
+5. Compare with reference implementation (Neovim, Helix)
+6. Ask user for more details with specific questions
+
+**Success Metrics**:
+- Fix in 1-2 iterations (not 5-10)
+- Root cause identified (not guessed)
+- Verification complete (not "try this and let me know")
+
+### Future Debug Protocol Enhancements
+
+Based on cursorline bug investigation, implement these commands:
+
+**Priority 1** (Critical for Rendering Bugs):
+```json
+{"cmd": "get_layer", "args": {"name": "cursor", "row": 5}}
+{"cmd": "get_compositor_output", "args": {"row": 5}}
+{"cmd": "get_diff_output", "args": {"row": 5}}
+```
+
+**Priority 2** (Performance & Optimization):
+```json
+{"cmd": "get_layer_stats"}  // Blend counts, skip counts
+{"cmd": "get_render_stats"}  // Cells rendered, ANSI codes sent
+{"cmd": "profile_frame"}  // Breakdown by stage
+```
+
+**Priority 3** (Advanced Debugging):
+```json
+{"cmd": "trace_cell", "args": {"row": 5, "col": 10}}  // Track cell through pipeline
+{"cmd": "validate_state"}  // Consistency checks
+{"cmd": "dump_all_layers"}  // Full layer export for analysis
+```
+
+**Why These Matter**: The cursorline bug took multiple iterations because we lacked visibility into intermediate states (layer→compositor→diff). With structured layer inspection, Claude can pinpoint bugs in ONE iteration by checking each stage systematically.
 
 ## Reference Codebases
 

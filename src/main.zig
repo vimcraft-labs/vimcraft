@@ -409,10 +409,20 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     // This allows visual debugging commands to inspect layer state
     try loadConfigFromJs(allocator, &highlight_config, &debugger_state, &editor_ctx, &editor_ctx.display);
 
+    // Ensure cursorline has a default color if not set by init.js
+    // This is critical for visual debugging commands (get_layer, get_output_grid)
+    if (highlight_config.cursorline == null) {
+        const cursorline_bg = try highlights.Color.fromHex("#1E202F");
+        highlight_config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
+    }
+
     // Create debug server with editor context (has Display for visual debugging)
-    var server = debug_protocol.server.Server.init(allocator, .{
-        .use_stdio = true,
-    }, &editor_ctx);
+    var server = debug_protocol.server.Server.init(
+        allocator,
+        .{ .use_stdio = true },
+        &editor_ctx,
+        &highlight_config, // Pass highlight_config for display.render()
+    );
     defer server.deinit();
 
     // TODO: Integrate event loop with server.start() to process timers
@@ -487,6 +497,13 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
     // Get terminal size
     try display.getTerminalSize();
+
+    // Apply cursor color if configured
+    if (highlight_config.cursor) |cursor_hl| {
+        if (cursor_hl.bg) |cursor_bg| {
+            try display.setCursorColor(cursor_bg);
+        }
+    }
 
     // Set up hot reload watcher AFTER entering raw mode
     const reloadCallback = struct {
@@ -770,6 +787,13 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
     // Get terminal size
     try display.getTerminalSize();
+
+    // Apply cursor color if configured
+    if (highlight_config.cursor) |cursor_hl| {
+        if (cursor_hl.bg) |cursor_bg| {
+            try display.setCursorColor(cursor_bg);
+        }
+    }
 
     // Set up hot reload watcher
     const reloadCallback = struct {
@@ -1086,6 +1110,12 @@ test "main: imports" {
     _ = Mode;
     _ = ModeManager;
     _ = movement;
+}
+
+// Import test files for discovery
+comptime {
+    _ = @import("display/cursorline_test.zig");
+    _ = @import("config/highlights_test.zig");
 }
 
 // ============================================================================

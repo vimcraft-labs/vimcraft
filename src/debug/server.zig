@@ -16,13 +16,20 @@ pub const Server = struct {
     config: ServerConfig,
     running: bool,
     editor: *EditorContext, // Reference to editor context (includes Display for visual debugging)
+    highlight_config: *const @import("../config/highlights.zig").HighlightConfig, // For rendering
 
-    pub fn init(allocator: std.mem.Allocator, config: ServerConfig, editor: *EditorContext) Server {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        config: ServerConfig,
+        editor: *EditorContext,
+        highlight_config: *const @import("../config/highlights.zig").HighlightConfig,
+    ) Server {
         return .{
             .allocator = allocator,
             .config = config,
             .running = false,
             .editor = editor,
+            .highlight_config = highlight_config,
         };
     }
 
@@ -197,18 +204,117 @@ pub const Server = struct {
             },
 
             .get_visual => {
-                // TODO: Get actual visual state from editor
-                return error.NotImplemented;
+                const visual = &self.editor.visual_state;
+                const cursor = self.editor.buffer.cursor;
+
+                if (!visual.active) {
+                    return .{ .visual = .{
+                        .active = false,
+                        .mode = try self.allocator.dupe(u8, "none"),
+                        .anchor = .{ .line = 0, .col = 0 },
+                        .head = .{ .line = 0, .col = 0 },
+                        .text = &[_][]const u8{},
+                    } };
+                }
+
+                const mode_str = switch (visual.mode) {
+                    .char => "char",
+                    .line => "line",
+                    .block => "block",
+                };
+
+                const range = visual.getRange(.{ .line = cursor.row, .col = cursor.col });
+
+                // Get selected text lines
+                var text_lines = std.ArrayList([]const u8).empty;
+                defer text_lines.deinit(self.allocator);
+
+                for (range.start.line..range.end.line + 1) |line_idx| {
+                    const line = self.editor.buffer.getLine(line_idx) orelse continue;
+                    const owned = try self.allocator.dupe(u8, line);
+                    try text_lines.append(self.allocator, owned);
+                }
+
+                return .{ .visual = .{
+                    .active = true,
+                    .mode = try self.allocator.dupe(u8, mode_str),
+                    .anchor = .{ .line = visual.anchor.line, .col = visual.anchor.col },
+                    .head = .{ .line = cursor.row, .col = cursor.col },
+                    .text = try text_lines.toOwnedSlice(self.allocator),
+                } };
             },
 
             .get_registers => {
-                // TODO: Get actual registers from editor
-                return error.NotImplemented;
+                const reg_mgr = &self.editor.register_mgr;
+                var register_states = std.ArrayList(protocol.RegisterState).empty;
+                defer register_states.deinit(self.allocator);
+
+                // Iterate all 39 registers
+                for (&reg_mgr.registers, 0..) |*reg, idx| {
+                    if (reg.isEmpty()) continue; // Skip empty registers
+
+                    const name = @import("../register/register.zig").RegisterManager.indexToChar(idx);
+                    const motion_type_str = reg.motion_type.toString();
+
+                    // Duplicate register lines
+                    var lines_copy = std.ArrayList([]const u8).empty;
+                    defer lines_copy.deinit(self.allocator);
+
+                    for (reg.lines.items) |line| {
+                        const owned = try self.allocator.dupe(u8, line);
+                        try lines_copy.append(self.allocator, owned);
+                    }
+
+                    try register_states.append(self.allocator, protocol.RegisterState{
+                        .name = name,
+                        .lines = try lines_copy.toOwnedSlice(self.allocator),
+                        .type = try self.allocator.dupe(u8, motion_type_str),
+                        .width = reg.width,
+                        .timestamp = reg.timestamp,
+                    });
+                }
+
+                const count = register_states.items.len;
+                const owned_registers = try register_states.toOwnedSlice(self.allocator);
+                return .{ .registers = .{
+                    .registers = owned_registers,
+                    .count = count,
+                } };
             },
 
             .get_register => {
-                // TODO: Get specific register from editor
-                return error.NotImplemented;
+                const reg_name = cmd.args.get_register.name;
+                const reg_mgr = &self.editor.register_mgr;
+                const reg = reg_mgr.get(reg_name) orelse return error.RegisterNotFound;
+
+                if (reg.isEmpty()) {
+                    return .{ .register = .{
+                        .name = reg_name,
+                        .lines = &[_][]const u8{},
+                        .type = try self.allocator.dupe(u8, "char"),
+                        .width = 0,
+                        .timestamp = 0,
+                    } };
+                }
+
+                const motion_type_str = reg.motion_type.toString();
+
+                // Duplicate register lines
+                var lines_copy = std.ArrayList([]const u8).empty;
+                defer lines_copy.deinit(self.allocator);
+
+                for (reg.lines.items) |line| {
+                    const owned = try self.allocator.dupe(u8, line);
+                    try lines_copy.append(self.allocator, owned);
+                }
+
+                return .{ .register = .{
+                    .name = reg_name,
+                    .lines = try lines_copy.toOwnedSlice(self.allocator),
+                    .type = try self.allocator.dupe(u8, motion_type_str),
+                    .width = reg.width,
+                    .timestamp = reg.timestamp,
+                } };
             },
 
             .get_buffer => {
@@ -379,12 +485,35 @@ pub const Server = struct {
             .execute_keys => {
                 const keys = cmd.args.execute_keys.keys;
                 try self.editor.executeKeys(keys);
+
+                // CRITICAL: Render to update display layers (cursor layer, etc.)
+                // Without this, layers stay in cleared state (no background colors)
+                try self.editor.display.render(
+                    &self.editor.buffer,
+                    self.editor.mode_manager.getModeString(),
+                    self.highlight_config,
+                    &self.editor.visual_state,
+                    &self.editor.yank_highlight,
+                    null, // cursor_override
+                );
+
                 return .{ .execute_keys = .{ .keys_processed = keys.len } };
             },
 
             .load_file => {
                 const path = cmd.args.load_file.path;
                 try self.editor.buffer.loadFile(path);
+
+                // CRITICAL: Render to update display layers after loading file
+                try self.editor.display.render(
+                    &self.editor.buffer,
+                    self.editor.mode_manager.getModeString(),
+                    self.highlight_config,
+                    &self.editor.visual_state,
+                    &self.editor.yank_highlight,
+                    null, // cursor_override
+                );
+
                 return .{ .none = {} };
             },
 
@@ -446,18 +575,115 @@ pub const Server = struct {
             },
 
             .assert_visual_active => {
-                // TODO: Verify visual mode active
-                return error.NotImplemented;
+                const expected_active = cmd.args.assert_visual_active.active;
+                const actual_active = self.editor.visual_state.active;
+
+                const match = (expected_active == actual_active);
+
+                if (!match) {
+                    const expected = try std.fmt.allocPrint(self.allocator, "{}", .{expected_active});
+                    const actual = try std.fmt.allocPrint(self.allocator, "{}", .{actual_active});
+                    const diff = try std.fmt.allocPrint(self.allocator, "Expected visual active={}, got {}", .{ expected_active, actual_active });
+
+                    return .{ .assertion = .{
+                        .match = false,
+                        .expected = expected,
+                        .actual = actual,
+                        .diff = diff,
+                    } };
+                }
+
+                return .{ .assertion = .{
+                    .match = true,
+                    .expected = null,
+                    .actual = null,
+                    .diff = null,
+                } };
             },
 
             .assert_visual_mode => {
-                // TODO: Verify visual mode type
-                return error.NotImplemented;
+                const expected_mode = cmd.args.assert_visual_mode.mode;
+                const visual = &self.editor.visual_state;
+
+                if (!visual.active) {
+                    const expected = try self.allocator.dupe(u8, expected_mode);
+                    const actual = try self.allocator.dupe(u8, "none");
+                    const diff = try std.fmt.allocPrint(self.allocator, "Expected visual mode '{s}', but visual mode is not active", .{expected_mode});
+
+                    return .{ .assertion = .{
+                        .match = false,
+                        .expected = expected,
+                        .actual = actual,
+                        .diff = diff,
+                    } };
+                }
+
+                const actual_mode = switch (visual.mode) {
+                    .char => "char",
+                    .line => "line",
+                    .block => "block",
+                };
+
+                const match = std.mem.eql(u8, expected_mode, actual_mode);
+
+                if (!match) {
+                    const expected = try self.allocator.dupe(u8, expected_mode);
+                    const actual = try self.allocator.dupe(u8, actual_mode);
+                    const diff = try std.fmt.allocPrint(self.allocator, "Expected visual mode '{s}', got '{s}'", .{ expected_mode, actual_mode });
+
+                    return .{ .assertion = .{
+                        .match = false,
+                        .expected = expected,
+                        .actual = actual,
+                        .diff = diff,
+                    } };
+                }
+
+                return .{ .assertion = .{
+                    .match = true,
+                    .expected = null,
+                    .actual = null,
+                    .diff = null,
+                } };
             },
 
             .assert_register => {
-                // TODO: Verify register content
-                return error.NotImplemented;
+                const reg_name = cmd.args.assert_register.name;
+                const expected_text = cmd.args.assert_register.text;
+                const reg_mgr = &self.editor.register_mgr;
+                const reg = reg_mgr.get(reg_name) orelse return error.RegisterNotFound;
+
+                // Get register text as single string
+                const actual_text = try reg.getText(self.allocator);
+                defer self.allocator.free(actual_text);
+
+                // Trim trailing newline if present (for comparison)
+                const actual_trimmed = if (actual_text.len > 0 and actual_text[actual_text.len - 1] == '\n')
+                    actual_text[0 .. actual_text.len - 1]
+                else
+                    actual_text;
+
+                const match = std.mem.eql(u8, expected_text, actual_trimmed);
+
+                if (!match) {
+                    const expected = try self.allocator.dupe(u8, expected_text);
+                    const actual = try self.allocator.dupe(u8, actual_trimmed);
+                    const diff = try std.fmt.allocPrint(self.allocator, "Register '{c}': Expected [{s}], got [{s}]", .{ reg_name, expected_text, actual_trimmed });
+
+                    return .{ .assertion = .{
+                        .match = false,
+                        .expected = expected,
+                        .actual = actual,
+                        .diff = diff,
+                    } };
+                }
+
+                return .{ .assertion = .{
+                    .match = true,
+                    .expected = null,
+                    .actual = null,
+                    .diff = null,
+                } };
             },
 
             .assert_line => {

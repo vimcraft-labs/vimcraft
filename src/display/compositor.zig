@@ -45,8 +45,12 @@ pub const Compositor = struct {
         self.stats = .{};
         const start = std.time.nanoTimestamp();
 
-        // Clear output grid
-        self.output_grid.clear();
+        // CRITICAL FIX: Don't clear the grid cells - only clear dirty flags!
+        // Clearing cells and then re-blending produces identical results between frames,
+        // causing diff() to generate zero updates even though lines are marked dirty.
+        // Instead, clear cells to blank AND dirty flags, then let blending overwrite.
+        // This ensures cells that AREN'T touched by any layer become blank.
+        self.output_grid.clear(); // This marks all dirty and resets to blank - needed for correctness
 
         // DEBUG: Log layer composition
         const debug_log = @import("../debug/log.zig");
@@ -170,6 +174,7 @@ pub const Compositor = struct {
                 // Blend cells using alpha compositing
                 const result = blendCell(src, dst, layer.opacity);
                 self.output_grid.setCell(row, col, result);
+                self.output_grid.markDirty(row); // CRITICAL FIX: Mark row as dirty so diff() will check it
                 self.stats.cells_blended += 1;
             }
         }
@@ -213,8 +218,9 @@ pub const CompositorStats = struct {
 /// Formula: result = src + dst * (1 - src.alpha)
 /// Reference: https://en.wikipedia.org/wiki/Alpha_compositing
 fn blendCell(src: Cell, dst: Cell, opacity: f32) Cell {
-    // Fully opaque? Just replace
-    if (opacity >= 1.0) return src;
+    // Fully opaque? Just replace - UNLESS src is transparent (char=0 or space)
+    // This allows cursor layer to provide background without hiding text
+    if (opacity >= 1.0 and src.char != 0 and src.char != ' ') return src;
 
     // Fully transparent? Keep dst
     if (opacity <= 0.0) return dst;

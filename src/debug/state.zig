@@ -104,8 +104,14 @@ pub fn serializeBufferState(buffer: protocol.BufferState, writer: anytype) !void
 pub fn serializeRegisterState(reg: protocol.RegisterState, writer: anytype) !void {
     try writer.writeAll("{");
 
-    // Name
-    try writer.print("\"name\":\"{c}\",", .{reg.name});
+    // Name (escape double quote character)
+    try writer.writeAll("\"name\":\"");
+    if (reg.name == '"') {
+        try writer.writeAll("\\\"");
+    } else {
+        try writer.print("{c}", .{reg.name});
+    }
+    try writer.writeAll("\",");
 
     // Lines
     try writer.writeAll("\"lines\":[");
@@ -130,27 +136,21 @@ pub fn serializeRegisterState(reg: protocol.RegisterState, writer: anytype) !voi
 /// Serialize all registers state
 pub fn serializeRegistersState(registers: protocol.RegistersState, writer: anytype) !void {
     try writer.writeAll("{");
+    try writer.print("\"count\":{d},", .{registers.count});
+    try writer.writeAll("\"registers\":[");
 
-    var iter = registers.registers.iterator();
-    var first = true;
-    while (iter.next()) |entry| {
-        if (!first) try writer.writeAll(",");
-        first = false;
-
-        // Register name as key
-        try writer.print("\"{s}\":", .{entry.key_ptr.*});
-
-        // Register state as value
-        try serializeRegisterState(entry.value_ptr.*, writer);
+    for (registers.registers, 0..) |reg, i| {
+        if (i > 0) try writer.writeAll(",");
+        try serializeRegisterState(reg, writer);
     }
 
-    try writer.writeAll("}");
+    try writer.writeAll("]}");
 }
 
 /// Create EditorState from current runtime state
 /// This will be called by the debug server to capture a snapshot
 pub fn captureEditorState(
-    allocator: std.mem.Allocator,
+    _: std.mem.Allocator,
     mode: []const u8,
     cursor: protocol.Position,
     buffer_lines: []const []const u8,
@@ -184,7 +184,8 @@ pub fn captureEditorState(
 
     // Create registers state (empty for now - will be filled by caller)
     const registers = protocol.RegistersState{
-        .registers = std.StringHashMap(protocol.RegisterState).init(allocator),
+        .registers = &[_]protocol.RegisterState{},
+        .count = 0,
     };
 
     return protocol.EditorState{
@@ -289,15 +290,17 @@ test "State: serialize editor state" {
         .line_count = 2,
     };
 
-    var registers = std.StringHashMap(protocol.RegisterState).init(allocator);
-    defer registers.deinit();
+    const registers = protocol.RegistersState{
+        .registers = &[_]protocol.RegisterState{},
+        .count = 0,
+    };
 
     const editor_state = protocol.EditorState{
         .mode = "NORMAL",
         .cursor = .{ .line = 0, .col = 0 },
         .buffer = buf_state,
         .visual = null,
-        .registers = .{ .registers = registers },
+        .registers = registers,
     };
 
     try serializeEditorState(editor_state, buffer.writer());
@@ -313,7 +316,7 @@ test "State: capture editor state" {
     const allocator = std.testing.allocator;
 
     const lines = [_][]const u8{ "Line 1", "Line 2" };
-    var state = try captureEditorState(
+    const state = try captureEditorState(
         allocator,
         "NORMAL",
         .{ .line = 0, .col = 0 },
@@ -326,10 +329,10 @@ test "State: capture editor state" {
         null,
         null,
     );
-    defer state.registers.registers.deinit();
 
     try std.testing.expectEqualStrings("NORMAL", state.mode);
     try std.testing.expectEqual(@as(usize, 0), state.cursor.line);
     try std.testing.expectEqual(@as(usize, 2), state.buffer.line_count);
     try std.testing.expect(state.visual == null);
+    try std.testing.expectEqual(@as(usize, 0), state.registers.count);
 }

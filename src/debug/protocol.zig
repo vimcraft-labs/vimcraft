@@ -259,7 +259,8 @@ pub const RegisterState = struct {
 
 /// All registers state
 pub const RegistersState = struct {
-    registers: std.StringHashMap(RegisterState),
+    registers: []const RegisterState,
+    count: usize,
 };
 
 /// Assertion result

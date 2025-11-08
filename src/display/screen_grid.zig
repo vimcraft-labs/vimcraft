@@ -209,15 +209,45 @@ pub const ScreenGrid = struct {
     pub fn diff(self: *ScreenGrid, allocator: std.mem.Allocator) ![]Update {
         var updates: std.ArrayList(Update) = .empty;
 
+        const debug_log = @import("../debug/log.zig");
+
+        // Count dirty lines for debugging
+        var dirty_count: usize = 0;
+        var iter_count = self.dirty_lines.iterator(.{});
+        while (iter_count.next()) |_| {
+            dirty_count += 1;
+        }
+        debug_log.log("DIFF: Checking {d} dirty lines out of {d} total", .{dirty_count, self.height});
+
         // Only check dirty lines (Neovim optimization)
         var iter = self.dirty_lines.iterator(.{});
+        var cells_checked: usize = 0;
+        var cells_changed: usize = 0;
         while (iter.next()) |row| {
             // Compare each cell in this row
             for (0..self.width) |col| {
                 const current_cell = self.current[row][col];
                 const previous_cell = self.previous[row][col];
+                cells_checked += 1;
 
                 if (!current_cell.eql(previous_cell)) {
+                    cells_changed += 1;
+
+                    // Debug: Log first few changes with background color info
+                    if (cells_changed <= 3) {
+                        const cur_bg = if (current_cell.bg) |bg|
+                            @as(i32, @intCast(bg.r))
+                        else
+                            -1;
+                        const prev_bg = if (previous_cell.bg) |bg|
+                            @as(i32, @intCast(bg.r))
+                        else
+                            -1;
+                        debug_log.log("  Change {d}: row={d} col={d} char={u}→{u} bg={}→{}", .{
+                            cells_changed, row, col, previous_cell.char, current_cell.char, prev_bg, cur_bg
+                        });
+                    }
+
                     try updates.append(allocator, .{
                         .row = row,
                         .col = col,
@@ -226,6 +256,8 @@ pub const ScreenGrid = struct {
                 }
             }
         }
+
+        debug_log.log("DIFF: Checked {d} cells, found {d} changes", .{cells_checked, cells_changed});
 
         return updates.toOwnedSlice(allocator);
     }
