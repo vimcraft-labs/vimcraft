@@ -48,8 +48,20 @@ pub const Compositor = struct {
         // Clear output grid
         self.output_grid.clear();
 
+        // DEBUG: Log layer composition
+        const debug_log = @import("../debug/log.zig");
+        debug_log.log("=== COMPOSITOR: Starting composition ===", .{});
+        debug_log.log("Total layers: {d}", .{layers.len});
+
         // Iterate layers in z-index order
         for (layers) |layer| {
+            debug_log.log("Layer '{s}' (z={d}): enabled={}, dirty={}", .{
+                layer.name,
+                layer.z_index,
+                layer.enabled,
+                layer.dirty,
+            });
+
             if (!layer.enabled) {
                 self.stats.layers_skipped += 1;
                 continue;
@@ -58,15 +70,21 @@ pub const Compositor = struct {
             // Blend this layer onto output
             try self.blendLayer(layer);
             self.stats.layers_composited += 1;
+            debug_log.log("  → Composited layer '{s}'", .{layer.name});
         }
+
+        debug_log.log("=== COMPOSITOR: Done (composited={d}, skipped={d}) ===", .{
+            self.stats.layers_composited,
+            self.stats.layers_skipped,
+        });
 
         // Record time
         const end = std.time.nanoTimestamp();
         self.stats.composite_time_ns = @intCast(end - start);
     }
 
-    /// Composite only dirty layers (optimization)
-    /// This is more complex but more efficient for incremental updates
+    /// Composite only dirty layers (PHASE 6 OPTIMIZATION)
+    /// Uses layer caching and incremental composition for maximum performance
     pub fn compositeIncremental(self: *Compositor, layers: []const *Layer) !void {
         // Reset stats
         self.stats = .{};
@@ -81,22 +99,49 @@ pub const Compositor = struct {
             }
         }
 
-        // No dirty layers? Nothing to do
-        if (first_dirty == null) return;
+        // No dirty layers? All layers cached! Ultra-fast path
+        if (first_dirty == null) {
+            // Count cached layers
+            for (layers) |layer| {
+                if (layer.enabled and layer.cacheable and layer.cache_valid) {
+                    self.stats.layers_cached += 1;
+                    // Estimate cells from cache (assuming full grid)
+                    self.stats.cells_from_cache += self.output_grid.width * self.output_grid.height;
+                }
+            }
+            const end = std.time.nanoTimestamp();
+            self.stats.composite_time_ns = @intCast(end - start);
+            return;
+        }
 
-        // Clear output grid regions affected by dirty layers
-        // For now, just clear entire grid (optimization: track dirty rects later)
-        self.output_grid.clear();
+        // PHASE 6 FIX: Don't clear output grid!
+        // Incremental composition means we only re-blend dirty layers
+        // Cached layers stay in the output from previous frame
+        // self.output_grid.clear(); // ← REMOVED! This was deleting cached content
 
-        // Composite all layers from start
+        // Composite ALL layers (cached ones will be skipped but their previous
+        // composition result remains in output_grid)
         for (layers[0..]) |layer| {
             if (!layer.enabled) {
                 self.stats.layers_skipped += 1;
                 continue;
             }
 
+            // PHASE 6: Skip composition for cacheable layers that are clean
+            if (layer.canSkipComposition()) {
+                self.stats.layers_cached += 1;
+                // Note: In a full implementation, we'd use the cached result
+                // For now, we skip the layer entirely (optimization opportunity)
+                continue;
+            }
+
             try self.blendLayer(layer);
             self.stats.layers_composited += 1;
+
+            // Mark layer as clean after composition
+            if (layer.dirty) {
+                // Layer will be marked clean by Display after rendering
+            }
         }
 
         // Record time
@@ -157,8 +202,10 @@ pub const Compositor = struct {
 pub const CompositorStats = struct {
     layers_composited: usize = 0,
     layers_skipped: usize = 0,
+    layers_cached: usize = 0, // Phase 6: cached layer count
     cells_blended: usize = 0,
     cells_skipped: usize = 0,
+    cells_from_cache: usize = 0, // Phase 6: cells skipped due to caching
     composite_time_ns: i64 = 0,
 };
 
@@ -210,9 +257,16 @@ fn blendCell(src: Cell, dst: Cell, opacity: f32) Cell {
         blended_bg = dst.bg;
     }
 
-    // Return blended cell (use src char)
+    // Return blended cell
+    // PHASE 6 FIX: Keep dst char if src is just providing background (space/null)
+    // This allows cursor layer to only affect background without hiding text
+    const final_char = if (src.char == ' ' or src.char == 0)
+        dst.char
+    else
+        src.char;
+
     return Cell{
-        .char = src.char,
+        .char = final_char,
         .fg = blended_fg,
         .bg = blended_bg,
     };

@@ -20,10 +20,8 @@ pub fn log(comptime fmt: []const u8, args: anytype) void {
 
     if (log_file) |f| {
         var buf: [4096]u8 = undefined;
-        var w = f.writer(&buf);
-        const writer = &w.interface;
-        writer.print(fmt, args) catch {};
-        writer.writeAll("\n") catch {};
+        const msg = std.fmt.bufPrint(&buf, fmt ++ "\n", args) catch return;
+        _ = f.write(msg) catch return;
         f.sync() catch {};
     }
 }

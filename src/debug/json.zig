@@ -41,6 +41,20 @@ fn serializeCommandArgs(args: protocol.CommandArgs, writer: anytype) !void {
         .get_layer => |a| {
             try writer.print("{{\"name\":\"{s}\"}}", .{a.name});
         },
+        .get_layer_cells => |a| {
+            try writer.print("{{\"name\":\"{s}\"", .{a.name});
+            if (a.region) |r| {
+                try writer.print(",\"region\":{{\"row\":{d},\"col\":{d},\"height\":{d},\"width\":{d}}}", .{ r.row, r.col, r.height, r.width });
+            }
+            try writer.writeAll("}");
+        },
+        .get_output_grid => |a| {
+            if (a.region) |r| {
+                try writer.print("{{\"region\":{{\"row\":{d},\"col\":{d},\"height\":{d},\"width\":{d}}}}}", .{ r.row, r.col, r.height, r.width });
+            } else {
+                try writer.writeAll("{}");
+            }
+        },
         .execute_keys => |a| {
             try writer.print("{{\"keys\":\"{s}\"}}", .{a.keys});
         },
@@ -154,6 +168,12 @@ fn serializeResponseResult(result: protocol.ResponseResult, writer: anytype) !vo
         .layer => |l| {
             try serializeLayerState(l, writer);
         },
+        .layer_cells => |lc| {
+            try serializeLayerCells(lc, writer);
+        },
+        .output_grid => |og| {
+            try serializeOutputGrid(og, writer);
+        },
     }
 }
 
@@ -182,9 +202,46 @@ fn serializeLayersState(layers: protocol.LayersState, writer: anytype) !void {
 fn serializeCompositorStats(stats: protocol.CompositorStats, writer: anytype) !void {
     try writer.print("{{\"layers_composited\":{d},", .{stats.layers_composited});
     try writer.print("\"layers_skipped\":{d},", .{stats.layers_skipped});
+    try writer.print("\"layers_cached\":{d},", .{stats.layers_cached});
     try writer.print("\"cells_blended\":{d},", .{stats.cells_blended});
     try writer.print("\"cells_skipped\":{d},", .{stats.cells_skipped});
+    try writer.print("\"cells_from_cache\":{d},", .{stats.cells_from_cache});
     try writer.print("\"composite_time_ns\":{d}}}", .{stats.composite_time_ns});
+}
+
+fn serializeOutputCell(cell: protocol.OutputCell, writer: anytype) !void {
+    try writer.print("{{\"row\":{d},\"col\":{d},\"char\":{d}", .{ cell.row, cell.col, cell.char });
+    if (cell.fg) |fg| {
+        try writer.print(",\"fg\":{{\"r\":{d},\"g\":{d},\"b\":{d}}}", .{ fg.r, fg.g, fg.b });
+    }
+    if (cell.bg) |bg| {
+        try writer.print(",\"bg\":{{\"r\":{d},\"g\":{d},\"b\":{d}}}", .{ bg.r, bg.g, bg.b });
+    }
+    try writer.writeAll("}");
+}
+
+fn serializeLayerCells(lc: protocol.LayerCells, writer: anytype) !void {
+    try writer.print("{{\"layer_name\":\"{s}\",", .{lc.layer_name});
+    try writer.print("\"layer_id\":{d},", .{lc.layer_id});
+    try writer.print("\"dirty_count\":{d},", .{lc.dirty_count});
+    try writer.writeAll("\"cells\":[");
+    for (lc.cells, 0..) |cell, i| {
+        if (i > 0) try writer.writeAll(",");
+        try serializeOutputCell(cell, writer);
+    }
+    try writer.writeAll("]}");
+}
+
+fn serializeOutputGrid(og: protocol.OutputGrid, writer: anytype) !void {
+    try writer.print("{{\"width\":{d},", .{og.width});
+    try writer.print("\"height\":{d},", .{og.height});
+    try writer.print("\"cell_count\":{d},", .{og.cell_count});
+    try writer.writeAll("\"cells\":[");
+    for (og.cells, 0..) |cell, i| {
+        if (i > 0) try writer.writeAll(",");
+        try serializeOutputCell(cell, writer);
+    }
+    try writer.writeAll("]}");
 }
 
 /// Parse Command from JSON
@@ -222,6 +279,28 @@ fn parseCommandArgs(cmd: protocol.CommandType, args_obj: std.json.Value, allocat
             const name = args_obj.object.get("name").?.string;
             const owned = try allocator.dupe(u8, name);
             break :blk .{ .get_layer = .{ .name = owned } };
+        },
+
+        .get_layer_cells => blk: {
+            const name = args_obj.object.get("name").?.string;
+            const owned = try allocator.dupe(u8, name);
+            const region = if (args_obj.object.get("region")) |r| protocol.GridRegion{
+                .row = @as(usize, @intCast(r.object.get("row").?.integer)),
+                .col = @as(usize, @intCast(r.object.get("col").?.integer)),
+                .height = @as(usize, @intCast(r.object.get("height").?.integer)),
+                .width = @as(usize, @intCast(r.object.get("width").?.integer)),
+            } else null;
+            break :blk .{ .get_layer_cells = .{ .name = owned, .region = region } };
+        },
+
+        .get_output_grid => blk: {
+            const region = if (args_obj.object.get("region")) |r| protocol.GridRegion{
+                .row = @as(usize, @intCast(r.object.get("row").?.integer)),
+                .col = @as(usize, @intCast(r.object.get("col").?.integer)),
+                .height = @as(usize, @intCast(r.object.get("height").?.integer)),
+                .width = @as(usize, @intCast(r.object.get("width").?.integer)),
+            } else null;
+            break :blk .{ .get_output_grid = .{ .region = region } };
         },
 
         .execute_keys => blk: {

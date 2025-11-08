@@ -2,7 +2,7 @@ const std = @import("std");
 const protocol = @import("protocol.zig");
 const json = @import("json.zig");
 const state = @import("state.zig");
-const Editor = @import("../core/editor.zig").Editor;
+const EditorContext = @import("editor_context.zig").EditorContext;
 
 /// Debug server configuration
 pub const ServerConfig = struct {
@@ -15,9 +15,9 @@ pub const Server = struct {
     allocator: std.mem.Allocator,
     config: ServerConfig,
     running: bool,
-    editor: *Editor, // Reference to editor core
+    editor: *EditorContext, // Reference to editor context (includes Display for visual debugging)
 
-    pub fn init(allocator: std.mem.Allocator, config: ServerConfig, editor: *Editor) Server {
+    pub fn init(allocator: std.mem.Allocator, config: ServerConfig, editor: *EditorContext) Server {
         return .{
             .allocator = allocator,
             .config = config,
@@ -217,13 +217,162 @@ pub const Server = struct {
             },
 
             .get_layers => {
-                // TODO: Get layer system state from Display
-                return error.NotImplemented;
+                const display = &self.editor.display;
+                const layer_mgr = &display.layer_manager;
+                const compositor = &display.compositor;
+
+                // Collect layer states
+                var layer_states = try std.ArrayList(protocol.LayerState).initCapacity(
+                    self.allocator,
+                    layer_mgr.layers.items.len,
+                );
+                defer layer_states.deinit(self.allocator);
+
+                for (layer_mgr.layers.items, 0..) |layer, i| {
+                    try layer_states.append(self.allocator, protocol.LayerState{
+                        .id = i,
+                        .name = try self.allocator.dupe(u8, layer.name),
+                        .z_index = layer.z_index,
+                        .enabled = layer.enabled,
+                        .opacity = layer.opacity,
+                        .dirty = layer.dirty,
+                        .width = layer.grid.width,
+                        .height = layer.grid.height,
+                    });
+                }
+
+                // Get compositor stats
+                const stats = compositor.getStats();
+                const comp_stats = protocol.CompositorStats{
+                    .layers_composited = stats.layers_composited,
+                    .layers_skipped = stats.layers_skipped,
+                    .layers_cached = stats.layers_cached,
+                    .cells_blended = stats.cells_blended,
+                    .cells_skipped = stats.cells_skipped,
+                    .cells_from_cache = stats.cells_from_cache,
+                    .composite_time_ns = stats.composite_time_ns,
+                };
+
+                return .{ .layers = .{
+                    .layers = try layer_states.toOwnedSlice(self.allocator),
+                    .compositor_stats = comp_stats,
+                } };
             },
 
             .get_layer => {
-                // TODO: Get specific layer state from Display
-                return error.NotImplemented;
+                const layer_name = cmd.args.get_layer.name;
+                const display = &self.editor.display;
+                const layer_mgr = &display.layer_manager;
+
+                // Find layer by name
+                for (layer_mgr.layers.items, 0..) |layer, i| {
+                    if (std.mem.eql(u8, layer.name, layer_name)) {
+                        return .{ .layer = protocol.LayerState{
+                            .id = i,
+                            .name = try self.allocator.dupe(u8, layer.name),
+                            .z_index = layer.z_index,
+                            .enabled = layer.enabled,
+                            .opacity = layer.opacity,
+                            .dirty = layer.dirty,
+                            .width = layer.grid.width,
+                            .height = layer.grid.height,
+                        } };
+                    }
+                }
+
+                return error.LayerNotFound;
+            },
+
+            .get_layer_cells => {
+                const layer_name = cmd.args.get_layer_cells.name;
+                const display = &self.editor.display;
+                const layer_mgr = &display.layer_manager;
+
+                // Find layer
+                for (layer_mgr.layers.items, 0..) |layer, layer_id| {
+                    if (std.mem.eql(u8, layer.name, layer_name)) {
+                        var cells: std.ArrayList(protocol.OutputCell) = .empty;
+                        defer cells.deinit(self.allocator);
+
+                        // Iterate layer cells and collect non-empty ones
+                        var dirty_count: usize = 0;
+                        for (0..layer.grid.height) |row| {
+                            for (0..layer.grid.width) |col| {
+                                const cell = layer.grid.getCell(row, col) orelse continue;
+
+                                // Skip empty cells
+                                if (cell.char == 0 and cell.fg == null and cell.bg == null) continue;
+
+                                try cells.append(self.allocator, protocol.OutputCell{
+                                    .row = row,
+                                    .col = col,
+                                    .char = cell.char,
+                                    .fg = if (cell.fg) |fg| protocol.Color{
+                                        .r = fg.r,
+                                        .g = fg.g,
+                                        .b = fg.b,
+                                    } else null,
+                                    .bg = if (cell.bg) |bg| protocol.Color{
+                                        .r = bg.r,
+                                        .g = bg.g,
+                                        .b = bg.b,
+                                    } else null,
+                                });
+
+                                if (layer.dirty) dirty_count += 1;
+                            }
+                        }
+
+                        return .{ .layer_cells = .{
+                            .layer_name = try self.allocator.dupe(u8, layer_name),
+                            .layer_id = layer_id,
+                            .cells = try cells.toOwnedSlice(self.allocator),
+                            .dirty_count = dirty_count,
+                        } };
+                    }
+                }
+
+                return error.LayerNotFound;
+            },
+
+            .get_output_grid => {
+                const display = &self.editor.display;
+                const compositor = &display.compositor;
+                const output = compositor.getOutput();
+
+                var cells: std.ArrayList(protocol.OutputCell) = .empty;
+                defer cells.deinit(self.allocator);
+
+                // Iterate final output grid
+                for (0..output.height) |row| {
+                    for (0..output.width) |col| {
+                        const cell = output.getCell(row, col) orelse continue;
+
+                        // Include ALL cells (even empty for complete picture)
+                        try cells.append(self.allocator, protocol.OutputCell{
+                            .row = row,
+                            .col = col,
+                            .char = cell.char,
+                            .fg = if (cell.fg) |fg| protocol.Color{
+                                .r = fg.r,
+                                .g = fg.g,
+                                .b = fg.b,
+                            } else null,
+                            .bg = if (cell.bg) |bg| protocol.Color{
+                                .r = bg.r,
+                                .g = bg.g,
+                                .b = bg.b,
+                            } else null,
+                        });
+                    }
+                }
+
+                return .{ .output_grid = .{
+                    .cells = try cells.toOwnedSlice(self.allocator),
+                    .width = output.width,
+                    .height = output.height,
+                    .cell_count = cells.items.len,
+                } };
             },
 
             // Commands - execute keys in the editor

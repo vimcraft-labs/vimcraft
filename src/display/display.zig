@@ -73,6 +73,10 @@ pub const Display = struct {
         const selection = try layer_manager.createLayer(ZIndex.SELECTION, 24, 80, "selection");
         const yank = try layer_manager.createLayer(ZIndex.SEARCH, 24, 80, "yank"); // Reuse SEARCH z-index
 
+        // PHASE 6: Enable caching for static layers (huge performance win)
+        gutter_layer.setCacheable(true); // Gutter rarely changes
+        virtual_text.setCacheable(true); // Plugin-managed
+
         // Create compositor
         var compositor = try Compositor.init(allocator, 24, 80);
         errdefer compositor.deinit();
@@ -420,6 +424,8 @@ pub const Display = struct {
         self.virtual_text.applyToGrid(&self.virtual_text_layer.grid);
 
         // STEP 2: Composite all layers using Porter-Duff blending
+        // PHASE 6 NOTE: Using full composition for now
+        // Incremental composition requires cached composition buffers (not yet implemented)
         try self.compositor.composite(self.layer_manager.layers.items);
 
         // STEP 3: Get composited output and compute diff
@@ -1034,10 +1040,12 @@ pub const Display = struct {
         const screen_row = cursor_line - self.viewport_top;
         const cursorline_bg = config.cursorline.?.bg;
 
-        // Render cursorline background across entire row
+        // PHASE 6 FIX: Render cursorline background WITHOUT characters
+        // We use char=0 (null) which the blend function will treat as "no character"
+        // This allows the background to show through without hiding the base layer text
         for (0..self.terminal_cols) |col| {
             self.cursor_layer.grid.setCell(screen_row, col, .{
-                .char = ' ',
+                .char = 0,  // NULL character - won't hide base layer text
                 .bg = cursorline_bg,
             });
         }

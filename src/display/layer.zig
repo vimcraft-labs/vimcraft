@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ScreenGrid = @import("screen_grid.zig").ScreenGrid;
+const DirtyRectTracker = @import("dirty_rect.zig").DirtyRectTracker;
 
 /// Layer z-index constants (Neovim-compatible ordering)
 pub const ZIndex = struct {
@@ -44,6 +45,17 @@ pub const Layer = struct {
     /// Optimization: skip rendering clean layers
     dirty: bool,
 
+    /// Dirty rectangle tracker (Phase 6 optimization)
+    /// Tracks which specific regions of the layer changed
+    dirty_rect_tracker: DirtyRectTracker,
+
+    /// Cache flag (true = layer content is static and cacheable)
+    /// Static layers (like gutter) can be cached and skipped during composition
+    cacheable: bool,
+
+    /// Cache valid flag (true = cached version is up-to-date)
+    cache_valid: bool,
+
     /// Layer metadata (for debugging/inspection)
     name: []const u8,
 
@@ -59,6 +71,9 @@ pub const Layer = struct {
             .opacity = 1.0,
             .grid = try ScreenGrid.init(allocator, width, height),
             .dirty = true, // Start dirty (needs initial render)
+            .dirty_rect_tracker = DirtyRectTracker.init(allocator),
+            .cacheable = false, // Default: not cacheable
+            .cache_valid = false,
             .name = name,
             .allocator = allocator,
         };
@@ -67,22 +82,50 @@ pub const Layer = struct {
     /// Deinitialize layer and free resources
     pub fn deinit(self: *Layer) void {
         self.grid.deinit();
+        self.dirty_rect_tracker.deinit();
     }
 
     /// Mark layer as needing re-render
     pub fn markDirty(self: *Layer) void {
         self.dirty = true;
+        self.dirty_rect_tracker.markFullDirty();
+        self.cache_valid = false;
+    }
+
+    /// Mark specific cell as dirty (Phase 6 optimization)
+    pub fn markCellDirty(self: *Layer, row: usize, col: usize) !void {
+        self.dirty = true;
+        try self.dirty_rect_tracker.markCell(row, col);
+        self.cache_valid = false;
     }
 
     /// Mark layer as clean (render complete)
     pub fn markClean(self: *Layer) void {
         self.dirty = false;
+        self.dirty_rect_tracker.clear();
+        if (self.cacheable) {
+            self.cache_valid = true;
+        }
     }
 
     /// Clear layer grid (fill with empty cells)
     pub fn clear(self: *Layer) void {
         self.grid.clear();
         self.markDirty();
+    }
+
+    /// Mark layer as cacheable (Phase 6 optimization)
+    /// Cacheable layers (like gutter) don't change often
+    pub fn setCacheable(self: *Layer, cacheable: bool) void {
+        self.cacheable = cacheable;
+        if (!cacheable) {
+            self.cache_valid = false;
+        }
+    }
+
+    /// Check if layer can be skipped during composition (Phase 6 optimization)
+    pub fn canSkipComposition(self: *Layer) bool {
+        return self.cacheable and self.cache_valid and !self.dirty;
     }
 
     /// Resize layer grid

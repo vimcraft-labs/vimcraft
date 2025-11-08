@@ -16,8 +16,10 @@ pub const CommandType = enum {
     get_registers,
     get_register,
     get_buffer,
-    get_layers,        // NEW: Get layer system state
-    get_layer,         // NEW: Get specific layer state
+    get_layers,        // Get layer system state
+    get_layer,         // Get specific layer state
+    get_layer_cells,   // NEW: Get cells from specific layer
+    get_output_grid,   // NEW: Get final composited output grid
 
     // Commands
     execute_keys,
@@ -60,7 +62,9 @@ pub const Position = struct {
 pub const CommandArgs = union(enum) {
     none: void,
     get_register: struct { name: u8 },
-    get_layer: struct { name: []const u8 },  // NEW: Get layer by name
+    get_layer: struct { name: []const u8 },
+    get_layer_cells: struct { name: []const u8, region: ?GridRegion },  // NEW
+    get_output_grid: struct { region: ?GridRegion },  // NEW
     execute_keys: struct { keys: []const u8 },
     load_file: struct { path: []const u8 },
     assert_cursor: Position,
@@ -94,6 +98,7 @@ pub const Command = struct {
             .execute_keys => |a| allocator.free(a.keys),
             .load_file => |a| allocator.free(a.path),
             .get_layer => |a| allocator.free(a.name),
+            .get_layer_cells => |a| allocator.free(a.name),
             .assert_mode => |a| allocator.free(a.mode),
             .assert_visual_mode => |a| allocator.free(a.mode),
             .assert_register => |a| {
@@ -127,8 +132,10 @@ pub const ResponseResult = union(enum) {
     registers: RegistersState,
     register: RegisterState,
     buffer: BufferState,
-    layers: LayersState,       // NEW: All layers
-    layer: LayerState,         // NEW: Single layer
+    layers: LayersState,
+    layer: LayerState,
+    layer_cells: LayerCells,   // NEW: Layer cell data
+    output_grid: OutputGrid,   // NEW: Final composited output
     execute_keys: struct { keys_processed: usize },
     assertion: AssertionResult,
     pong: struct { version: []const u8 },
@@ -263,6 +270,46 @@ pub const AssertionResult = struct {
     diff: ?[]const u8,
 };
 
+/// Color (RGB)
+pub const Color = struct {
+    r: u8,
+    g: u8,
+    b: u8,
+};
+
+/// Single cell in output grid
+pub const OutputCell = struct {
+    row: usize,
+    col: usize,
+    char: u21,
+    fg: ?Color,
+    bg: ?Color,
+};
+
+/// Grid region (for querying specific area)
+pub const GridRegion = struct {
+    row: usize,
+    col: usize,
+    height: usize,
+    width: usize,
+};
+
+/// Final compositor output grid
+pub const OutputGrid = struct {
+    cells: []const OutputCell,
+    width: usize,
+    height: usize,
+    cell_count: usize,
+};
+
+/// Layer cell data
+pub const LayerCells = struct {
+    layer_name: []const u8,
+    layer_id: usize,
+    cells: []const OutputCell,
+    dirty_count: usize,
+};
+
 /// Single layer state
 pub const LayerState = struct {
     id: usize,
@@ -285,8 +332,10 @@ pub const LayersState = struct {
 pub const CompositorStats = struct {
     layers_composited: usize,
     layers_skipped: usize,
+    layers_cached: usize,
     cells_blended: usize,
     cells_skipped: usize,
+    cells_from_cache: usize,
     composite_time_ns: i64,
 };
 

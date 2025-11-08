@@ -391,11 +391,11 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
 
 /// Run debug protocol server (headless, stdin/stdout communication)
 fn runDebugProtocol(allocator: std.mem.Allocator) !void {
-    const Editor = @import("core/editor.zig").Editor;
+    const EditorContext = @import("debug/editor_context.zig").EditorContext;
 
-    // Create headless editor core
-    var editor = try Editor.init(allocator);
-    defer editor.deinit();
+    // Create headless editor context (includes Display for visual debugging)
+    var editor_ctx = try EditorContext.init(allocator);
+    defer editor_ctx.deinit();
 
     // Initialize JavaScript runtime for plugins (headless mode)
     var debugger_state = DebuggerState{ .allocator = allocator };
@@ -405,13 +405,14 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     defer highlight_config.deinit();
 
     // Load JavaScript config and plugins for headless debugging
-    // NOTE: No display in headless mode, trail rendering will be unavailable
-    try loadConfigFromJs(allocator, &highlight_config, &debugger_state, &editor, null);
+    // NOTE: Display exists but won't render output (no terminal flush)
+    // This allows visual debugging commands to inspect layer state
+    try loadConfigFromJs(allocator, &highlight_config, &debugger_state, &editor_ctx, &editor_ctx.display);
 
-    // Create debug server with editor core
+    // Create debug server with editor context (has Display for visual debugging)
     var server = debug_protocol.server.Server.init(allocator, .{
         .use_stdio = true,
-    }, &editor);
+    }, &editor_ctx);
     defer server.deinit();
 
     // TODO: Integrate event loop with server.start() to process timers
