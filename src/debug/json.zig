@@ -294,9 +294,11 @@ pub fn parseCommand(json_str: []const u8, allocator: std.mem.Allocator) !protoco
     const cmd_str = root.object.get("cmd").?.string;
     const cmd = protocol.CommandType.fromString(cmd_str) orelse return error.InvalidCommand;
 
-    // Extract args based on command type
-    const args_obj = root.object.get("args").?;
-    const args = try parseCommandArgs(cmd, args_obj, allocator);
+    // Extract args based on command type (optional - some commands don't need args)
+    const args: protocol.CommandArgs = if (root.object.get("args")) |args_obj|
+        try parseCommandArgs(cmd, args_obj, allocator)
+    else
+        protocol.CommandArgs{ .none = {} };
 
     // Create command
     return protocol.Command.init(allocator, id, cmd, args);
