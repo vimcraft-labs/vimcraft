@@ -24,9 +24,9 @@ var global_display: ?*Display = null;
 /// Set during initJSI - enables Core→Backend logging architecture
 var global_editor_with_logger: ?*Editor = null;
 
-/// Zig host function: zigSetHighlight(name, bg, fg)
-/// Called from JavaScript: zigSetHighlight('CursorLine', '#2b2b2b', null)
-export fn zig_set_highlight(
+/// Zig host function: setHighlight(name, bg, fg)
+/// Called from JavaScript: setHighlight('CursorLine', '#2b2b2b', null)
+export fn setHighlight(
     runtime_nullable: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -89,9 +89,9 @@ export fn zig_set_highlight(
     return c.hermes_value_create_undefined(runtime);
 }
 
-/// Zig host function: zigSetOption(name, value)
-/// Called from JavaScript: zigSetOption('cursorLine', true)
-export fn zig_set_option(
+/// Zig host function: setOption(name, value)
+/// Called from JavaScript: setOption('cursorLine', true)
+export fn setOption(
     runtime_nullable: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -155,11 +155,11 @@ const cdp_c = @cImport({
     @cInclude("debug/cdp_debugger.h");
 });
 
-/// Zig host function: zigConsoleLog(...args)
-/// Called from JavaScript: zigConsoleLog('Hello', 42, {foo: 'bar'})
+/// Zig host function: consoleLog(...args)
+/// Called from JavaScript: consoleLog('Hello', 42, {foo: 'bar'})
 /// Sends JavaScript values to BOTH Chrome DevTools Console AND editor.logger
 /// This follows the Core→Backend logging architecture
-export fn zig_console_log(
+export fn consoleLog(
     runtime_nullable: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -483,10 +483,10 @@ fn onTimerClose(handle: [*c]uv.uv_handle_t) callconv(.c) void {
     timer_data.allocator.destroy(timer_data);
 }
 
-/// Zig host function: zigSetTimeout(id, delay)
+/// Zig host function: setTimeout(id, delay)
 /// React Native pattern: JavaScript provides timer ID, not callback
 /// JavaScript keeps the callback in its own registry
-export fn zig_set_timeout(
+export fn setTimeout(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -553,10 +553,10 @@ export fn zig_set_timeout(
     return c.hermes_value_create_undefined(runtime);
 }
 
-/// Zig host function: zigSetInterval(id, delay)
+/// Zig host function: setInterval(id, delay)
 /// React Native pattern: JavaScript provides timer ID, not callback
 /// JavaScript keeps the callback in its own registry
-export fn zig_set_interval(
+export fn setInterval(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -625,9 +625,9 @@ export fn zig_set_interval(
     return c.hermes_value_create_undefined(runtime);
 }
 
-/// Zig host function: zigClearTimer(id)
+/// Zig host function: clearTimer(id)
 /// React Native pattern: Find timer by JavaScript-provided ID
-export fn zig_clear_timer(
+export fn clearTimer(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -663,7 +663,7 @@ export fn zig_clear_timer(
 
 /// Zig host function: zigGetCursorPosition() -> {row, col}
 /// Returns current buffer cursor position as JavaScript object
-export fn zig_get_cursor_position(
+export fn getCursorPosition(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -700,7 +700,7 @@ export fn zig_get_cursor_position(
 
 /// Zig host function: zigSetCursorRenderPosition(row, col)
 /// Sets the cursor render position override (for animations)
-export fn zig_set_cursor_render_position(
+export fn setCursorRenderPosition(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -737,7 +737,7 @@ export fn zig_set_cursor_render_position(
 
 /// Zig host function: zigClearCursorRenderPosition()
 /// Clears the cursor render position override
-export fn zig_clear_cursor_render_position(
+export fn clearCursorRenderPosition(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -758,7 +758,7 @@ export fn zig_clear_cursor_render_position(
 /// Zig host function: zigDrawVirtualText(row, col, char, fg, bg)
 /// Renders a virtual text overlay at screen coordinates (Neovim-style extmark)
 /// This is a general primitive - plugins handle coordinate conversion
-export fn zig_draw_virtual_text(
+export fn drawVirtualText(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -822,7 +822,7 @@ export fn zig_draw_virtual_text(
 
 /// Zig host function: zigClearVirtualText()
 /// Clears all virtual text overlays (Neovim: nvim_buf_clear_namespace)
-export fn zig_clear_virtual_text(
+export fn clearVirtualText(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -843,7 +843,7 @@ export fn zig_clear_virtual_text(
 
 /// Zig host function: zigGetViewportInfo() -> {top, left, height, width}
 /// Returns viewport scroll position and dimensions for coordinate conversion
-export fn zig_get_viewport_info(
+export fn getViewportInfo(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -883,7 +883,7 @@ export fn zig_get_viewport_info(
 
 /// Zig host function: zigGetGutterWidth() -> number
 /// Returns total gutter width (line numbers + signs) for horizontal offset calculation
-export fn zig_get_gutter_width(
+export fn getGutterWidth(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -906,10 +906,10 @@ export fn zig_get_gutter_width(
 // Generic Virtual Text Layer API (Phase 1)
 // ============================================================================
 
-/// Zig host function: zigCreateLayer(name, options)
-/// JavaScript: zigCreateLayer('my_layer', {z_index: 50, opacity: 1.0, cacheable: false})
+/// Zig host function: createLayer(name, options)
+/// JavaScript: createLayer('my_layer', {z_index: 50, opacity: 1.0, cacheable: false})
 /// Creates a custom rendering layer for plugins
-export fn zig_create_layer(
+export fn createLayer(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -997,10 +997,10 @@ export fn zig_create_layer(
     return c.hermes_value_create_undefined(runtime);
 }
 
-/// Zig host function: zigRenderVirtualText(name, cells)
-/// JavaScript: zigRenderVirtualText('my_layer', [{row, col, char, fg?, bg?}, ...])
+/// Zig host function: renderVirtualText(name, cells)
+/// JavaScript: renderVirtualText('my_layer', [{row, col, char, fg?, bg?}, ...])
 /// Renders cells to a custom layer
-export fn zig_render_virtual_text(
+export fn renderVirtualText(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -1172,10 +1172,10 @@ export fn zig_render_virtual_text(
     return c.hermes_value_create_undefined(runtime);
 }
 
-/// Zig host function: zigSetLayerOpacity(name, opacity)
-/// JavaScript: zigSetLayerOpacity('my_layer', 0.5)
+/// Zig host function: setLayerOpacity(name, opacity)
+/// JavaScript: setLayerOpacity('my_layer', 0.5)
 /// Updates layer opacity for fade effects
-export fn zig_set_layer_opacity(
+export fn setLayerOpacity(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -1230,7 +1230,7 @@ export fn zig_set_layer_opacity(
 /// Zig host function: zigClearVirtualText(name)
 /// JavaScript: zigClearVirtualText('my_layer')
 /// Clears layer content (keeps layer alive)
-export fn zig_clear_layer(
+export fn clearLayer(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -1270,10 +1270,10 @@ export fn zig_clear_layer(
     return c.hermes_value_create_undefined(runtime);
 }
 
-/// Zig host function: zigDestroyLayer(name)
-/// JavaScript: zigDestroyLayer('my_layer')
+/// Zig host function: destroyLayer(name)
+/// JavaScript: destroyLayer('my_layer')
 /// Destroys layer and frees resources
-export fn zig_destroy_layer(
+export fn destroyLayer(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -1333,66 +1333,67 @@ pub fn initJSI(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, config
     // Pass config pointer as context so host functions can access it
     c.hermes_register_host_function(
         runtime,
-        "zigSetHighlight",
-        zig_set_highlight,
+        "setHighlight",
+        setHighlight,
         @ptrCast(config), // Pass config as context
     );
 
     c.hermes_register_host_function(
         runtime,
-        "zigSetOption",
-        zig_set_option,
+        "setOption",
+        setOption,
         @ptrCast(config), // Pass config as context
     );
 
     c.hermes_register_host_function(
         runtime,
-        "zigConsoleLog",
-        zig_console_log,
+        "consoleLog",
+        consoleLog,
         null, // No context needed
     );
 
-    // Register timer functions
+    // Register timer functions with internal names to avoid recursion
+    // JavaScript wrapper will call these and provide the user-facing API
     c.hermes_register_host_function(
         runtime,
-        "zigSetTimeout",
-        zig_set_timeout,
+        "__nativeSetTimeout",
+        setTimeout,
         null,
     );
 
     c.hermes_register_host_function(
         runtime,
-        "zigSetInterval",
-        zig_set_interval,
+        "__nativeSetInterval",
+        setInterval,
         null,
     );
 
     c.hermes_register_host_function(
         runtime,
-        "zigClearTimer",
-        zig_clear_timer,
+        "__nativeClearTimer",
+        clearTimer,
         null,
     );
 
     // Register cursor position hooks (for animated cursor plugins)
     c.hermes_register_host_function(
         runtime,
-        "zigGetCursorPosition",
-        zig_get_cursor_position,
+        "getCursorPosition",
+        getCursorPosition,
         @ptrCast(editor_or_context),
     );
 
     c.hermes_register_host_function(
         runtime,
-        "zigSetCursorRenderPosition",
-        zig_set_cursor_render_position,
+        "setCursorRenderPosition",
+        setCursorRenderPosition,
         @ptrCast(editor_or_context),
     );
 
     c.hermes_register_host_function(
         runtime,
-        "zigClearCursorRenderPosition",
-        zig_clear_cursor_render_position,
+        "clearCursorRenderPosition",
+        clearCursorRenderPosition,
         @ptrCast(editor_or_context),
     );
 
@@ -1400,66 +1401,74 @@ pub fn initJSI(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, config
     // General primitive - any plugin can use this
     c.hermes_register_host_function(
         runtime,
-        "zigDrawVirtualText",
-        zig_draw_virtual_text,
+        "drawVirtualText",
+        drawVirtualText,
         @ptrCast(editor_or_context),
     );
 
     c.hermes_register_host_function(
         runtime,
-        "zigClearVirtualText",
-        zig_clear_virtual_text,
+        "clearVirtualText",
+        clearVirtualText,
         @ptrCast(editor_or_context),
     );
 
     // Register viewport/gutter helpers (for coordinate conversion)
     c.hermes_register_host_function(
         runtime,
-        "zigGetViewportInfo",
-        zig_get_viewport_info,
+        "getViewportInfo",
+        getViewportInfo,
         @ptrCast(editor_or_context),
     );
 
     c.hermes_register_host_function(
         runtime,
-        "zigGetGutterWidth",
-        zig_get_gutter_width,
+        "getGutterWidth",
+        getGutterWidth,
         @ptrCast(editor_or_context),
     );
 
     // Register generic virtual text layer API (Phase 1)
     c.hermes_register_host_function(
         runtime,
-        "zigCreateLayer",
-        zig_create_layer,
+        "createLayer",
+        createLayer,
         null,
     );
 
     c.hermes_register_host_function(
         runtime,
-        "zigRenderVirtualText",
-        zig_render_virtual_text,
+        "renderVirtualText",
+        renderVirtualText,
         null,
     );
 
     c.hermes_register_host_function(
         runtime,
-        "zigSetLayerOpacity",
-        zig_set_layer_opacity,
+        "setLayerOpacity",
+        setLayerOpacity,
         null,
     );
 
     c.hermes_register_host_function(
         runtime,
-        "zigClearVirtualText",
-        zig_clear_layer,
+        "clearVirtualText",
+        clearLayer,
+        null,
+    );
+
+    // Also register as clearLayer for backwards compatibility
+    c.hermes_register_host_function(
+        runtime,
+        "clearLayer",
+        clearLayer,
         null,
     );
 
     c.hermes_register_host_function(
         runtime,
-        "zigDestroyLayer",
-        zig_destroy_layer,
+        "destroyLayer",
+        destroyLayer,
         null,
     );
 
@@ -1471,8 +1480,8 @@ pub fn initJSI(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, config
 pub fn registerConsoleWithDebugger(runtime: *c.OVHermesRuntime, debugger_ptr: *anyopaque) void {
     c.hermes_register_host_function(
         runtime,
-        "zigConsoleLog",
-        zig_console_log,
+        "consoleLog",
+        consoleLog,
         debugger_ptr, // Pass debugger as context
     );
 }
@@ -1574,100 +1583,16 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
     const source = try file.readToEndAlloc(allocator, 1_000_000);
     defer allocator.free(source);
 
-    // Wrap in vim API setup (React Native style)
+    // Load runtime wrapper at compile time
+    const runtime_wrapper = @embedFile("runtime.js");
+
+    // Wrap user config with runtime wrapper
     const wrapped_source = try std.fmt.allocPrint(allocator,
-        \\// console object (for debugging) - make it global for plugins!
-        \\globalThis.console = {{
-        \\  log: function(...args) {{ zigConsoleLog(...args); }}
-        \\}};
-        \\
-        \\// Timer Registry (React Native pattern - keeps callbacks alive in JS!)
-        \\// This prevents garbage collection of timer callbacks
-        \\// Make these global so plugins can use setTimeout/setInterval!
-        \\globalThis._timerCallbacks = {{}};
-        \\globalThis._nextTimerId = 1;
-        \\
-        \\// Timer functions (setTimeout, setInterval, clearTimeout, clearInterval)
-        \\// Make them global so plugins can use them!
-        \\globalThis.setTimeout = function(callback, delay) {{
-        \\  const id = globalThis._nextTimerId++;
-        \\  globalThis._timerCallbacks[id] = callback;
-        \\  zigSetTimeout(id, delay || 0);
-        \\  return id;
-        \\}};
-        \\
-        \\globalThis.setInterval = function(callback, delay) {{
-        \\  const id = globalThis._nextTimerId++;
-        \\  globalThis._timerCallbacks[id] = callback;
-        \\  zigSetInterval(id, delay || 0);
-        \\  return id;
-        \\}};
-        \\
-        \\globalThis.clearTimeout = function(id) {{
-        \\  delete globalThis._timerCallbacks[id];
-        \\  zigClearTimer(id);
-        \\}};
-        \\
-        \\globalThis.clearInterval = function(id) {{
-        \\  delete globalThis._timerCallbacks[id];
-        \\  zigClearTimer(id);
-        \\}};
-        \\
-        \\// Called by native code when timer fires
-        \\globalThis.__handleTimerCallback = function(id) {{
-        \\  const callback = globalThis._timerCallbacks[id];
-        \\  if (callback) {{
-        \\    try {{
-        \\      callback();
-        \\    }} catch (e) {{
-        \\      globalThis.console.log('Timer callback error:', e);
-        \\    }}
-        \\  }}
-        \\}};
-        \\
-        \\// Performance API (React Native style)
-        \\// This enables Chrome DevTools Performance timeline!
-        \\globalThis.performance = {{
-        \\  _marks: {{}},
-        \\  _measures: [],
-        \\  now: function() {{
-        \\    return Date.now(); // Milliseconds since epoch
-        \\  }},
-        \\  mark: function(name) {{
-        \\    this._marks[name] = this.now();
-        \\  }},
-        \\  measure: function(name, startMark, endMark) {{
-        \\    const start = this._marks[startMark] || 0;
-        \\    const end = endMark ? (this._marks[endMark] || this.now()) : this.now();
-        \\    const duration = end - start;
-        \\    this._measures.push({{ name, duration, startTime: start }});
-        \\  }},
-        \\  clearMarks: function(name) {{
-        \\    if (name) delete this._marks[name];
-        \\    else this._marks = {{}};
-        \\  }},
-        \\  getEntriesByType: function(type) {{
-        \\    if (type === 'measure') return this._measures;
-        \\    return [];
-        \\  }}
-        \\}};
-        \\
-        \\// vim API object - make it global for plugins!
-        \\globalThis.vim = {{
-        \\  highlight: function(name, opts) {{
-        \\    const bg = opts.bg || null;
-        \\    const fg = opts.fg || null;
-        \\    zigSetHighlight(name, bg, fg);
-        \\  }},
-        \\  opt: {{
-        \\    set cursorLine(value) {{ zigSetOption('cursorLine', value); }},
-        \\    get cursorLine() {{ return true; }}
-        \\  }}
-        \\}};
+        \\{s}
         \\
         \\// User config
         \\{s}
-    , .{source});
+    , .{ runtime_wrapper, source });
     defer allocator.free(wrapped_source);
 
     // Write wrapped source to temp file for compilation
