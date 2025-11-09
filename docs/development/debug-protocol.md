@@ -3,24 +3,18 @@
 ## Architecture
 
 ```
-┌─────────────────┐         JSON/IPC         ┌──────────────┐
-│   OpenVim       │ ←─────────────────────→  │     ovdb     │
-│   (--debug)     │                           │  (debugger)  │
-│                 │                           │              │
-│ • Editor core   │  Queries/Commands/Events │ • Query      │
-│ • State export  │ ←────────────────────→   │ • Assert     │
-│ • Debug hooks   │                           │ • Verify     │
-│ • Event stream  │                           │ • Report     │
-└─────────────────┘                           └──────────────┘
-         ↑                                            ↓
-         │                                            │
-         │                                    ┌───────────────┐
-         │                                    │  LLM (Claude) │
-         └────────────────────────────────────│  Parse JSON   │
-                  Clear structured output     │  Understand   │
-                                              │  Iterate      │
-                                              └───────────────┘
+┌─────────────────┐     stdin/stdout JSON    ┌───────────────┐
+│   OpenVim       │ ←─────────────────────→  │  LLM (Claude) │
+│   (--debug      │                           │               │
+│    -protocol)   │                           │               │
+│ • Editor core   │  Queries/Commands/Events │ • Parse JSON  │
+│ • State export  │ ←────────────────────→   │ • Understand  │
+│ • Debug hooks   │                           │ • Iterate     │
+│ • Event stream  │                           │ • Verify      │
+└─────────────────┘                           └───────────────┘
 ```
+
+**MCP-Style Communication**: Direct stdin/stdout JSON-RPC between OpenVim and LLM, no intermediate tools needed.
 
 ## Design Principles
 
@@ -36,27 +30,23 @@
 
 ### Transport Layer
 
-**Option 1: stdin/stdout (Simple)**
+**stdin/stdout (MCP-Style)**
 ```bash
-# Start OpenVim in debug mode
+# Start OpenVim in debug protocol mode
 ./openvim --debug-protocol
 
-# ovdb connects via stdin/stdout
-echo '{"cmd":"get_state"}' | ./openvim --debug-protocol
+# Send JSON commands via stdin
+echo '{"cmd":"get_state","id":"1"}'
+
+# Read JSON responses from stdout
+{"status":"ok","result":{...},"id":"1"}
 ```
 
-**Option 2: Unix Socket (Preferred)**
-```bash
-# OpenVim listens on socket
-./openvim --debug-socket=/tmp/openvim-debug.sock
-
-# ovdb connects
-./ovdb connect /tmp/openvim-debug.sock
-```
-
-**Option 3: Shared Memory (Fastest)**
-- For performance-critical debugging
-- Zero-copy state access
+**Characteristics**:
+- Simple, no socket setup
+- Works in any environment
+- Same pattern as MCP (Model Context Protocol)
+- Direct LLM-to-editor communication
 
 ### Message Format
 
@@ -311,78 +301,44 @@ OpenVim can emit events for debugging:
 }
 ```
 
-## ovdb (OpenVim Debugger) CLI
+## Usage Examples
 
-### Interactive Mode
+### Basic Debugging
 
 ```bash
-$ ./ovdb connect /tmp/openvim-debug.sock
+# Start OpenVim in debug mode (background process)
+$ ./openvim --debug-protocol &
 
-ovdb> get_state
-{
-  "mode": "NORMAL",
-  "cursor": {"line": 0, "col": 0},
-  ...
-}
+# Send commands via stdin
+$ echo '{"cmd":"load_file","args":{"path":"/tmp/test.txt"},"id":"1"}'
+# Response: {"status":"ok","result":{"lines_loaded":5},"id":"1"}
 
-ovdb> execute_keys viw
-Keys processed: 3
+$ echo '{"cmd":"execute_keys","args":{"keys":"viw"},"id":"2"}'
+# Response: {"status":"ok","result":{"keys_processed":3},"id":"2"}
 
-ovdb> get_visual
-{
-  "active": true,
-  "mode": "char",
-  ...
-}
-
-ovdb> assert_cursor 0 5
-✓ PASS: cursor at (0, 5)
-
-ovdb> quit
+$ echo '{"cmd":"get_visual","id":"3"}'
+# Response: {"status":"ok","result":{"active":true,"mode":"char",...},"id":"3"}
 ```
 
-### Script Mode
+### Testing Workflow
 
 ```bash
-$ cat test.ovdb
-load_file /tmp/test.txt
-execute_keys viw
-assert_visual_active true
-assert_visual_mode char
-execute_keys y
-assert_register " "Hello"
-quit
+# 1. Start OpenVim
+$ ./openvim --debug-protocol > /tmp/responses.jsonl &
 
-$ ./ovdb run test.ovdb
-[1/6] load_file /tmp/test.txt ✓
-[2/6] execute_keys viw ✓
-[3/6] assert_visual_active true ✓
-[4/6] assert_visual_mode char ✓
-[5/6] execute_keys y ✓
-[6/6] assert_register " "Hello" ✓
+# 2. Send test sequence
+$ cat > /tmp/test_commands.jsonl << EOF
+{"cmd":"load_file","args":{"path":"/tmp/test.txt"},"id":"1"}
+{"cmd":"execute_keys","args":{"keys":"viw"},"id":"2"}
+{"cmd":"assert_cursor","args":{"line":0,"col":3},"id":"3"}
+{"cmd":"assert_mode","args":{"mode":"VISUAL"},"id":"4"}
+EOF
 
-✓ All 6 tests passed
-```
+# 3. Pipe commands
+$ cat /tmp/test_commands.jsonl | ./openvim --debug-protocol
 
-### LLM-Friendly Output
-
-```bash
-$ ./ovdb run test.ovdb --format=json
-{
-  "test_file": "test.ovdb",
-  "total": 6,
-  "passed": 6,
-  "failed": 0,
-  "tests": [
-    {"name": "load_file", "status": "pass", "duration_ms": 1.2},
-    {"name": "execute_keys", "status": "pass", "duration_ms": 0.5},
-    ...
-  ],
-  "summary": {
-    "status": "pass",
-    "duration_total_ms": 12.5
-  }
-}
+# 4. Parse responses (all JSON)
+$ cat /tmp/responses.jsonl | jq '.status'
 ```
 
 ## Implementation Files
@@ -392,63 +348,39 @@ src/
 ├── debug/
 │   ├── protocol.zig      # Protocol definitions (Command, Response, Event)
 │   ├── state.zig         # EditorState serialization to JSON
-│   ├── server.zig        # Debug server (handles requests)
+│   ├── server.zig        # Debug server (handles requests via stdin/stdout)
 │   └── events.zig        # Event emission
-├── main.zig              # Add --debug-protocol flag
+├── main.zig              # --debug-protocol flag handling
 └── ...
-
-tools/
-└── ovdb/
-    ├── main.zig          # ovdb CLI entry point
-    ├── client.zig        # Connect to OpenVim debug server
-    ├── repl.zig          # Interactive REPL
-    ├── script.zig        # Script execution (.ovdb files)
-    ├── assertions.zig    # Assertion framework
-    └── reporter.zig      # Test result reporting (human + JSON)
 ```
 
 ## Example: LLM Verification Workflow
 
 ```bash
 # 1. Claude implements visual mode feature
-# 2. Claude writes test script
-$ cat > test_visual.ovdb << EOF
-load_file /tmp/test.txt
-execute_keys v
-assert_mode VISUAL
-assert_visual_mode char
-execute_keys lll
-assert_visual_anchor 0 0
-assert_cursor 0 3
-execute_keys y
-assert_register " "Hel"
-EOF
+# 2. Start OpenVim in debug mode
+$ ./openvim --debug-protocol &
 
-# 3. Claude runs test
-$ ./ovdb run test_visual.ovdb --format=json
-{
-  "status": "pass",
-  "passed": 7,
-  "failed": 0,
-  ...
-}
+# 3. Send test sequence via stdin
+$ echo '{"cmd":"load_file","args":{"path":"/tmp/test.txt"},"id":"1"}'
+$ echo '{"cmd":"execute_keys","args":{"keys":"v"},"id":"2"}'
+$ echo '{"cmd":"get_mode","id":"3"}'
+# Response: {"status":"ok","result":{"mode":"VISUAL"},"id":"3"}
 
-# 4. Claude parses JSON, sees all pass ✓
-# 5. If failure, Claude gets exact error:
-{
-  "status": "fail",
-  "tests": [
-    {
-      "name": "assert_register",
-      "status": "fail",
-      "expected": "Hel",
-      "actual": "Hello",
-      "diff": "+ lo"  // Clear diff
-    }
-  ]
-}
+$ echo '{"cmd":"get_visual","id":"4"}'
+# Response: {"status":"ok","result":{"active":true,"mode":"char",...},"id":"4"}
 
-# 6. Claude fixes code, re-runs
+$ echo '{"cmd":"execute_keys","args":{"keys":"lll"},"id":"5"}'
+$ echo '{"cmd":"get_cursor","id":"6"}'
+# Response: {"status":"ok","result":{"line":0,"col":3},"id":"6"}
+
+$ echo '{"cmd":"execute_keys","args":{"keys":"y"},"id":"7"}'
+$ echo '{"cmd":"get_register","args":{"name":"\""},"id":"8"}'
+# Response: {"status":"ok","result":{"lines":["Hel"],...},"id":"8"}
+
+# 4. Claude parses JSON responses, verifies all expectations met ✓
+# 5. If failure, Claude gets exact structured error
+# 6. Claude fixes code, re-runs (fast iteration)
 ```
 
 ## Benefits for LLM
@@ -461,11 +393,20 @@ $ ./ovdb run test_visual.ovdb --format=json
 6. **Type-Safe**: Zig ensures correctness
 7. **Self-Documenting**: JSON schema is the API
 
-## Next Steps
+## Status
 
-1. Implement `src/debug/protocol.zig` - Command/Response types
-2. Implement `src/debug/state.zig` - EditorState → JSON serialization
-3. Implement `src/debug/server.zig` - Request handling
-4. Implement `tools/ovdb/` - Debugger CLI
-5. Write tests using ovdb
-6. Document in TESTING.md
+✅ **Implemented**:
+1. `src/debug/protocol.zig` - Command/Response types
+2. `src/debug/state.zig` - EditorState → JSON serialization
+3. `src/debug/server.zig` - stdin/stdout request handling
+4. MCP-style JSON-RPC communication
+
+🚧 **In Progress**:
+- Additional layer inspection commands (`get_layers`, `get_layer_cells`, `get_output_grid`)
+- Performance profiling commands
+- Event subscription system
+
+📅 **Future**:
+- Real-time event streaming
+- Breakpoint support
+- Step-through debugging

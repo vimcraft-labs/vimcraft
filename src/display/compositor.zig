@@ -46,6 +46,9 @@ pub const Compositor = struct {
         self.stats = .{};
         const start = std.time.nanoTimestamp();
 
+        // Debug: Log composition start (to verify compositor is called)
+        debug_log.log("[Compositor] Starting composition with {d} layers", .{layers.len});
+
         // CRITICAL FIX: Don't clear the grid cells - only clear dirty flags!
         // Clearing cells and then re-blending produces identical results between frames,
         // causing diff() to generate zero updates even though lines are marked dirty.
@@ -57,8 +60,17 @@ pub const Compositor = struct {
         for (layers) |layer| {
             if (!layer.enabled) {
                 self.stats.layers_skipped += 1;
+                debug_log.log("[Compositor] Skipping disabled layer '{s}' (z={d})", .{ layer.name, layer.z_index });
                 continue;
             }
+
+            // Debug: Log before blending each layer
+            debug_log.log("[Compositor] Blending layer '{s}' (z={d}, dirty={}, opacity={d:.2})", .{
+                layer.name,
+                layer.z_index,
+                layer.dirty,
+                layer.opacity,
+            });
 
             // Blend this layer onto output
             try self.blendLayer(layer);
@@ -68,6 +80,13 @@ pub const Compositor = struct {
         // Record time
         const end = std.time.nanoTimestamp();
         self.stats.composite_time_ns = @intCast(end - start);
+
+        // Debug: Log composition complete
+        debug_log.log("[Compositor] Composition complete: {d} composited, {d} skipped, {d} cells blended", .{
+            self.stats.layers_composited,
+            self.stats.layers_skipped,
+            self.stats.cells_blended,
+        });
     }
 
     /// Composite only dirty layers (PHASE 6 OPTIMIZATION)

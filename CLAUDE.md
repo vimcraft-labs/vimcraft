@@ -112,10 +112,14 @@ Good documentation:
 ### Architecture Overview
 
 ```
-OpenVim (--debug-protocol) ←→ ovdb (OpenVim Debugger) ←→ Claude (LLM)
-     ↓ JSON State                    ↓ Structured                ↓ Parse
-   Expose internals            Query/Assert/Verify        Understand & Iterate
+Claude (LLM) ←stdin/stdout JSON→ OpenVim (--debug-protocol)
+     ↓ Send Commands                    ↓ JSON State
+   Query/Assert/Verify              Expose internals
+     ↑ Parse Responses
+   Understand & Iterate
 ```
+
+**MCP-Style Communication**: OpenVim's debug protocol uses the same stdin/stdout JSON-RPC pattern as Model Context Protocol (MCP), enabling direct LLM-to-editor communication without intermediate tools.
 
 ### Why This Matters for LLM Development
 
@@ -142,14 +146,7 @@ Traditional bash scripts are **inefficient for LLM verification**:
 - Emits events (mode_changed, buffer_changed)
 - Performance instrumentation
 
-**2. ovdb - OpenVim Debugger** (`tools/ovdb/`)
-- Zig CLI tool for debugging OpenVim
-- Interactive REPL mode
-- Script execution (.ovdb files)
-- Assertion framework
-- LLM-friendly output (JSON + human-readable)
-
-**3. Debug Protocol** (JSON over Unix socket/stdin)
+**2. Debug Protocol** (JSON over stdin/stdout)
 ```json
 // Request
 {"cmd": "get_visual", "id": "1"}
@@ -172,43 +169,32 @@ Traditional bash scripts are **inefficient for LLM verification**:
 
 **Claude's Development Loop**:
 ```bash
-# 1. Claude implements visual mode feature
+# 1. Start OpenVim in debug protocol mode
+$ ./zig-out/bin/openvim --debug-protocol &
 
-# 2. Claude writes test script (test_visual.ovdb)
-load_file /tmp/test.txt
-execute_keys viw
-assert_visual_mode char
-assert_cursor 0 3
-execute_keys y
-assert_register " "Hel"
+# 2. Send commands via stdin (MCP-style)
+$ echo '{"cmd":"load_file","args":{"path":"/tmp/test.txt"},"id":"1"}'
 
-# 3. Claude runs verification
-$ ./ovdb run test_visual.ovdb --format=json
+# Response on stdout:
+{"status":"ok","result":{},"id":"1","timestamp":1699564823,"duration_ns":1234}
 
-# 4. Claude parses JSON result
+# 3. Execute test sequence
+$ echo '{"cmd":"execute_keys","args":{"keys":"viw"},"id":"2"}'
+$ echo '{"cmd":"get_visual","id":"3"}'
+
+# Response:
 {
-  "status": "pass",
-  "passed": 5,
-  "failed": 0,
-  "tests": [
-    {"name": "execute_keys", "status": "pass"},
-    {"name": "assert_visual_mode", "status": "pass"},
-    ...
-  ]
+  "status": "ok",
+  "result": {
+    "active": true,
+    "mode": "char",
+    "anchor": {"line": 0, "col": 0},
+    "head": {"line": 0, "col": 3},
+    "text": ["Hel"]
+  }
 }
 
-# 5. If failure, Claude gets exact error with diff:
-{
-  "status": "fail",
-  "tests": [{
-    "name": "assert_register",
-    "expected": "Hel",
-    "actual": "Hello",
-    "diff": "+ lo"  // Clear, actionable
-  }]
-}
-
-# 6. Claude fixes and re-runs (fast iteration!)
+# 4. Verify and iterate (fast feedback loop!)
 ```
 
 ### Key Features for Claude
@@ -237,12 +223,11 @@ $ ./ovdb run test_visual.ovdb --format=json
 
 ### Implementation Status
 
-**Phase 3 (Current)**:
+**Current Status**:
 - ✅ Debug protocol designed ([docs/development/debug-protocol.md](docs/development/debug-protocol.md))
-- 🚧 Implementing `src/debug/protocol.zig` (Command/Response types)
-- 🚧 Implementing `src/debug/state.zig` (EditorState serialization)
-- 🚧 Implementing `tools/ovdb/` (Debugger CLI)
-- 📅 Integration tests using ovdb (.ovdb scripts)
+- ✅ Implemented `src/debug/protocol.zig` (Command/Response types)
+- ✅ Implemented `src/debug/state.zig` (EditorState serialization)
+- ✅ MCP-style stdin/stdout communication (JSON-RPC)
 
 **Benefits Realized**:
 - Claude can verify implementations in seconds (not minutes)
@@ -254,33 +239,40 @@ $ ./ovdb run test_visual.ovdb --format=json
 ### Documentation
 
 - **Protocol Spec**: [docs/development/debug-protocol.md](docs/development/debug-protocol.md)
-- **Usage Guide**: [docs/development/ovdb-usage.md](docs/development/ovdb-usage.md) (TODO)
-- **Test Scripts**: `tests/*.ovdb` (integration tests)
+- **Command Reference**: See `src/debug/protocol.zig` for all available commands
 
-### When to Use ovdb
+### How to Use Debug Protocol
 
-**During Development**:
-- Implementing new feature → Write .ovdb test first (TDD)
-- Feature complete → Run ovdb to verify
-- Bug found → Write .ovdb to reproduce → Fix → Verify
-
-**For Claude**:
-- After every feature implementation → Run verification
-- Before committing → Full regression suite
-- On failure → Parse JSON, understand exact issue, fix
-
-**Example Usage**:
+**Start OpenVim in debug mode**:
 ```bash
-# Interactive debugging
-$ ./ovdb connect /tmp/openvim-debug.sock
-ovdb> get_state
-ovdb> execute_keys viw
-ovdb> get_visual
-ovdb> quit
+# Start with stdin/stdout (MCP-style)
+$ ./zig-out/bin/openvim --debug-protocol
 
-# Script execution (for Claude)
-$ ./ovdb run test_visual.ovdb --format=json > result.json
-$ cat result.json  # Claude parses this
+# Or start in background and pipe commands
+$ ./zig-out/bin/openvim --debug-protocol &
+```
+
+**Send commands via stdin**:
+```bash
+# Get editor state
+$ echo '{"cmd":"get_state","id":"1"}'
+
+# Execute keys
+$ echo '{"cmd":"execute_keys","args":{"keys":"viw"},"id":"2"}'
+
+# Get layers
+$ echo '{"cmd":"get_layers","id":"3"}'
+```
+
+**Responses on stdout** (structured JSON):
+```json
+{
+  "status": "ok",
+  "result": {...},
+  "id": "3",
+  "timestamp": 1699564823,
+  "duration_ns": 1234
+}
 ```
 
 ### Critical Principle
@@ -638,11 +630,12 @@ User reports often contain critical clues:
 
 **Architecture Reminder**:
 ```
-OpenVim (--debug-protocol) ←→ ovdb (Debugger) ←→ Claude (LLM)
-     ↓ JSON State                  ↓ Query              ↓ Parse
-   Layer state               Compositor state      Understand & Fix
-   Buffer content            Diff results          Verify solution
-   Cursor position           Render output         Iterate quickly
+Claude (LLM) ←stdin/stdout JSON→ OpenVim (--debug-protocol)
+     ↓ Send Commands                    ↓ JSON State
+   Query Layer state              Expose Compositor state
+   Query Diff results             Expose Buffer content
+     ↑ Parse Responses                  ↑ Return Results
+   Understand & Fix              Verify & Iterate
 ```
 
 **Key Insight**: Debug protocol exposes **internal state at each layer**, not just final output. This enables pinpointing WHERE data is lost.
