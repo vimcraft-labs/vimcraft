@@ -561,15 +561,14 @@ pub const Server = struct {
                 const keys = cmd.args.execute_keys.keys;
                 try self.editor.executeKeys(keys);
 
-                // CRITICAL: Render to update display layers (cursor layer, etc.)
-                // Without this, layers stay in cleared state (no background colors)
-                try self.editor.display.render(
+                // CRITICAL: Use headless render to update compositor WITHOUT stdout pollution
+                // This updates layers for inspection while keeping JSON responses clean
+                try self.editor.display.renderHeadless(
                     &self.editor.buffer,
                     self.editor.mode_manager.getModeString(),
                     self.highlight_config,
                     &self.editor.visual_state,
                     &self.editor.yank_highlight,
-                    null, // cursor_override
                 );
 
                 return .{ .execute_keys = .{ .keys_processed = keys.len } };
@@ -579,14 +578,13 @@ pub const Server = struct {
                 const path = cmd.args.load_file.path;
                 try self.editor.buffer.loadFile(path);
 
-                // CRITICAL: Render to update display layers after loading file
-                try self.editor.display.render(
+                // CRITICAL: Use headless render to update compositor WITHOUT stdout pollution
+                try self.editor.display.renderHeadless(
                     &self.editor.buffer,
                     self.editor.mode_manager.getModeString(),
                     self.highlight_config,
                     &self.editor.visual_state,
                     &self.editor.yank_highlight,
-                    null, // cursor_override
                 );
 
                 return .{ .none = {} };

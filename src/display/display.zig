@@ -479,6 +479,70 @@ pub const Display = struct {
         try self.moveCursor(screen_row, clamped_col);
     }
 
+    /// Headless render: Update compositor state WITHOUT writing to stdout
+    /// This is used by the debug protocol to update layer state for inspection
+    /// while keeping stdout clean for JSON responses
+    pub fn renderHeadless(
+        self: *Display,
+        buffer: *const Buffer,
+        status: []const u8,
+        config: *const highlights.HighlightConfig,
+        visual_state: *const VisualState,
+        yank_highlight: *const YankHighlight,
+    ) !void {
+        // Update gutter cache (Neovim optimization: invalidate on line count change)
+        self.updateGutterCache(buffer);
+
+        // Adjust viewport to keep cursor visible
+        self.adjustViewport(buffer);
+
+        // Get gutter width for horizontal positioning
+        const gutter_width = self.gutter_manager.getTotalWidth();
+
+        // Adjust horizontal scroll for cursor line (account for gutter)
+        const text_cols = if (self.terminal_cols > gutter_width)
+            self.terminal_cols - gutter_width
+        else
+            self.terminal_cols;
+
+        // Convert cursor byte position to display column (account for wide chars like emoji)
+        const cursor_display_col = if (buffer.cursor.row < buffer.lineCount()) blk: {
+            const line = buffer.getLine(buffer.cursor.row) orelse break :blk buffer.cursor.col;
+            const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
+                line[0 .. line.len - 1]
+            else
+                line;
+            break :blk char_width.byteToDisplayColumn(line_without_newline, buffer.cursor.col);
+        } else buffer.cursor.col;
+
+        if (cursor_display_col >= self.viewport_left + text_cols) {
+            self.viewport_left = cursor_display_col - text_cols + 1;
+        } else if (cursor_display_col < self.viewport_left) {
+            self.viewport_left = cursor_display_col;
+        }
+
+        // STEP 1: Update all layers from buffer state
+        try self.updateLayers(buffer, status, config, visual_state, yank_highlight);
+
+        // STEP 1.5: Apply virtual text overlay (Neovim-style extmarks)
+        self.virtual_text.applyToGrid(&self.virtual_text_layer.grid);
+
+        // STEP 2: Composite all layers using Porter-Duff blending
+        try self.compositor.composite(self.layer_manager.layers.items);
+
+        // STEP 3: Compute diff but DON'T render to stdout
+        // This updates the compositor output grid for inspection but doesn't write ANSI codes
+        const output = self.compositor.getOutput();
+        const updates = try output.diff(self.allocator);
+        defer self.allocator.free(updates);
+
+        // STEP 4: Swap buffers (current becomes previous for next frame)
+        output.swapBuffers();
+
+        // Note: We DON'T call renderUpdates() or moveCursor() here
+        // This keeps stdout clean for JSON responses in headless mode
+    }
+
     /// Update grid from buffer content (Step 1: logical → grid)
     fn updateGridFromBuffer(self: *Display, buffer: *const Buffer, status: []const u8, config: *const highlights.HighlightConfig, visual_state: *const VisualState, yank_highlight: *const YankHighlight) !void {
         const text_rows = if (self.terminal_rows > 1) self.terminal_rows - 1 else 1;
@@ -807,11 +871,13 @@ pub const Display = struct {
                 const remaining = line_without_newline[start_col..];
 
                 // Render text to base layer
-                _ = self.base_layer.grid.setString(row, gutter_width, remaining, fg_color, bg_color);
+                const end_col = self.base_layer.grid.setString(row, gutter_width, remaining, fg_color, bg_color);
 
-                // Fill rest of line
-                for ((gutter_width + remaining.len)..self.terminal_cols) |col| {
-                    self.base_layer.grid.setCell(row, col, .{ .char = ' ', .bg = bg_color });
+                // Fill rest of line (only if there's space remaining)
+                if (end_col < self.terminal_cols) {
+                    for (end_col..self.terminal_cols) |col| {
+                        self.base_layer.grid.setCell(row, col, .{ .char = ' ', .bg = bg_color });
+                    }
                 }
             } else {
                 // Empty line indicator (~)

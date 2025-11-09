@@ -350,22 +350,8 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
             return;
         };
 
-        // Load all plugin files from ~/.config/openvim/*.js (non-recursive)
-        var plugin_files = try paths.getPluginFiles(allocator);
-        defer {
-            for (plugin_files.items) |path| {
-                allocator.free(path);
-            }
-            plugin_files.deinit(allocator);
-        }
-
-        for (plugin_files.items) |plugin_path| {
-            jsi_api.loadPlugin(@ptrCast(runtime), plugin_path, allocator) catch |err| {
-                // Keep only critical errors
-                const filename = std.fs.path.basename(plugin_path);
-                std.debug.print("WARNING: Failed to load plugin {s}: {}\n", .{ filename, err });
-            };
-        }
+        // NOTE: Plugins are NOT loaded here anymore!
+        // Caller must load plugins AFTER configuring gutter to ensure getGutterWidth() returns correct value
     } else {
         // Use defaults
         const cursorline_bg = try highlights.Color.fromHex("#2b2b2b");
@@ -414,6 +400,30 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     if (highlight_config.cursorline == null) {
         const cursorline_bg = try highlights.Color.fromHex("#1E202F");
         highlight_config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
+    }
+
+    // Apply sign column config BEFORE loading plugins (headless mode)
+    // This ensures getGutterWidth() returns correct value during plugin initialization
+    try editor_ctx.display.setSignColumn(highlight_config.signcolumn_mode);
+
+    // NOW load plugins with correct gutter width (headless mode)
+    var plugin_paths = try ConfigPaths.init(allocator);
+    defer plugin_paths.deinit();
+    if (plugin_paths.initJsExists()) {
+        var plugin_files = try plugin_paths.getPluginFiles(allocator);
+        defer {
+            for (plugin_files.items) |path| {
+                allocator.free(path);
+            }
+            plugin_files.deinit(allocator);
+        }
+
+        for (plugin_files.items) |plugin_path| {
+            jsi_api.loadPlugin(@ptrCast(runtime), plugin_path, allocator) catch |err| {
+                const filename = std.fs.path.basename(plugin_path);
+                std.debug.print("WARNING: Failed to load plugin {s}: {}\n", .{ filename, err });
+            };
+        }
     }
 
     // Create debug server with editor context (has Display for visual debugging)
@@ -486,30 +496,61 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     };
 
     // Initialize JavaScript runtime for config loading
+    // CRITICAL: Runtime must live for entire function (not just the if block)
+    // Otherwise processTimerQueue() in main loop will access freed memory → segfault
     const runtime_nullable = hermes_c.hermes_runtime_create();
+    var runtime: ?*hermes_c.OVHermesRuntime = null;
+    defer {
+        if (runtime) |rt| {
+            hermes_c.hermes_runtime_destroy(rt);
+        }
+    }
+
     if (runtime_nullable != null) {
-        const runtime = runtime_nullable.?;
-        defer hermes_c.hermes_runtime_destroy(runtime);
+        runtime = runtime_nullable.?;
 
         // Store runtime in debugger state
         debugger_state.runtime = runtime;
 
         // Register JSI host functions (pass editor for cursor hooks and display for trail rendering)
-        jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &editor, &display);
+        jsi_api.initJSI(allocator, @ptrCast(runtime.?), &highlight_config, &editor, &display);
 
-        // Load configuration from init.js
+        // Load configuration from init.js (but don't load plugins yet)
         try loadConfigFromJs(allocator, &highlight_config, &debugger_state);
-    }
 
-    // Apply sign column config from JS to display
-    try display.setSignColumn(highlight_config.signcolumn_mode);
+        // CRITICAL: Apply sign column config BEFORE loading plugins
+        // This ensures getGutterWidth() returns the correct value when plugins initialize
+        try display.setSignColumn(highlight_config.signcolumn_mode);
+    }
 
     // Enter raw terminal mode
     try display.enterRawMode();
     defer display.exitRawMode();
 
-    // Get terminal size
+    // Get terminal size BEFORE loading plugins
+    // CRITICAL: getTerminalSize() calls resizeAll() which CLEARS layer content!
+    // Plugins must load AFTER terminal size is determined to avoid losing their rendered content
     try display.getTerminalSize();
+
+    // NOW load plugins AFTER terminal size is set (prevents grid.resize() from clearing content)
+    if (runtime) |rt| {
+        if (paths.initJsExists()) {
+            var plugin_files = try paths.getPluginFiles(allocator);
+            defer {
+                for (plugin_files.items) |path| {
+                    allocator.free(path);
+                }
+                plugin_files.deinit(allocator);
+            }
+
+            for (plugin_files.items) |plugin_path| {
+                jsi_api.loadPlugin(@ptrCast(rt), plugin_path, allocator) catch |err| {
+                    const filename = std.fs.path.basename(plugin_path);
+                    std.debug.print("WARNING: Failed to load plugin {s}: {}\n", .{ filename, err });
+                };
+            }
+        }
+    }
 
     // Apply cursor color if configured
     if (highlight_config.cursor) |cursor_hl| {
@@ -717,6 +758,8 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     };
 
     // Create Hermes runtime (must stay alive for debugger)
+    // CRITICAL: Runtime must live for entire function (not just initialization block)
+    // Otherwise processTimerQueue() in main loop will access freed memory → segfault
     const runtime_nullable = hermes_c.hermes_runtime_create();
     if (runtime_nullable == null) {
         std.debug.print("ERROR: Failed to create Hermes runtime\n", .{});
@@ -779,7 +822,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         wait_count += 1;
     }
 
-    // Load configuration from init.js
+    // Load configuration from init.js (but NOT plugins yet)
     if (paths.initJsExists()) {
         debugger.log("OpenVim: Loading init.js...", .info);
         jsi_api.loadConfig(@ptrCast(runtime), paths.init_js_path, allocator) catch |err| {
@@ -791,8 +834,23 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
             highlight_config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
             highlight_config.cursorline_enabled = true;
         };
+    }
 
-        // Load all plugin files from ~/.config/openvim/*.js (non-recursive)
+    // Apply sign column config BEFORE loading plugins
+    // This ensures getGutterWidth() returns correct value during plugin initialization
+    try display.setSignColumn(highlight_config.signcolumn_mode);
+
+    // Enter raw terminal mode
+    try display.enterRawMode();
+    defer display.exitRawMode();
+
+    // Get terminal size BEFORE loading plugins
+    // CRITICAL: getTerminalSize() calls resizeAll() which CLEARS layer content!
+    // Plugins must load AFTER terminal size is determined to avoid losing their rendered content
+    try display.getTerminalSize();
+
+    // NOW load plugins AFTER terminal size is set (prevents grid.resize() from clearing content)
+    if (paths.initJsExists()) {
         var plugin_files = try paths.getPluginFiles(allocator);
         defer {
             for (plugin_files.items) |path| {
@@ -820,16 +878,6 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
             };
         }
     }
-
-    // Apply sign column config
-    try display.setSignColumn(highlight_config.signcolumn_mode);
-
-    // Enter raw terminal mode
-    try display.enterRawMode();
-    defer display.exitRawMode();
-
-    // Get terminal size
-    try display.getTerminalSize();
 
     // Apply cursor color if configured
     if (highlight_config.cursor) |cursor_hl| {

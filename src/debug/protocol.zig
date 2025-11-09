@@ -181,6 +181,20 @@ pub const Response = struct {
                     if (a.actual) |act| allocator.free(act);
                     if (a.diff) |d| allocator.free(d);
                 },
+                .layers => |l| {
+                    // Free each layer's name string
+                    for (l.layers) |layer| {
+                        allocator.free(layer.name);
+                    }
+                    // Free the layers slice itself
+                    allocator.free(l.layers);
+                },
+                .layer => |layer| allocator.free(layer.name),
+                .layer_cells => |lc| {
+                    allocator.free(lc.layer_name);
+                    allocator.free(lc.cells);
+                },
+                .output_grid => |og| allocator.free(og.cells),
                 // Other types either don't allocate or have different ownership
                 else => {},
             }
