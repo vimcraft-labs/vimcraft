@@ -47,6 +47,40 @@ globalThis.__handleTimerCallback = function(id) {
   }
 };
 
+// Animation Frame Registry (React Native Reanimated pattern)
+globalThis._animationFrameCallbacks = {};
+globalThis._nextAnimationFrameId = 1;
+
+// requestAnimationFrame (browser API + Reanimated worklets)
+// Runs callback on next render frame for smooth 60fps animations
+globalThis.requestAnimationFrame = function(callback) {
+  const id = globalThis._nextAnimationFrameId++;
+  globalThis._animationFrameCallbacks[id] = callback;
+  __nativeRequestAnimationFrame(id);
+  return id;
+};
+
+// cancelAnimationFrame (browser API)
+globalThis.cancelAnimationFrame = function(id) {
+  delete globalThis._animationFrameCallbacks[id];
+  // Note: Native side auto-clears after callback runs
+};
+
+// Called by native code on render frame
+globalThis.__handleAnimationFrame = function(id) {
+  const callback = globalThis._animationFrameCallbacks[id];
+  if (callback) {
+    // Remove callback (animation frame is one-shot)
+    delete globalThis._animationFrameCallbacks[id];
+
+    try {
+      callback();
+    } catch (e) {
+      globalThis.console.log('Animation frame callback error:', e);
+    }
+  }
+};
+
 // Performance API (React Native style)
 // This enables Chrome DevTools Performance timeline!
 globalThis.performance = {
@@ -87,5 +121,6 @@ globalThis.vim = {
   }
 };
 
-// Layer API - these are already registered with clean names by Zig
-// No wrapper needed - just use the native functions directly
+// Layer API - NO wrapper needed!
+// The native functions (clearLayer, renderVirtualText) handle dirty tracking internally
+// via layer.markDirty() which is smart enough to only mark when actually modified

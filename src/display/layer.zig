@@ -110,9 +110,16 @@ pub const Layer = struct {
     }
 
     /// Clear layer grid (fill with empty cells)
+    /// Only marks layer dirty if grid actually had content (optimization to prevent flickering)
     pub fn clear(self: *Layer) void {
+        // Clear the grid (grid.clear() only marks lines dirty if they had content)
         self.grid.clear();
-        self.markDirty();
+
+        // Only mark layer dirty if the grid had any dirty lines
+        // (i.e., the grid had content that was cleared)
+        if (self.grid.dirty_lines.count() > 0) {
+            self.markDirty();
+        }
     }
 
     /// Mark layer as cacheable (Phase 6 optimization)

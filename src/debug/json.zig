@@ -306,7 +306,18 @@ pub fn parseCommand(json_str: []const u8, allocator: std.mem.Allocator) !protoco
 
 fn parseCommandArgs(cmd: protocol.CommandType, args_obj: std.json.Value, allocator: std.mem.Allocator) !protocol.CommandArgs {
     return switch (cmd) {
-        .ping, .shutdown, .get_state, .get_cursor, .get_mode, .get_visual, .get_registers, .get_buffer, .get_layers, .get_logs => .{ .none = {} },
+        .ping, .shutdown, .get_state, .get_cursor, .get_mode, .get_visual, .get_registers, .get_buffer, .get_layers => .{ .none = {} },
+
+        .get_logs => blk: {
+            const count = if (args_obj.object.get("count")) |c| @as(usize, @intCast(c.integer)) else null;
+            const level = if (args_obj.object.get("level")) |l| try allocator.dupe(u8, l.string) else null;
+            const max_bytes = if (args_obj.object.get("max_bytes")) |mb| @as(usize, @intCast(mb.integer)) else null;
+            break :blk .{ .get_logs = .{
+                .count = count,
+                .level = level,
+                .max_bytes = max_bytes,
+            } };
+        },
 
         .get_register => blk: {
             const name = args_obj.object.get("name").?.string[0];

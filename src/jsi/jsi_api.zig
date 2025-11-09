@@ -24,6 +24,10 @@ var global_display: ?*Display = null;
 /// Set during initJSI - enables Core→Backend logging architecture
 var global_editor_with_logger: ?*Editor = null;
 
+/// Global editor context pointer (for headless/debug protocol mode)
+const EditorContext = @import("../debug/editor_context.zig").EditorContext;
+var global_editor_context: ?*EditorContext = null;
+
 /// Zig host function: setHighlight(name, bg, fg)
 /// Called from JavaScript: setHighlight('CursorLine', '#2b2b2b', null)
 export fn setHighlight(
@@ -217,10 +221,14 @@ export fn consoleLog(
         }
     }
 
-    // TODO: Forward to logger (info level for console.log)
-    // Currently disabled due to type compatibility issues between Editor and EditorContext
-    // Will be re-enabled in a future update
-    _ = fbs.getWritten();
+    // Forward to logger (info level for console.log)
+    // Works with both *Editor and *EditorContext
+    const log_message = fbs.getWritten();
+    if (global_editor_with_logger) |editor| {
+        editor.logger.info("{s}", .{log_message}) catch {};
+    } else if (global_editor_context) |ctx| {
+        ctx.logger.info("{s}", .{log_message}) catch {};
+    }
 
     return c.hermes_value_create_undefined(runtime_nullable);
 }
@@ -296,6 +304,133 @@ const TimerQueue = struct {
 var timer_queue: TimerQueue = undefined;
 var timer_queue_initialized = false;
 
+// ============================================================================
+// Animation Frame System (requestAnimationFrame)
+// ============================================================================
+
+/// Animation frame callback registry
+/// Stores callbacks that run on next frame
+var animation_callbacks: std.ArrayList(usize) = undefined;  // JS callback IDs
+var animation_callbacks_initialized = false;
+var animation_frame_modified_layers = false;  // Track if last frame modified layers
+
+/// Initialize animation frame system
+fn initAnimationFrames(allocator: std.mem.Allocator) void {
+    if (animation_callbacks_initialized) return;
+    animation_callbacks = .empty;
+    _ = allocator; // Will use timer_allocator for append operations
+    animation_callbacks_initialized = true;
+}
+
+/// Process all pending animation frame callbacks
+/// Called by editor before rendering
+/// Returns true if any callbacks were processed AND layers were modified
+pub fn processAnimationFrames(allocator: std.mem.Allocator) bool {
+    if (!timer_initialized or !animation_callbacks_initialized) return false;
+    if (animation_callbacks.items.len == 0) return false;
+
+    const rt = timer_runtime orelse return false;
+
+    // Reset the flag before processing callbacks
+    animation_frame_modified_layers = false;
+
+    debug_log.log("[RAF] Processing {d} animation frame callbacks", .{animation_callbacks.items.len});
+
+    // Make a copy of callbacks and clear the list
+    // This allows callbacks to re-queue themselves
+    var callbacks_copy: std.ArrayList(usize) = .empty;
+    callbacks_copy.appendSlice(allocator, animation_callbacks.items) catch return false;
+    defer callbacks_copy.deinit(allocator);
+    animation_callbacks.clearRetainingCapacity();
+
+    // Call each animation frame callback
+    for (callbacks_copy.items) |callback_id| {
+        // Get global object
+        const global = c.hermes_get_global_object(rt);
+        if (global == null) continue;
+
+        // Get __handleAnimationFrame function
+        const callback_fn = c.hermes_object_get_property(rt, global, "__handleAnimationFrame");
+        if (callback_fn == null) {
+            c.hermes_object_destroy(global);
+            continue;
+        }
+
+        if (!c.hermes_value_is_function(rt, callback_fn)) {
+            c.hermes_value_destroy(callback_fn);
+            c.hermes_object_destroy(global);
+            continue;
+        }
+
+        // Create callback ID argument
+        const id_arg = c.hermes_value_create_number(rt, @floatFromInt(callback_id));
+        if (id_arg == null) {
+            c.hermes_value_destroy(callback_fn);
+            c.hermes_object_destroy(global);
+            continue;
+        }
+
+        // Call __handleAnimationFrame(id)
+        debug_log.log("[RAF] Calling JS callback {d}", .{callback_id});
+        var args = [_]?*c.OVHermesValue{id_arg};
+        const result = c.hermes_call_function(rt, callback_fn, &args, 1);
+
+        c.hermes_value_destroy(id_arg);
+
+        if (result != null) {
+            debug_log.log("[RAF] Callback {d} completed successfully", .{callback_id});
+            c.hermes_value_destroy(result);
+        } else {
+            if (c.hermes_has_exception(rt)) {
+                const err_msg = c.hermes_get_exception_message(rt);
+                std.debug.print("[JSI] Animation frame callback exception: {s}\n", .{err_msg});
+                debug_log.log("[RAF] Callback {d} threw exception: {s}", .{ callback_id, err_msg });
+            }
+        }
+
+        c.hermes_value_destroy(callback_fn);
+        c.hermes_object_destroy(global);
+    }
+
+    // Return true ONLY if layers were actually modified
+    // This prevents unnecessary re-renders when idle
+    return animation_frame_modified_layers;
+}
+
+/// Zig host function: requestAnimationFrame(id)
+/// JavaScript provides callback ID, callback runs on next render frame
+export fn requestAnimationFrame(
+    runtime_nullable: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+    const runtime = runtime_nullable;
+
+    if (arg_count < 1) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    if (!timer_initialized or !animation_callbacks_initialized) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 0: callback ID (JavaScript-provided)
+    const id_value = args[0] orelse return c.hermes_value_create_undefined(runtime);
+    const callback_id = @as(usize, @intFromFloat(c.hermes_value_get_number(id_value)));
+
+    // Queue callback for next frame
+    animation_callbacks.append(timer_allocator, callback_id) catch {
+        debug_log.log("[RAF] FAILED to queue callback {d}", .{callback_id});
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    debug_log.log("[RAF] Queued callback {d} (total queued: {d})", .{ callback_id, animation_callbacks.items.len });
+
+    return c.hermes_value_create_undefined(runtime);
+}
+
 /// Initialize timer system
 pub fn initTimers(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime) void {
     timer_allocator = allocator;
@@ -311,6 +446,9 @@ pub fn initTimers(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime) voi
         timer_queue = TimerQueue.init(allocator);
         timer_queue_initialized = true;
     }
+
+    // Initialize animation frame system
+    initAnimationFrames(allocator);
 }
 
 /// Clear all active timers (for hot reload)
@@ -997,6 +1135,23 @@ export fn createLayer(
     return c.hermes_value_create_undefined(runtime);
 }
 
+/// Mark that layers were modified during this animation frame
+/// Called by JavaScript when it modifies layers
+export fn markAnimationFrameDirty(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = runtime;
+    _ = context;
+    _ = args;
+    _ = count;
+
+    animation_frame_modified_layers = true;
+    return null;
+}
+
 /// Zig host function: renderVirtualText(name, cells)
 /// JavaScript: renderVirtualText('my_layer', [{row, col, char, fg?, bg?}, ...])
 /// Renders cells to a custom layer
@@ -1166,8 +1321,12 @@ export fn renderVirtualText(
     // Mark layer as dirty to trigger re-composition
     layer.markDirty();
 
+    // Mark that this animation frame modified layers (triggers re-render)
+    // This is safe because renderVirtualText ALWAYS renders content
+    animation_frame_modified_layers = true;
+
     // Debug: Log rendering (to debug log, not terminal)
-    debug_log.log("[JSI] Rendered {d} cells to layer '{s}' (id={d}, z={d})", .{ length, name, layer.id, layer.z_index });
+    debug_log.log("[JSI] renderVirtualText('{s}') - rendered {d} cells, marked dirty", .{ name, length });
 
     return c.hermes_value_create_undefined(runtime);
 }
@@ -1264,8 +1423,21 @@ export fn clearLayer(
         return c.hermes_value_create_undefined(runtime);
     };
 
+    // Check if layer has actual content before clearing
+    // This is critical to prevent flickering - don't mark dirty if clearing empty layer
+    const had_content = layer.grid.hasContent();
+
     // Clear layer content
     layer.clear();
+
+    // Only mark animation frame dirty if layer actually had content to clear
+    // This prevents idle flickering when clearing already-empty layers
+    if (had_content) {
+        animation_frame_modified_layers = true;
+        debug_log.log("[JSI] clearLayer('{s}') - had content, marked dirty", .{name});
+    } else {
+        debug_log.log("[JSI] clearLayer('{s}') - was empty, NOT marking dirty", .{name});
+    }
 
     return c.hermes_value_create_undefined(runtime);
 }
@@ -1321,13 +1493,15 @@ pub fn initJSI(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, config
     global_display = display;
 
     // Set global editor pointer for console.log → logger forwarding
-    // TODO: Currently only supports *Editor type
-    // EditorContext support needs to be added when console.log integration is fixed
+    // Supports both *Editor and *EditorContext
     const T = @TypeOf(editor_or_context);
     if (T == *Editor) {
         global_editor_with_logger = editor_or_context;
+        global_editor_context = null;
+    } else if (T == *EditorContext) {
+        global_editor_context = editor_or_context;
+        global_editor_with_logger = null;
     }
-    // Note: If T is *EditorContext, console.log won't forward to logger (temporary limitation)
 
     // Register Zig functions that JavaScript can call
     // Pass config pointer as context so host functions can access it
@@ -1372,6 +1546,21 @@ pub fn initJSI(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, config
         runtime,
         "__nativeClearTimer",
         clearTimer,
+        null,
+    );
+
+    // Register animation frame API (native render loop integration)
+    c.hermes_register_host_function(
+        runtime,
+        "__nativeRequestAnimationFrame",
+        requestAnimationFrame,
+        null,
+    );
+
+    c.hermes_register_host_function(
+        runtime,
+        "__nativeMarkAnimationFrameDirty",
+        markAnimationFrameDirty,
         null,
     );
 

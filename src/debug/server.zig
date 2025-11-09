@@ -57,19 +57,60 @@ pub const Server = struct {
         self.running = false;
     }
 
-    /// Run server using stdin/stdout
+    /// Run server using stdin/stdout with event loop integration
     fn runStdio(self: *Server) !void {
+        const event_loop = @import("../event_loop/libuv.zig");
+        const jsi_api = @import("../jsi/jsi_api.zig");
+
+        // Import fcntl.h for O_NONBLOCK constant
+        const c = @cImport({
+            @cInclude("fcntl.h");
+        });
+
         const stdin = std.fs.File.stdin();
         const stdout = std.fs.File.stdout();
 
         var line_buffer: [8192]u8 = undefined;
         var line_pos: usize = 0;
 
+        // Make stdin non-blocking
+        const stdin_fd = stdin.handle;
+        const flags = try std.posix.fcntl(stdin_fd, std.posix.F.GETFL, 0);
+        _ = try std.posix.fcntl(stdin_fd, std.posix.F.SETFL, flags | c.O_NONBLOCK);
+
         while (self.running) {
-            // Read one byte at a time
+            // Run event loop (non-blocking)
+            _ = event_loop.runOnce();
+
+            // Process timer queue (React Native pattern: call JS from main thread)
+            jsi_api.processTimerQueue(self.allocator);
+
+            // Process animation frame callbacks (React Native Reanimated pattern)
+            _ = jsi_api.processAnimationFrames(self.allocator);
+
+            // Check if stdin has data available (non-blocking poll)
+            var poll_fds = [_]std.posix.pollfd{
+                .{
+                    .fd = stdin_fd,
+                    .events = std.posix.POLL.IN,
+                    .revents = 0,
+                },
+            };
+
+            // Poll with 10ms timeout to allow event loop to run frequently
+            const poll_result = std.posix.poll(&poll_fds, 10) catch |err| {
+                if (err == error.Interrupted) continue;
+                return err;
+            };
+
+            // If no data available, continue event loop
+            if (poll_result == 0) continue;
+
+            // Read one byte at a time (non-blocking)
             var char_buf: [1]u8 = undefined;
             const bytes_read = stdin.read(&char_buf) catch |err| {
                 if (err == error.EndOfStream) break;
+                if (err == error.WouldBlock) continue;
                 return err;
             };
 

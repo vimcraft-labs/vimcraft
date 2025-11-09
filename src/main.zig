@@ -435,14 +435,13 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     );
     defer server.deinit();
 
-    // TODO: Integrate event loop with server.start() to process timers
-    // Currently server.start() blocks on stdin - we need to interleave:
-    // 1. Process stdin commands (non-blocking)
+    // Start server with integrated event loop (supports animations and timers)
+    // The server now uses non-blocking stdin reads with poll() and interleaves:
+    // 1. Process stdin commands (non-blocking with 10ms poll timeout)
     // 2. Run event_loop.runOnce()
     // 3. Process timer queue
-    // This enables animated plugins like Smear cursor in headless mode!
-
-    // Start server (blocks until shutdown command received)
+    // 4. Process animation frame callbacks
+    // This enables animated plugins like Smear cursor in headless debug mode!
     try server.start();
 
     // Cleanup timers after server shuts down
@@ -612,6 +611,13 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         // Process timer queue (React Native pattern: call JS from main thread)
         // This must be AFTER libuv but BEFORE any rendering
         jsi_api.processTimerQueue(allocator);
+
+        // Process animation frame callbacks (React Native Reanimated pattern)
+        // Runs animation callbacks synchronized with render loop for smooth 60fps
+        // If callbacks were processed, layers may have changed, so trigger render
+        if (jsi_api.processAnimationFrames(allocator)) {
+            needs_render = true;
+        }
 
         // Check if config needs reload
         if (reload_state.needs_reload) {
@@ -938,6 +944,13 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
         // Process timer queue (React Native pattern: call JS from main thread)
         jsi_api.processTimerQueue(allocator);
+
+        // Process animation frame callbacks (React Native Reanimated pattern)
+        // Runs animation callbacks synchronized with render loop for smooth 60fps
+        // If callbacks were processed, layers may have changed, so trigger render
+        if (jsi_api.processAnimationFrames(allocator)) {
+            needs_render = true;
+        }
 
         // Check config reload
         if (reload_state.needs_reload) {

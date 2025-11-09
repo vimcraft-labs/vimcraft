@@ -193,13 +193,39 @@ pub const ScreenGrid = struct {
         }
     }
 
+    /// Check if grid has any non-empty cells
+    /// Used to avoid unnecessary clears that cause flickering
+    pub fn hasContent(self: *ScreenGrid) bool {
+        for (self.current) |row| {
+            for (row) |cell| {
+                if (cell.char != ' ' or cell.fg != null or cell.bg != null or
+                    cell.bold or cell.italic or cell.underline or cell.combining_count > 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /// Clear the entire grid
+    /// Only marks lines dirty if they actually have content (optimization to prevent flickering)
     pub fn clear(self: *ScreenGrid) void {
         for (self.current, 0..) |row, r| {
-            for (row, 0..) |*cell, c| {
-                cell.reset();
+            var row_has_content = false;
+            for (row) |*cell| {
+                // Check if cell is non-blank before clearing
+                if (cell.char != ' ' or cell.fg != null or cell.bg != null or
+                    cell.bold or cell.italic or cell.underline or cell.combining_count > 0) {
+                    row_has_content = true;
+                    cell.reset();
+                } else {
+                    // Already blank - just reset to be safe
+                    cell.reset();
+                }
+            }
+            // Only mark dirty if this row actually had content
+            if (row_has_content) {
                 self.dirty_lines.set(r);
-                _ = c;
             }
         }
     }
