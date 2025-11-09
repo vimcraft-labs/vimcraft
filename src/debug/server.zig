@@ -481,6 +481,81 @@ pub const Server = struct {
                 } };
             },
 
+            .get_logs => {
+                const CoreLogLevel = @import("../core/log.zig").LogLevel;
+                const logger = &self.editor.logger;
+                const args = cmd.args.get_logs;
+
+                // Get all logs from ring buffer
+                const all_logs = logger.buffer.getAll();
+                const total_in_buffer = all_logs.len;
+
+                // Filter by level if specified
+                const filter_level: ?CoreLogLevel = if (args.level) |level_str| blk: {
+                    if (std.mem.eql(u8, level_str, "debug")) break :blk CoreLogLevel.debug;
+                    if (std.mem.eql(u8, level_str, "info")) break :blk CoreLogLevel.info;
+                    if (std.mem.eql(u8, level_str, "warning")) break :blk CoreLogLevel.warning;
+                    if (std.mem.eql(u8, level_str, "err")) break :blk CoreLogLevel.err;
+                    break :blk null;
+                } else null;
+
+                // Collect filtered logs with size tracking
+                var log_entries = std.ArrayList(protocol.LogEntry).empty;
+                defer log_entries.deinit(self.allocator);
+
+                var bytes_used: usize = 0;
+                var truncated = false;
+                const max_bytes = args.max_bytes orelse std.math.maxInt(usize);
+
+                // Start from most recent and work backwards (respecting count if specified)
+                const start_idx = if (args.count) |count|
+                    if (all_logs.len > count) all_logs.len - count else 0
+                else
+                    0;
+
+                for (all_logs[start_idx..]) |core_entry| {
+                    // Filter by level if specified
+                    if (filter_level) |fl| {
+                        if (core_entry.level != fl) continue;
+                    }
+
+                    // Calculate approximate size of this entry (message + level string + timestamp)
+                    const entry_size = core_entry.message.len + 20; // ~20 bytes for level + timestamp overhead
+
+                    // Check if adding this entry would exceed max_bytes
+                    if (bytes_used + entry_size > max_bytes) {
+                        truncated = true;
+                        break;
+                    }
+
+                    // Convert core LogLevel to string
+                    const level_str = switch (core_entry.level) {
+                        .debug => "debug",
+                        .info => "info",
+                        .warning => "warning",
+                        .err => "err",
+                    };
+
+                    // Create protocol log entry (duplicate strings for ownership)
+                    const entry = protocol.LogEntry{
+                        .message = try self.allocator.dupe(u8, core_entry.message),
+                        .level = try self.allocator.dupe(u8, level_str),
+                        .timestamp_ms = core_entry.timestamp_ms,
+                    };
+
+                    try log_entries.append(self.allocator, entry);
+                    bytes_used += entry_size;
+                }
+
+                return .{ .logs = .{
+                    .logs = try log_entries.toOwnedSlice(self.allocator),
+                    .count = log_entries.items.len,
+                    .total_in_buffer = total_in_buffer,
+                    .truncated = truncated,
+                    .bytes_used = bytes_used,
+                } };
+            },
+
             // Commands - execute keys in the editor
             .execute_keys => {
                 const keys = cmd.args.execute_keys.keys;

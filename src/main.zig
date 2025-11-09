@@ -101,6 +101,9 @@ const DebuggerState = struct {
     }
 };
 
+/// Global debugger pointer for logger callback (Terminal backend with --debug mode)
+var global_debugger: ?*anyopaque = null;
+
 /// Render source type
 pub const RenderSource = enum {
     input,
@@ -316,7 +319,8 @@ fn printHelp() void {
 }
 
 /// Load configuration from ~/.config/openvim/init.js
-fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightConfig, debugger_state: *DebuggerState, editor: *anyopaque, display: ?*Display) !void {
+/// NOTE: Caller must call jsi_api.initJSI() before calling this function
+fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightConfig, debugger_state: *DebuggerState) !void {
     // Get config paths
     var paths = try ConfigPaths.init(allocator);
     defer paths.deinit();
@@ -329,24 +333,11 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
 
     if (paths.initJsExists()) {
 
-        // Create Hermes runtime
-        const runtime_nullable = hermes_c.hermes_runtime_create();
-        if (runtime_nullable == null) {
-            std.debug.print("ERROR: Failed to create Hermes runtime\n", .{});
-            return error.HermesInitFailed;
-        }
-        const runtime = runtime_nullable.?;
-
-        // Store runtime in debugger_state (for :debug command)
-        // NOTE: Runtime will be destroyed when program exits
-        // DO NOT defer destroy here - we need it for :debug command
-        debugger_state.runtime = runtime;
-
-        // Register JSI host functions (zigSetHighlight, zigSetOption, cursor hooks)
-        // Timer system is also initialized here
-        // NOTE: Display is not available in headless debug protocol mode
-        // Trail rendering will be unavailable, but that's OK for headless testing
-        jsi_api.initJSI(allocator, @ptrCast(runtime), config, @ptrCast(@alignCast(editor)), display);
+        // Get runtime from debugger_state (initialized by caller)
+        const runtime = debugger_state.runtime orelse {
+            std.debug.print("ERROR: Runtime not initialized\n", .{});
+            return error.RuntimeNotInitialized;
+        };
 
         // Load and execute init.js
         jsi_api.loadConfig(@ptrCast(runtime), paths.init_js_path, allocator) catch |err| {
@@ -398,10 +389,25 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     var highlight_config = highlights.HighlightConfig.init(allocator);
     defer highlight_config.deinit();
 
+    // Initialize JavaScript runtime for config loading
+    const runtime_nullable = hermes_c.hermes_runtime_create();
+    if (runtime_nullable == null) {
+        std.debug.print("ERROR: Failed to create Hermes runtime\n", .{});
+        return error.HermesInitFailed;
+    }
+    const runtime = runtime_nullable.?;
+    defer hermes_c.hermes_runtime_destroy(runtime);
+
+    // Store runtime in debugger state
+    debugger_state.runtime = runtime;
+
+    // Register JSI host functions for EditorContext (headless mode)
+    jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &editor_ctx, &editor_ctx.display);
+
     // Load JavaScript config and plugins for headless debugging
     // NOTE: Display exists but won't render output (no terminal flush)
     // This allows visual debugging commands to inspect layer state
-    try loadConfigFromJs(allocator, &highlight_config, &debugger_state, &editor_ctx, &editor_ctx.display);
+    try loadConfigFromJs(allocator, &highlight_config, &debugger_state);
 
     // Ensure cursorline has a default color if not set by init.js
     // This is critical for visual debugging commands (get_layer, get_output_grid)
@@ -479,8 +485,21 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         .config_path = paths.init_js_path,
     };
 
-    // Load configuration from init.js (pass editor for cursor hooks and display for trail rendering)
-    try loadConfigFromJs(allocator, &highlight_config, &debugger_state, &editor, &display);
+    // Initialize JavaScript runtime for config loading
+    const runtime_nullable = hermes_c.hermes_runtime_create();
+    if (runtime_nullable != null) {
+        const runtime = runtime_nullable.?;
+        defer hermes_c.hermes_runtime_destroy(runtime);
+
+        // Store runtime in debugger state
+        debugger_state.runtime = runtime;
+
+        // Register JSI host functions (pass editor for cursor hooks and display for trail rendering)
+        jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &editor, &display);
+
+        // Load configuration from init.js
+        try loadConfigFromJs(allocator, &highlight_config, &debugger_state);
+    }
 
     // Apply sign column config from JS to display
     try display.setSignColumn(highlight_config.signcolumn_mode);
@@ -719,6 +738,36 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
     // Re-register console.log with debugger
     jsi_api.registerConsoleWithDebugger(@ptrCast(runtime), debugger.handle);
+
+    // Register editor.logger callback to forward logs to Chrome Debugger (Phase 3)
+    // Store debugger pointer in global for callback access
+    global_debugger = @ptrCast(&debugger);
+
+    const LogEntry = @import("core/log.zig").LogEntry;
+    const DebuggerLogLevel = @import("debug/debugger.zig").LogLevel;
+
+    const logCallback = struct {
+        fn callback(entry: LogEntry) void {
+            // Get debugger from global state
+            if (global_debugger) |ptr| {
+                const dbg: *Debugger = @ptrCast(@alignCast(ptr));
+
+                // Map core.log.LogLevel to debug.debugger.LogLevel
+                const level: DebuggerLogLevel = switch (entry.level) {
+                    .debug => .debug,
+                    .info => .info,
+                    .warning => .warning,
+                    .err => .err,
+                };
+
+                // Forward to Chrome Debugger
+                dbg.log(entry.message, level);
+            }
+        }
+    }.callback;
+
+    // Register the callback with editor.logger
+    editor.logger.setCallback(logCallback);
 
     // Auto-launch Chrome DevTools
     launchChromeDevTools(9229) catch {};

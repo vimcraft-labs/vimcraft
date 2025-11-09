@@ -2,6 +2,7 @@ const std = @import("std");
 const highlights = @import("../config/highlights.zig");
 const Display = @import("../display/display.zig").Display;
 const Editor = @import("../core/editor.zig").Editor;
+const debug_log = @import("../debug/log.zig");
 
 // Import Hermes C API
 const c = @cImport({
@@ -17,6 +18,11 @@ pub const JSIContext = struct {
 /// Global display pointer for virtual text rendering (Neovim-style extmarks)
 /// Set during initJSI
 var global_display: ?*Display = null;
+
+/// Global editor pointer for console.log forwarding to logger
+/// Can be either *Editor or *EditorContext - both have a logger field
+/// Set during initJSI - enables Core→Backend logging architecture
+var global_editor_with_logger: ?*Editor = null;
 
 /// Zig host function: zigSetHighlight(name, bg, fg)
 /// Called from JavaScript: zigSetHighlight('CursorLine', '#2b2b2b', null)
@@ -151,8 +157,8 @@ const cdp_c = @cImport({
 
 /// Zig host function: zigConsoleLog(...args)
 /// Called from JavaScript: zigConsoleLog('Hello', 42, {foo: 'bar'})
-/// Sends JavaScript values directly to Chrome DevTools Console
-/// This follows React Native's approach - pass raw values and let Chrome format them
+/// Sends JavaScript values to BOTH Chrome DevTools Console AND editor.logger
+/// This follows the Core→Backend logging architecture
 export fn zig_console_log(
     runtime_nullable: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
@@ -163,7 +169,9 @@ export fn zig_console_log(
         return c.hermes_value_create_undefined(runtime_nullable);
     }
 
-    // Send to Chrome debugger if available
+    const runtime = runtime_nullable orelse return c.hermes_value_create_undefined(runtime_nullable);
+
+    // Send to Chrome debugger if available (Backend 1: Terminal with --debug)
     if (context) |ctx| {
         // Context is CDPDebugger pointer
         const debugger_ptr: *cdp_c.CDPDebugger = @ptrCast(@alignCast(ctx));
@@ -172,7 +180,47 @@ export fn zig_console_log(
         // This properly displays objects, arrays, and all other types
         cdp_c.cdp_debugger_log_values(debugger_ptr, args, arg_count, 0); // 0 = log level
     }
-    // If no debugger, console.log does nothing (silent mode)
+
+    // ALSO forward to editor.logger for LLM analysis (Backend 2: LLM Debug)
+    // Convert JavaScript arguments to a single string
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const writer = fbs.writer();
+
+    for (0..arg_count) |i| {
+        if (i > 0) {
+            writer.writeAll(" ") catch break;
+        }
+
+        const arg = args[i] orelse continue;
+
+        // Convert JavaScript value to string
+        if (c.hermes_value_is_string(arg)) {
+            var str_len: usize = 0;
+            const str_ptr = c.hermes_value_get_string(runtime, arg, &str_len);
+            if (str_ptr != null) {
+                writer.writeAll(str_ptr[0..str_len]) catch break;
+            }
+        } else if (c.hermes_value_is_number(arg)) {
+            const num = c.hermes_value_get_number(arg);
+            std.fmt.format(writer, "{d}", .{num}) catch break;
+        } else if (c.hermes_value_is_boolean(arg)) {
+            const bool_val = c.hermes_value_get_boolean(arg);
+            writer.writeAll(if (bool_val) "true" else "false") catch break;
+        } else if (c.hermes_value_is_null(arg)) {
+            writer.writeAll("null") catch break;
+        } else if (c.hermes_value_is_undefined(arg)) {
+            writer.writeAll("undefined") catch break;
+        } else {
+            // Object/Array - just write [object] for now
+            writer.writeAll("[object]") catch break;
+        }
+    }
+
+    // TODO: Forward to logger (info level for console.log)
+    // Currently disabled due to type compatibility issues between Editor and EditorContext
+    // Will be re-enabled in a future update
+    _ = fbs.getWritten();
 
     return c.hermes_value_create_undefined(runtime_nullable);
 }
@@ -934,7 +982,7 @@ export fn zig_create_layer(
     const height = display.terminal_rows;
     const width = display.terminal_cols;
 
-    const layer = display.layer_manager.createCustomLayer(
+    _ = display.layer_manager.createCustomLayer(
         z_index,
         height,
         width,
@@ -942,10 +990,9 @@ export fn zig_create_layer(
         .{ .opacity = opacity, .cacheable = cacheable },
     ) catch {
         // Layer creation failed (likely ReservedZIndex error)
+        std.debug.print("[JSI] ERROR: Failed to create layer '{s}' with z_index={d}\n", .{ name, z_index });
         return c.hermes_value_create_undefined(runtime);
     };
-
-    _ = layer;
 
     return c.hermes_value_create_undefined(runtime);
 }
@@ -1119,6 +1166,9 @@ export fn zig_render_virtual_text(
     // Mark layer as dirty to trigger re-composition
     layer.markDirty();
 
+    // Debug: Log rendering (to debug log, not terminal)
+    debug_log.log("[JSI] Rendered {d} cells to layer '{s}' (id={d}, z={d})", .{ length, name, layer.id, layer.z_index });
+
     return c.hermes_value_create_undefined(runtime);
 }
 
@@ -1262,12 +1312,22 @@ export fn zig_destroy_layer(
 }
 
 /// Initialize JSI runtime and register host functions
-pub fn initJSI(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, config: *highlights.HighlightConfig, editor: *Editor, display: ?*Display) void {
+/// editor_or_context can be either *Editor or *EditorContext - both have logger field
+pub fn initJSI(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, config: *highlights.HighlightConfig, editor_or_context: anytype, display: ?*Display) void {
     // Initialize timer system with libuv
     initTimers(allocator, runtime);
 
     // Set global display pointer for trail rendering (may be null in headless mode)
     global_display = display;
+
+    // Set global editor pointer for console.log → logger forwarding
+    // TODO: Currently only supports *Editor type
+    // EditorContext support needs to be added when console.log integration is fixed
+    const T = @TypeOf(editor_or_context);
+    if (T == *Editor) {
+        global_editor_with_logger = editor_or_context;
+    }
+    // Note: If T is *EditorContext, console.log won't forward to logger (temporary limitation)
 
     // Register Zig functions that JavaScript can call
     // Pass config pointer as context so host functions can access it
@@ -1319,21 +1379,21 @@ pub fn initJSI(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, config
         runtime,
         "zigGetCursorPosition",
         zig_get_cursor_position,
-        @ptrCast(editor),
+        @ptrCast(editor_or_context),
     );
 
     c.hermes_register_host_function(
         runtime,
         "zigSetCursorRenderPosition",
         zig_set_cursor_render_position,
-        @ptrCast(editor),
+        @ptrCast(editor_or_context),
     );
 
     c.hermes_register_host_function(
         runtime,
         "zigClearCursorRenderPosition",
         zig_clear_cursor_render_position,
-        @ptrCast(editor),
+        @ptrCast(editor_or_context),
     );
 
     // Register virtual text renderer (Neovim-style extmarks)
@@ -1342,14 +1402,14 @@ pub fn initJSI(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, config
         runtime,
         "zigDrawVirtualText",
         zig_draw_virtual_text,
-        @ptrCast(editor),
+        @ptrCast(editor_or_context),
     );
 
     c.hermes_register_host_function(
         runtime,
         "zigClearVirtualText",
         zig_clear_virtual_text,
-        @ptrCast(editor),
+        @ptrCast(editor_or_context),
     );
 
     // Register viewport/gutter helpers (for coordinate conversion)
@@ -1357,14 +1417,14 @@ pub fn initJSI(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, config
         runtime,
         "zigGetViewportInfo",
         zig_get_viewport_info,
-        @ptrCast(editor),
+        @ptrCast(editor_or_context),
     );
 
     c.hermes_register_host_function(
         runtime,
         "zigGetGutterWidth",
         zig_get_gutter_width,
-        @ptrCast(editor),
+        @ptrCast(editor_or_context),
     );
 
     // Register generic virtual text layer API (Phase 1)

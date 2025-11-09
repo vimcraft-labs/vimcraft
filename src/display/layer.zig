@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ScreenGrid = @import("screen_grid.zig").ScreenGrid;
 const DirtyRectTracker = @import("dirty_rect.zig").DirtyRectTracker;
+const debug_log = @import("../debug/log.zig");
 
 /// Layer z-index constants (Neovim-compatible ordering)
 pub const ZIndex = struct {
@@ -221,6 +222,15 @@ pub const LayerManager = struct {
         // Find insertion point (binary search for efficiency)
         const insert_idx = self.findInsertionPoint(layer.z_index);
         try self.layers.insert(self.allocator, insert_idx, layer);
+
+        // Debug: Log layer addition (to debug log, not terminal)
+        debug_log.log("[LayerManager] Added layer '{s}' (id={d}, z={d}, enabled={}, dirty={})", .{
+            layer.name,
+            layer.id,
+            layer.z_index,
+            layer.enabled,
+            layer.dirty,
+        });
     }
 
     /// Remove layer by ID

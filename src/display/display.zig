@@ -1169,8 +1169,11 @@ pub const Display = struct {
             }
 
             // Write the base character
+            // CRITICAL FIX: When char is 0 (null/transparent), render a space to show background
+            // This is essential for layers that only provide background color (like virtual text banners)
+            const render_char = if (update.cell.char == 0) ' ' else update.cell.char;
             var buf: [4]u8 = undefined;
-            const len = std.unicode.utf8Encode(update.cell.char, &buf) catch 1;
+            const len = std.unicode.utf8Encode(render_char, &buf) catch 1;
             try buf_writer.writeAll(buf[0..len]);
 
             // Write any combining characters (variation selectors, combining marks)

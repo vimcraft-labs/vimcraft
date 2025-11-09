@@ -55,6 +55,24 @@ fn serializeCommandArgs(args: protocol.CommandArgs, writer: anytype) !void {
                 try writer.writeAll("{}");
             }
         },
+        .get_logs => |a| {
+            try writer.writeAll("{");
+            var needs_comma = false;
+            if (a.count) |count| {
+                try writer.print("\"count\":{d}", .{count});
+                needs_comma = true;
+            }
+            if (a.level) |level| {
+                if (needs_comma) try writer.writeAll(",");
+                try writer.print("\"level\":\"{s}\"", .{level});
+                needs_comma = true;
+            }
+            if (a.max_bytes) |max_bytes| {
+                if (needs_comma) try writer.writeAll(",");
+                try writer.print("\"max_bytes\":{d}", .{max_bytes});
+            }
+            try writer.writeAll("}");
+        },
         .execute_keys => |a| {
             try writer.print("{{\"keys\":\"{s}\"}}", .{a.keys});
         },
@@ -174,7 +192,25 @@ fn serializeResponseResult(result: protocol.ResponseResult, writer: anytype) !vo
         .output_grid => |og| {
             try serializeOutputGrid(og, writer);
         },
+        .logs => |logs| {
+            try serializeLogsState(logs, writer);
+        },
     }
+}
+
+fn serializeLogsState(logs: protocol.LogsState, writer: anytype) !void {
+    try writer.writeAll("{\"logs\":[");
+    for (logs.logs, 0..) |log_entry, i| {
+        if (i > 0) try writer.writeAll(",");
+        try writer.print("{{\"message\":\"{s}\",", .{log_entry.message});
+        try writer.print("\"level\":\"{s}\",", .{log_entry.level});
+        try writer.print("\"timestamp_ms\":{d}}}", .{log_entry.timestamp_ms});
+    }
+    try writer.writeAll("],");
+    try writer.print("\"count\":{d},", .{logs.count});
+    try writer.print("\"total_in_buffer\":{d},", .{logs.total_in_buffer});
+    try writer.print("\"truncated\":{},", .{logs.truncated});
+    try writer.print("\"bytes_used\":{d}}}", .{logs.bytes_used});
 }
 
 fn serializeLayerState(layer: protocol.LayerState, writer: anytype) !void {
@@ -268,7 +304,7 @@ pub fn parseCommand(json_str: []const u8, allocator: std.mem.Allocator) !protoco
 
 fn parseCommandArgs(cmd: protocol.CommandType, args_obj: std.json.Value, allocator: std.mem.Allocator) !protocol.CommandArgs {
     return switch (cmd) {
-        .ping, .shutdown, .get_state, .get_cursor, .get_mode, .get_visual, .get_registers, .get_buffer, .get_layers => .{ .none = {} },
+        .ping, .shutdown, .get_state, .get_cursor, .get_mode, .get_visual, .get_registers, .get_buffer, .get_layers, .get_logs => .{ .none = {} },
 
         .get_register => blk: {
             const name = args_obj.object.get("name").?.string[0];

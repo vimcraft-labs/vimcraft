@@ -9,6 +9,7 @@ const movement = @import("../movement/movement.zig");
 const Position = @import("../visual/visual.zig").Position;
 const yank = @import("../buffer/yank.zig");
 const paste = @import("../buffer/paste.zig");
+const Logger = @import("log.zig").Logger;
 
 /// Pending command for multi-key sequences (like dd, dw)
 const PendingCommand = struct {
@@ -134,6 +135,9 @@ pub const Editor = struct {
     visual_state: VisualState,
     yank_highlight: YankHighlight,
 
+    // Logger (Core→Backend architecture: Core produces logs, backends consume them)
+    logger: Logger,
+
     // Cursor rendering override (for animated cursor plugins)
     cursor_render_override: CursorRenderOverride = .{},
 
@@ -162,6 +166,7 @@ pub const Editor = struct {
                 .anchor = .{ .line = 0, .col = 0 },
             },
             .yank_highlight = YankHighlight{},
+            .logger = Logger.init(allocator),
             .pending_cmd = PendingCommand{},
             .pending_register = PendingRegister{},
             .cmd_buffer = CommandBuffer.init(allocator),
@@ -172,6 +177,7 @@ pub const Editor = struct {
         self.buffer.deinit();
         self.register_mgr.deinit();
         self.cmd_buffer.deinit();
+        self.logger.deinit();
     }
 
     /// Execute a string of keys through the editor

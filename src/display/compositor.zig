@@ -5,6 +5,7 @@ const Cell = @import("screen_grid.zig").Cell;
 const Layer = @import("layer.zig").Layer;
 const highlights = @import("../config/highlights.zig");
 const Color = highlights.Color;
+const debug_log = @import("../debug/log.zig");
 
 /// Compositor (blends multiple layers into final output grid)
 /// Uses Porter-Duff alpha compositing for layer blending
@@ -140,6 +141,7 @@ pub const Compositor = struct {
         const height = @min(self.output_grid.height, layer.grid.height);
         const width = @min(self.output_grid.width, layer.grid.width);
 
+        var cells_with_content: usize = 0;
         for (0..height) |row| {
             for (0..width) |col| {
                 const src = layer.grid.getCell(row, col) orelse continue;
@@ -149,6 +151,8 @@ pub const Compositor = struct {
                     self.stats.cells_skipped += 1;
                     continue;
                 }
+
+                cells_with_content += 1;
 
                 const dst_cell = self.output_grid.getCell(row, col);
                 const dst = dst_cell orelse Cell{ .char = 0, .fg = null, .bg = null };
@@ -160,6 +164,16 @@ pub const Compositor = struct {
                 self.output_grid.markDirty(row); // CRITICAL FIX: Mark row as dirty so diff() will check it
                 self.stats.cells_blended += 1;
             }
+        }
+
+        // Debug: Log blending for custom layers (to debug log, not terminal)
+        if (cells_with_content > 0) {
+            debug_log.log("[Compositor] Blended layer '{s}' (z={d}): {d} cells with content, {d} blended", .{
+                layer.name,
+                layer.z_index,
+                cells_with_content,
+                self.stats.cells_blended,
+            });
         }
     }
 

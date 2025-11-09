@@ -6,6 +6,7 @@ const EditOps = @import("../buffer/edit.zig").EditOps;
 const RegisterManager = @import("../register/register.zig").RegisterManager;
 const VisualState = @import("../visual/visual.zig").VisualState;
 const YankHighlight = @import("../visual/yank_highlight.zig").YankHighlight;
+const Logger = @import("../core/log.zig").Logger;
 const movement = @import("../movement/movement.zig");
 const Position = @import("../visual/visual.zig").Position;
 const yank = @import("../buffer/yank.zig");
@@ -104,6 +105,7 @@ pub const EditorContext = struct {
     register_mgr: RegisterManager,
     visual_state: VisualState,
     yank_highlight: YankHighlight,
+    logger: Logger,
 
     // Internal state
     pending_cmd: PendingCommand,
@@ -132,6 +134,7 @@ pub const EditorContext = struct {
                 .anchor = .{ .line = 0, .col = 0 },
             },
             .yank_highlight = YankHighlight{},
+            .logger = Logger.init(allocator),
             .pending_cmd = PendingCommand{},
             .pending_register = PendingRegister{},
             .cmd_buffer = CommandBuffer.init(allocator),
@@ -143,6 +146,7 @@ pub const EditorContext = struct {
         self.display.deinit();
         self.register_mgr.deinit();
         self.cmd_buffer.deinit();
+        self.logger.deinit();
     }
 
     /// Execute a string of keys through the editor
