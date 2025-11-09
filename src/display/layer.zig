@@ -185,6 +185,10 @@ pub const LayerManager = struct {
     pub fn deinit(self: *LayerManager) void {
         // Free all layers
         for (self.layers.items) |layer| {
+            // Free layer name if it's a custom layer (not a core layer)
+            if (!isCoreLayerName(layer.name)) {
+                self.allocator.free(layer.name);
+            }
             layer.deinit();
             self.allocator.destroy(layer);
         }
@@ -312,6 +316,92 @@ pub const LayerManager = struct {
             );
         }
         std.debug.print("======================\n\n", .{});
+    }
+
+    /// Create a custom layer for plugins (takes owned name string)
+    /// Used by JavaScript plugins via JSI bridge
+    /// Returns error if z-index conflicts with core layers
+    pub fn createCustomLayer(
+        self: *LayerManager,
+        z_index: i32,
+        height: usize,
+        width: usize,
+        name: []const u8,
+        opts: struct {
+            opacity: f32 = 1.0,
+            cacheable: bool = false,
+        },
+    ) !*Layer {
+        // Validate z-index doesn't conflict with core layers
+        if (isReservedZIndex(z_index)) {
+            return error.ReservedZIndex;
+        }
+
+        // Duplicate name for layer ownership
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
+        const id = self.next_id;
+        self.next_id += 1;
+
+        const layer = try self.allocator.create(Layer);
+        errdefer self.allocator.destroy(layer);
+
+        layer.* = try Layer.init(self.allocator, id, z_index, height, width, owned_name);
+        errdefer layer.deinit();
+
+        // Apply custom options
+        layer.opacity = @max(0.0, @min(1.0, opts.opacity));
+        layer.setCacheable(opts.cacheable);
+
+        try self.addLayer(layer);
+        return layer;
+    }
+
+    /// Destroy a custom layer by name
+    /// Used by JavaScript plugins for cleanup
+    pub fn destroyCustomLayer(self: *LayerManager, name: []const u8) !void {
+        // Find layer by name
+        const layer = self.getLayerByName(name) orelse return error.LayerNotFound;
+
+        // Don't allow destroying core layers
+        if (isCoreLayerName(name)) {
+            return error.CannotDestroyCoreLayer;
+        }
+
+        // Remove from manager
+        _ = self.removeLayer(layer.id) orelse return error.LayerNotFound;
+
+        // Free name (we own it for custom layers)
+        self.allocator.free(layer.name);
+
+        // Cleanup layer
+        layer.deinit();
+        self.allocator.destroy(layer);
+    }
+
+    /// Check if z-index is reserved for core layers
+    fn isReservedZIndex(z_index: i32) bool {
+        return z_index == ZIndex.BASE or
+            z_index == ZIndex.GUTTER or
+            z_index == ZIndex.CURSOR or
+            z_index == ZIndex.VIRTUAL_TEXT or
+            z_index == ZIndex.SELECTION or
+            z_index == ZIndex.SEARCH or
+            z_index == ZIndex.FLOAT or
+            z_index == ZIndex.CMDLINE or
+            z_index == ZIndex.MESSAGE or
+            z_index == ZIndex.MODAL;
+    }
+
+    /// Check if layer name is a core layer
+    fn isCoreLayerName(name: []const u8) bool {
+        return std.mem.eql(u8, name, "buffer") or
+            std.mem.eql(u8, name, "gutter") or
+            std.mem.eql(u8, name, "cursor") or
+            std.mem.eql(u8, name, "virtual_text") or
+            std.mem.eql(u8, name, "selection") or
+            std.mem.eql(u8, name, "yank");
     }
 };
 

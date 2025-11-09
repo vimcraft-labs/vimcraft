@@ -561,6 +561,24 @@ void hermes_object_set_property(
     }
 }
 
+OVHermesValue* hermes_value_get_property(
+    OVHermesRuntime* runtime,
+    OVHermesValue* object_value,
+    const char* property_name
+) {
+    if (!runtime || !object_value || !property_name) return nullptr;
+
+    try {
+        if (!object_value->value.isObject()) return nullptr;
+
+        Object obj = object_value->value.asObject(*runtime->runtime);
+        Value value = obj.getProperty(*runtime->runtime, property_name);
+        return new OVHermesValue(std::move(value));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 void hermes_value_set_property(
     OVHermesRuntime* runtime,
     OVHermesValue* object_value,

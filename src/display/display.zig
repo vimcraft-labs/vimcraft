@@ -398,9 +398,6 @@ pub const Display = struct {
         // Update gutter cache (Neovim optimization: invalidate on line count change)
         self.updateGutterCache(buffer);
 
-        debug_log.log("=== RENDER START (Grid-based) ===", .{});
-        debug_log.log("Terminal size: {}x{}", .{ self.terminal_rows, self.terminal_cols });
-
         // Hide cursor during render
         try self.hideCursor();
         defer self.showCursor() catch {};
@@ -452,8 +449,6 @@ pub const Display = struct {
         const output = self.compositor.getOutput();
         const updates = try output.diff(self.allocator);
         defer self.allocator.free(updates);
-
-        debug_log.log("Diff found {} changed cells", .{updates.len});
 
         // STEP 4: Render only changed cells with optimizations
         try self.renderUpdates(updates);

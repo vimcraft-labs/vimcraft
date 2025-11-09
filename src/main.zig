@@ -368,17 +368,11 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
             plugin_files.deinit(allocator);
         }
 
-        if (plugin_files.items.len > 0) {
-            std.debug.print("Loading {d} plugin(s) from {s}\n", .{ plugin_files.items.len, paths.config_dir });
-        }
-
         for (plugin_files.items) |plugin_path| {
-            // Get just the filename for display
-            const filename = std.fs.path.basename(plugin_path);
-            std.debug.print("  Loading plugin: {s}\n", .{filename});
-
             jsi_api.loadPlugin(@ptrCast(runtime), plugin_path, allocator) catch |err| {
-                std.debug.print("  WARNING: Failed to load {s}: {}\n", .{ filename, err });
+                // Keep only critical errors
+                const filename = std.fs.path.basename(plugin_path);
+                std.debug.print("WARNING: Failed to load plugin {s}: {}\n", .{ filename, err });
             };
         }
     } else {

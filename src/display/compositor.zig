@@ -52,20 +52,8 @@ pub const Compositor = struct {
         // This ensures cells that AREN'T touched by any layer become blank.
         self.output_grid.clear(); // This marks all dirty and resets to blank - needed for correctness
 
-        // DEBUG: Log layer composition
-        const debug_log = @import("../debug/log.zig");
-        debug_log.log("=== COMPOSITOR: Starting composition ===", .{});
-        debug_log.log("Total layers: {d}", .{layers.len});
-
         // Iterate layers in z-index order
         for (layers) |layer| {
-            debug_log.log("Layer '{s}' (z={d}): enabled={}, dirty={}", .{
-                layer.name,
-                layer.z_index,
-                layer.enabled,
-                layer.dirty,
-            });
-
             if (!layer.enabled) {
                 self.stats.layers_skipped += 1;
                 continue;
@@ -74,13 +62,7 @@ pub const Compositor = struct {
             // Blend this layer onto output
             try self.blendLayer(layer);
             self.stats.layers_composited += 1;
-            debug_log.log("  → Composited layer '{s}'", .{layer.name});
         }
-
-        debug_log.log("=== COMPOSITOR: Done (composited={d}, skipped={d}) ===", .{
-            self.stats.layers_composited,
-            self.stats.layers_skipped,
-        });
 
         // Record time
         const end = std.time.nanoTimestamp();
@@ -173,6 +155,7 @@ pub const Compositor = struct {
 
                 // Blend cells using alpha compositing
                 const result = blendCell(src, dst, layer.opacity);
+
                 self.output_grid.setCell(row, col, result);
                 self.output_grid.markDirty(row); // CRITICAL FIX: Mark row as dirty so diff() will check it
                 self.stats.cells_blended += 1;

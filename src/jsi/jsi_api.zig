@@ -854,6 +854,413 @@ export fn zig_get_gutter_width(
     return c.hermes_value_create_number(runtime, @floatFromInt(gutter_width));
 }
 
+// ============================================================================
+// Generic Virtual Text Layer API (Phase 1)
+// ============================================================================
+
+/// Zig host function: zigCreateLayer(name, options)
+/// JavaScript: zigCreateLayer('my_layer', {z_index: 50, opacity: 1.0, cacheable: false})
+/// Creates a custom rendering layer for plugins
+export fn zig_create_layer(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const display = global_display orelse {
+        std.debug.print("[JSI] ERROR: global_display is null!\n", .{});
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    if (count < 2) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 0: layer name (string)
+    if (args[0] == null or !c.hermes_value_is_string(args[0])) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    var name_len: usize = 0;
+    const name_ptr = c.hermes_value_get_string(runtime, args[0], &name_len);
+    if (name_ptr == null) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+    // Copy name to avoid shared buffer corruption
+    var name_buf: [256]u8 = undefined;
+    if (name_len >= name_buf.len) return c.hermes_value_create_undefined(runtime);
+    @memcpy(name_buf[0..name_len], name_ptr[0..name_len]);
+    const name = name_buf[0..name_len];
+
+    // Arg 1: options object {z_index, opacity?, cacheable?}
+    if (args[1] == null or !c.hermes_value_is_object(args[1])) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    const opts_val = args[1].?;
+
+    // Get z_index (required) - use hermes_value_get_property directly
+    const z_index_val = c.hermes_value_get_property(runtime, opts_val, "z_index");
+    if (z_index_val == null or !c.hermes_value_is_number(z_index_val)) {
+        if (z_index_val != null) c.hermes_value_destroy(z_index_val);
+        return c.hermes_value_create_undefined(runtime);
+    }
+    const z_index: i32 = @intFromFloat(c.hermes_value_get_number(z_index_val));
+    c.hermes_value_destroy(z_index_val);
+
+    // Get opacity (optional, default 1.0)
+    var opacity: f32 = 1.0;
+    const opacity_val = c.hermes_value_get_property(runtime, opts_val, "opacity");
+    if (opacity_val != null and c.hermes_value_is_number(opacity_val)) {
+        opacity = @floatCast(c.hermes_value_get_number(opacity_val));
+        c.hermes_value_destroy(opacity_val);
+    } else if (opacity_val != null) {
+        c.hermes_value_destroy(opacity_val);
+    }
+
+    // Get cacheable (optional, default false)
+    var cacheable: bool = false;
+    const cacheable_val = c.hermes_value_get_property(runtime, opts_val, "cacheable");
+    if (cacheable_val != null and c.hermes_value_is_boolean(cacheable_val)) {
+        cacheable = c.hermes_value_get_boolean(cacheable_val);
+        c.hermes_value_destroy(cacheable_val);
+    } else if (cacheable_val != null) {
+        c.hermes_value_destroy(cacheable_val);
+    }
+
+    // Create custom layer via LayerManager
+    const height = display.terminal_rows;
+    const width = display.terminal_cols;
+
+    const layer = display.layer_manager.createCustomLayer(
+        z_index,
+        height,
+        width,
+        name,
+        .{ .opacity = opacity, .cacheable = cacheable },
+    ) catch {
+        // Layer creation failed (likely ReservedZIndex error)
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    _ = layer;
+
+    return c.hermes_value_create_undefined(runtime);
+}
+
+/// Zig host function: zigRenderVirtualText(name, cells)
+/// JavaScript: zigRenderVirtualText('my_layer', [{row, col, char, fg?, bg?}, ...])
+/// Renders cells to a custom layer
+export fn zig_render_virtual_text(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const display = global_display orelse return c.hermes_value_create_undefined(runtime);
+
+    if (count < 2) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 0: layer name (string)
+    if (args[0] == null or !c.hermes_value_is_string(args[0])) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    var name_len: usize = 0;
+    const name_ptr = c.hermes_value_get_string(runtime, args[0], &name_len);
+    if (name_ptr == null) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+    var name_buf: [256]u8 = undefined;
+    if (name_len >= name_buf.len) return c.hermes_value_create_undefined(runtime);
+    @memcpy(name_buf[0..name_len], name_ptr[0..name_len]);
+    const name = name_buf[0..name_len];
+
+    // Arg 1: cells array (check if it's an object with length property)
+    if (args[1] == null or !c.hermes_value_is_object(args[1])) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Get layer by name
+    const layer = display.layer_manager.getLayerByName(name) orelse {
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    // Clear layer before rendering new cells
+    layer.clear();
+
+    // Get array length using hermes_value_get_property
+    const cells_val = args[1].?;
+    const length_val = c.hermes_value_get_property(runtime, cells_val, "length");
+    if (length_val == null) return c.hermes_value_create_undefined(runtime);
+    const length = @as(usize, @intFromFloat(c.hermes_value_get_number(length_val)));
+    c.hermes_value_destroy(length_val);
+
+    // Import Cell type
+    const Cell = @import("../display/screen_grid.zig").Cell;
+    const Color = @import("../config/highlights.zig").Color;
+
+    // Iterate over cells array
+    var i: usize = 0;
+    while (i < length) : (i += 1) {
+        // Get cell object at index i (convert index to string for property access)
+        var idx_buf: [32]u8 = undefined;
+        const idx_str = std.fmt.bufPrint(&idx_buf, "{d}", .{i}) catch continue;
+        const idx_str_null = std.fmt.bufPrintZ(&idx_buf, "{d}", .{i}) catch continue;
+        _ = idx_str;
+
+        const cell_val = c.hermes_value_get_property(runtime, cells_val, idx_str_null.ptr);
+        if (cell_val == null or !c.hermes_value_is_object(cell_val)) {
+            if (cell_val != null) c.hermes_value_destroy(cell_val);
+            continue;
+        }
+
+        // Extract cell properties using hermes_value_get_property
+        const row_val = c.hermes_value_get_property(runtime, cell_val, "row");
+        const col_val = c.hermes_value_get_property(runtime, cell_val, "col");
+        const char_val = c.hermes_value_get_property(runtime, cell_val, "char");
+
+        if (row_val == null or col_val == null or char_val == null) {
+            if (row_val != null) c.hermes_value_destroy(row_val);
+            if (col_val != null) c.hermes_value_destroy(col_val);
+            if (char_val != null) c.hermes_value_destroy(char_val);
+            c.hermes_value_destroy(cell_val);
+            continue;
+        }
+
+        const row_f = c.hermes_value_get_number(row_val);
+        const col_f = c.hermes_value_get_number(col_val);
+
+        // Validate coordinates
+        if (std.math.isNan(row_f) or std.math.isInf(row_f) or row_f < 0 or
+            std.math.isNan(col_f) or std.math.isInf(col_f) or col_f < 0)
+        {
+            c.hermes_value_destroy(row_val);
+            c.hermes_value_destroy(col_val);
+            c.hermes_value_destroy(char_val);
+            c.hermes_value_destroy(cell_val);
+            continue;
+        }
+
+        const row = @as(usize, @intFromFloat(row_f));
+        const col = @as(usize, @intFromFloat(col_f));
+
+        // Get character (could be number codepoint or string)
+        var char: u21 = ' ';
+        if (c.hermes_value_is_number(char_val)) {
+            const char_f = c.hermes_value_get_number(char_val);
+            if (!std.math.isNan(char_f) and !std.math.isInf(char_f) and char_f >= 0) {
+                char = @intCast(@as(u32, @intFromFloat(char_f)));
+            }
+        } else if (c.hermes_value_is_string(char_val)) {
+            var char_len: usize = 0;
+            const char_ptr = c.hermes_value_get_string(runtime, char_val, &char_len);
+            if (char_ptr != null and char_len > 0) {
+                char = @intCast(char_ptr[0]);
+            }
+        }
+
+        // Get optional fg/bg colors (null or hex number)
+        var fg: ?Color = null;
+        var bg: ?Color = null;
+
+        const fg_val = c.hermes_value_get_property(runtime, cell_val, "fg");
+        if (fg_val != null and !c.hermes_value_is_null(fg_val)) {
+            if (c.hermes_value_is_number(fg_val)) {
+                const fg_num = c.hermes_value_get_number(fg_val);
+                if (!std.math.isNan(fg_num) and !std.math.isInf(fg_num)) {
+                    const rgb: u24 = @intCast(@as(u32, @intFromFloat(fg_num)));
+                    fg = Color{
+                        .r = @intCast((rgb >> 16) & 0xFF),
+                        .g = @intCast((rgb >> 8) & 0xFF),
+                        .b = @intCast(rgb & 0xFF),
+                    };
+                }
+            }
+            c.hermes_value_destroy(fg_val);
+        } else if (fg_val != null) {
+            c.hermes_value_destroy(fg_val);
+        }
+
+        const bg_val = c.hermes_value_get_property(runtime, cell_val, "bg");
+        if (bg_val != null and !c.hermes_value_is_null(bg_val)) {
+            if (c.hermes_value_is_number(bg_val)) {
+                const bg_num = c.hermes_value_get_number(bg_val);
+                if (!std.math.isNan(bg_num) and !std.math.isInf(bg_num)) {
+                    const rgb: u24 = @intCast(@as(u32, @intFromFloat(bg_num)));
+                    bg = Color{
+                        .r = @intCast((rgb >> 16) & 0xFF),
+                        .g = @intCast((rgb >> 8) & 0xFF),
+                        .b = @intCast(rgb & 0xFF),
+                    };
+                }
+            }
+            c.hermes_value_destroy(bg_val);
+        } else if (bg_val != null) {
+            c.hermes_value_destroy(bg_val);
+        }
+
+        // Set cell in layer grid
+        layer.grid.setCell(row, col, Cell{ .char = char, .fg = fg, .bg = bg });
+
+        // Cleanup
+        c.hermes_value_destroy(row_val);
+        c.hermes_value_destroy(col_val);
+        c.hermes_value_destroy(char_val);
+        c.hermes_value_destroy(cell_val);
+    }
+
+    // Mark layer as dirty to trigger re-composition
+    layer.markDirty();
+
+    return c.hermes_value_create_undefined(runtime);
+}
+
+/// Zig host function: zigSetLayerOpacity(name, opacity)
+/// JavaScript: zigSetLayerOpacity('my_layer', 0.5)
+/// Updates layer opacity for fade effects
+export fn zig_set_layer_opacity(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const display = global_display orelse return c.hermes_value_create_undefined(runtime);
+
+    if (count < 2) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 0: layer name (string)
+    if (args[0] == null or !c.hermes_value_is_string(args[0])) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    var name_len: usize = 0;
+    const name_ptr = c.hermes_value_get_string(runtime, args[0], &name_len);
+    if (name_ptr == null) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+    var name_buf: [256]u8 = undefined;
+    if (name_len >= name_buf.len) return c.hermes_value_create_undefined(runtime);
+    @memcpy(name_buf[0..name_len], name_ptr[0..name_len]);
+    const name = name_buf[0..name_len];
+
+    // Arg 1: opacity (number)
+    if (args[1] == null or !c.hermes_value_is_number(args[1])) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    const opacity_f = c.hermes_value_get_number(args[1]);
+    if (std.math.isNan(opacity_f) or std.math.isInf(opacity_f)) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    const opacity: f32 = @floatCast(opacity_f);
+
+    // Get layer by name
+    const layer = display.layer_manager.getLayerByName(name) orelse {
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    // Update opacity
+    layer.setOpacity(opacity);
+
+    return c.hermes_value_create_undefined(runtime);
+}
+
+/// Zig host function: zigClearVirtualText(name)
+/// JavaScript: zigClearVirtualText('my_layer')
+/// Clears layer content (keeps layer alive)
+export fn zig_clear_layer(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const display = global_display orelse return c.hermes_value_create_undefined(runtime);
+
+    if (count < 1) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 0: layer name (string)
+    if (args[0] == null or !c.hermes_value_is_string(args[0])) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    var name_len: usize = 0;
+    const name_ptr = c.hermes_value_get_string(runtime, args[0], &name_len);
+    if (name_ptr == null) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+    var name_buf: [256]u8 = undefined;
+    if (name_len >= name_buf.len) return c.hermes_value_create_undefined(runtime);
+    @memcpy(name_buf[0..name_len], name_ptr[0..name_len]);
+    const name = name_buf[0..name_len];
+
+    // Get layer by name
+    const layer = display.layer_manager.getLayerByName(name) orelse {
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    // Clear layer content
+    layer.clear();
+
+    return c.hermes_value_create_undefined(runtime);
+}
+
+/// Zig host function: zigDestroyLayer(name)
+/// JavaScript: zigDestroyLayer('my_layer')
+/// Destroys layer and frees resources
+export fn zig_destroy_layer(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const display = global_display orelse return c.hermes_value_create_undefined(runtime);
+
+    if (count < 1) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 0: layer name (string)
+    if (args[0] == null or !c.hermes_value_is_string(args[0])) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    var name_len: usize = 0;
+    const name_ptr = c.hermes_value_get_string(runtime, args[0], &name_len);
+    if (name_ptr == null) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+    var name_buf: [256]u8 = undefined;
+    if (name_len >= name_buf.len) return c.hermes_value_create_undefined(runtime);
+    @memcpy(name_buf[0..name_len], name_ptr[0..name_len]);
+    const name = name_buf[0..name_len];
+
+    // Destroy layer via LayerManager
+    display.layer_manager.destroyCustomLayer(name) catch {
+        // Layer not found or cannot destroy core layer
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    return c.hermes_value_create_undefined(runtime);
+}
+
 /// Initialize JSI runtime and register host functions
 pub fn initJSI(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, config: *highlights.HighlightConfig, editor: *Editor, display: ?*Display) void {
     // Initialize timer system with libuv
@@ -958,6 +1365,42 @@ pub fn initJSI(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, config
         "zigGetGutterWidth",
         zig_get_gutter_width,
         @ptrCast(editor),
+    );
+
+    // Register generic virtual text layer API (Phase 1)
+    c.hermes_register_host_function(
+        runtime,
+        "zigCreateLayer",
+        zig_create_layer,
+        null,
+    );
+
+    c.hermes_register_host_function(
+        runtime,
+        "zigRenderVirtualText",
+        zig_render_virtual_text,
+        null,
+    );
+
+    c.hermes_register_host_function(
+        runtime,
+        "zigSetLayerOpacity",
+        zig_set_layer_opacity,
+        null,
+    );
+
+    c.hermes_register_host_function(
+        runtime,
+        "zigClearVirtualText",
+        zig_clear_layer,
+        null,
+    );
+
+    c.hermes_register_host_function(
+        runtime,
+        "zigDestroyLayer",
+        zig_destroy_layer,
+        null,
     );
 
     // JSI functions registered (silent mode)

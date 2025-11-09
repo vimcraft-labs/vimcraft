@@ -253,6 +253,16 @@ void hermes_object_set_property(
 );
 
 /**
+ * Get a property from a value (if it's an object)
+ * Returns NULL if value is not an object or property doesn't exist
+ */
+OVHermesValue* hermes_value_get_property(
+    OVHermesRuntime* runtime,
+    OVHermesValue* object_value,
+    const char* property_name
+);
+
+/**
  * Set a property on a value (if it's an object)
  */
 void hermes_value_set_property(
