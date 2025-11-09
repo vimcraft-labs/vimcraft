@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Table of Contents
 
 **Critical Workflows** (read these first):
+- [Unified Logging Architecture](#unified-logging-architecture-critical) - **READ THIS FIRST**: How to debug properly with our logging system
 - [LLM-Driven Debugging Workflow](#llm-driven-debugging-workflow-critical-study-case) - **MOST IMPORTANT**: Proven systematic approach for bug fixing
   - [Universal Debugging Principles](#universal-debugging-principles-lessons-from-cursorline-bug---2025-11-08) - 7 principles from cursorline bug fix
   - [Debugging Strategy Using Debug Protocol](#debugging-strategy-using-debug-protocol) - Enhanced protocol capabilities
@@ -294,6 +295,246 @@ $ cat result.json  # Claude parses this
 
 This debug system is **optimized for LLM cognition**, not human debugging. It provides the structured, deterministic feedback that LLMs need for efficient development iteration.
 
+## Unified Logging Architecture (CRITICAL!)
+
+**IMPORTANT**: OpenVim uses a unified logging system with a Core→Backend architecture. Understanding this architecture is critical for debugging and adding new features.
+
+### Architecture Overview
+
+```
+Core Logger (src/core/log.zig)
+     ↓ Ring Buffer (1000 entries)
+     ↓
+Backend Handlers (registered callbacks)
+     ├─→ Terminal Backend (--debug mode: Chrome DevTools Console)
+     ├─→ LLM Backend (--debug-protocol mode: get_logs command)
+     └─→ File Backend (optional: write to /tmp/openvim_debug.log)
+```
+
+**Key Principle**: **Single Source of Truth**
+- ALL logging goes through `editor.logger` (or `editor_ctx.logger` in headless mode)
+- NO direct stderr/stdout writes in core code
+- NO console.log in JavaScript (forwarded to logger instead)
+- Backends decide WHERE logs go (Chrome Console, JSON response, file, etc.)
+
+### Core Components
+
+**1. Core Logger** (`src/core/log.zig`)
+- Ring buffer with fixed capacity (1000 entries)
+- Thread-safe design (mutex-protected)
+- Structured log entries: `{message, level, timestamp_ms}`
+- Log levels: `debug`, `info`, `warning`, `err`
+- Callback registration for backends
+
+**2. Terminal Backend** (`--debug` mode)
+- Registers callback with `editor.logger.setCallback()`
+- Forwards logs to Chrome DevTools Console via CDP debugger
+- Maps `LogLevel` to `DebuggerLogLevel`
+- Location: `src/main.zig:716-757` (runEditorWithDebugger)
+
+**3. LLM Backend** (`--debug-protocol` mode)
+- Exposes logs via `get_logs` debug protocol command
+- Supports filtering by level, count, and size limits
+- Returns structured JSON with metadata
+- Size management to prevent token overflow in LLM context
+- Location: `src/debug/server.zig:get_logs` handler
+
+### Proper Way to Debug
+
+**DON'T** (Anti-patterns):
+```zig
+// ❌ WRONG: Direct stderr writes bypass logging system
+std.debug.print("Debug: cursor at {}\n", .{row});
+
+// ❌ WRONG: Unstructured output (hard for LLMs to parse)
+std.debug.print("Something happened\n", .{});
+
+// ❌ WRONG: Logs go nowhere in headless mode
+// (no callback registered, ring buffer fills silently)
+```
+
+**DO** (Correct patterns):
+```zig
+// ✅ CORRECT: Use editor.logger for all debugging
+editor.logger.debug("Cursor moved to row={} col={}", .{row, col});
+editor.logger.info("File loaded: {s} ({} lines)", .{path, line_count});
+editor.logger.warning("Invalid input: {}", .{key});
+editor.logger.err("Failed to save file: {}", .{err});
+
+// ✅ CORRECT: Structured, parseable, backend-agnostic
+editor.logger.info("LAYER[cursor]: dirty={} cells={}", .{dirty, count});
+
+// ✅ CORRECT: Transformation logging (before→after)
+editor.logger.debug("Blend: {u}+{u}→{u}", .{src.char, dst.char, result.char});
+```
+
+### Using Logs for Debugging
+
+**In Terminal Mode (--debug)**:
+```bash
+# Run with Chrome DevTools debugging
+./zig-out/bin/openvim --debug /tmp/test.txt
+
+# Logs appear in Chrome DevTools Console
+# Open DevTools → Console tab → See structured logs
+```
+
+**In Headless Mode (--debug-protocol)**:
+```bash
+# Start debug server
+./zig-out/bin/openvim --debug-protocol
+
+# Query logs via JSON protocol
+echo '{"cmd":"get_logs","args":{"level":"info","max_bytes":4096},"id":"1"}' | nc localhost 9999
+
+# Response (structured JSON):
+{
+  "status": "ok",
+  "result": {
+    "logs": [
+      {"message": "File loaded: test.txt (5 lines)", "level": "info", "timestamp_ms": 1699564823000},
+      {"message": "Cursor moved to row=2 col=5", "level": "debug", "timestamp_ms": 1699564823050}
+    ],
+    "count": 2,
+    "total_in_buffer": 15,
+    "truncated": false,
+    "bytes_used": 156
+  }
+}
+```
+
+### get_logs Command Parameters
+
+**Size Management** (Critical for LLM context):
+```json
+// Get all logs (limited by max_bytes)
+{"cmd": "get_logs", "args": {}}
+
+// Get recent 5 logs
+{"cmd": "get_logs", "args": {"count": 5}}
+
+// Get logs with LLM-friendly size limit (4KB recommended)
+{"cmd": "get_logs", "args": {"max_bytes": 4096}}
+
+// Get only error logs
+{"cmd": "get_logs", "args": {"level": "err"}}
+
+// Combined: info logs with 2KB limit
+{"cmd": "get_logs", "args": {"level": "info", "max_bytes": 2048}}
+```
+
+**Why max_bytes matters**: LLM backends have token limits. A full ring buffer (1000 entries × ~100 bytes avg) = ~100KB could consume 25,000 tokens! Use `max_bytes: 4096` (1K tokens) for most debugging.
+
+### Response Metadata
+
+```json
+{
+  "logs": [...],           // Actual log entries
+  "count": 15,             // Number of logs returned
+  "total_in_buffer": 100,  // Total logs available in ring buffer
+  "truncated": true,       // Whether response was size-limited
+  "bytes_used": 4050       // Actual bytes used (for monitoring)
+}
+```
+
+### Integration Points
+
+**Editor (Normal Mode)**:
+```zig
+// src/core/editor.zig
+pub const Editor = struct {
+    logger: Logger,  // Core logger instance
+    // ...
+};
+
+// Usage in editor code:
+self.logger.info("Buffer modified at line {}", .{line});
+```
+
+**EditorContext (Headless Mode)**:
+```zig
+// src/debug/editor_context.zig
+pub const EditorContext = struct {
+    logger: Logger,  // Same logger type as Editor
+    // ...
+};
+
+// Usage in headless code:
+self.logger.debug("Command received: {s}", .{cmd});
+```
+
+**JavaScript (Plugins)**:
+```javascript
+// console.log is intercepted and forwarded to logger
+console.log("Plugin initialized");
+// → Becomes: editor.logger.info("Plugin initialized")
+
+// Note: Currently disabled in headless mode due to type compatibility
+// Will be re-enabled in future update
+```
+
+### Performance Considerations
+
+**Ring Buffer Design**:
+- Fixed capacity (1000 entries) prevents unbounded memory growth
+- Oldest entries automatically overwritten (FIFO)
+- Lock-free reads for callbacks (snapshot design)
+- Minimal overhead (~100 bytes per entry)
+
+**When to Log**:
+- ✅ State transitions (mode changes, file loads)
+- ✅ User actions (key presses, commands)
+- ✅ Errors and warnings (always)
+- ✅ Performance-critical transformations (blending, diff)
+- ❌ Hot loops (every frame render) - too noisy
+- ❌ Trivial getters/setters - no value
+
+### Common Debugging Patterns
+
+**Pattern 1: Trace Data Flow**
+```zig
+// Track data through pipeline stages
+editor.logger.debug("INPUT: key={u} mode={s}", .{key, mode});
+// ... processing ...
+editor.logger.debug("OUTPUT: action={s} result={}", .{action, result});
+```
+
+**Pattern 2: Compare Before/After**
+```zig
+// Show transformations
+const before = cell.char;
+// ... transformation ...
+const after = cell.char;
+editor.logger.debug("TRANSFORM: {u}→{u}", .{before, after});
+```
+
+**Pattern 3: Conditional Debug**
+```zig
+// Only log unexpected cases
+if (result == null) {
+    editor.logger.warning("Unexpected null result for input={}", .{input});
+}
+```
+
+**Pattern 4: Structured Context**
+```zig
+// Use consistent prefixes for grep-ability
+editor.logger.debug("LAYER[cursor]: opacity={d} dirty={}", .{opacity, dirty});
+editor.logger.debug("COMPOSITOR: src={u} dst={u} result={u}", .{src, dst, result});
+editor.logger.debug("DIFF: changed_cells={} total_cells={}", .{changed, total});
+```
+
+### Critical Principle
+
+**"Log to Core, Output to Backend"**:
+- Core code logs to `editor.logger` (backend-agnostic)
+- Backends decide output destination (Console, JSON, file)
+- Same logs work in Terminal AND Headless mode
+- LLMs can query logs via structured JSON protocol
+- No code changes needed to switch between modes
+
+This architecture enables **LLM-driven debugging** by providing structured, queryable logs through the debug protocol, while also supporting traditional terminal debugging via Chrome DevTools.
+
 ## LLM-Driven Debugging Workflow (CRITICAL STUDY CASE!)
 
 **IMPORTANT**: This section documents proven debugging workflows from real bug fixes. Study these patterns to accelerate future debugging.
@@ -355,14 +596,16 @@ if (opacity >= 1.0 and src.char != 0 and src.char != ' ') return src;
 
 ```zig
 // Bad: Log final state only
-debug_log.log("Cell: char={u}", .{cell.char});
+editor.logger.debug("Cell: char={u}", .{cell.char});
 
 // Good: Log transformation (before → after)
-debug_log.log("Blend: {u}+{u}→{u}, bg={}+{}→{}", .{
+editor.logger.debug("Blend: {u}+{u}→{u}, bg={}+{}→{}", .{
     src.char, dst.char, result.char,
     src.bg, dst.bg, result.bg
 });
 ```
+
+**Note**: See [Unified Logging Architecture](#unified-logging-architecture-critical) for complete logging guidelines.
 
 **6. Verify Fix Assumptions with Targeted Tests**
 
