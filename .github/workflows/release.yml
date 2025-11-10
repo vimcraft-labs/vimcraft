@@ -80,8 +80,15 @@ jobs:
 
       - name: Build Hermes
         run: |
-          # Check if Hermes libraries exist
-          if [ ! -f "vendor/hermes/build/API/hermes/libhermes_lean.dylib" ] && [ ! -f "vendor/hermes/build/API/hermes/libhermes_lean.so" ]; then
+          # Check if Hermes libraries exist (platform-specific)
+          HERMES_BUILT=false
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            [ -f "vendor/hermes/build/API/hermes/libhermes_lean.dylib" ] && HERMES_BUILT=true
+          else
+            [ -f "vendor/hermes/build/API/hermes/libhermes_lean.so" ] && HERMES_BUILT=true
+          fi
+
+          if [ "$HERMES_BUILT" = false ]; then
             echo "Hermes libraries not found, building..."
             cd vendor/hermes
             mkdir -p build
@@ -97,8 +104,8 @@ jobs:
               -DHERMES_BUILD_SHARED_JSI=ON \
               -GNinja
 
-            # Build required libraries
-            ninja hermes hermesc jsi
+            # Build required libraries (libhermes_lean is the shared library target)
+            ninja libhermes_lean hermesc jsi
 
             echo "✓ Hermes built successfully"
           else
@@ -121,7 +128,12 @@ jobs:
       - name: Build libuv
         run: |
           # Check if libuv library exists
-          if [ ! -f "vendor/libuv/build/libuv.a" ] && [ ! -f "vendor/libuv/build/libuv.dylib" ] && [ ! -f "vendor/libuv/build/libuv.so" ]; then
+          LIBUV_BUILT=false
+          if [ -f "vendor/libuv/build/libuv.a" ] || [ -f "vendor/libuv/build/libuv_a.a" ]; then
+            LIBUV_BUILT=true
+          fi
+
+          if [ "$LIBUV_BUILT" = false ]; then
             echo "libuv library not found, building..."
             cd vendor/libuv
             mkdir -p build
