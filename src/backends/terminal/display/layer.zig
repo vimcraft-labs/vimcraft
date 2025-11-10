@@ -411,7 +411,7 @@ pub const LayerManager = struct {
             z_index == ZIndex.MODAL;
     }
 
-    /// Check if layer name is a core layer
+    /// Check if layer name is a core layer (static strings that shouldn't be freed)
     fn isCoreLayerName(name: []const u8) bool {
         return std.mem.eql(u8, name, "buffer") or
             std.mem.eql(u8, name, "gutter") or
@@ -426,7 +426,7 @@ pub const LayerManager = struct {
 test "Layer creation and properties" {
     const allocator = std.testing.allocator;
 
-    var layer = try Layer.init(allocator, 0, ZIndex.BASE, 24, 80, "test");
+    var layer = try Layer.init(allocator, 0, ZIndex.BASE, 24, 80, "buffer");
     defer layer.deinit();
 
     try std.testing.expectEqual(@as(LayerId, 0), layer.id);
@@ -442,9 +442,9 @@ test "LayerManager z-index ordering" {
     var manager = LayerManager.init(allocator);
     defer manager.deinit();
 
-    // Create layers in random z-index order
+    // Create layers in random z-index order (use core names matching z-indexes)
     const layer1 = try manager.createLayer(ZIndex.VIRTUAL_TEXT, 24, 80, "virtual_text");
-    const layer2 = try manager.createLayer(ZIndex.BASE, 24, 80, "base");
+    const layer2 = try manager.createLayer(ZIndex.BASE, 24, 80, "buffer"); // BASE → buffer
     const layer3 = try manager.createLayer(ZIndex.CURSOR, 24, 80, "cursor");
 
     // Verify they're sorted by z-index
@@ -459,8 +459,8 @@ test "LayerManager dirty tracking" {
     var manager = LayerManager.init(allocator);
     defer manager.deinit();
 
-    const layer1 = try manager.createLayer(ZIndex.BASE, 24, 80, "layer1");
-    const layer2 = try manager.createLayer(ZIndex.CURSOR, 24, 80, "layer2");
+    const layer1 = try manager.createLayer(ZIndex.BASE, 24, 80, "buffer");
+    const layer2 = try manager.createLayer(ZIndex.CURSOR, 24, 80, "cursor");
 
     // Mark layer1 as clean
     layer1.markClean();
@@ -481,7 +481,7 @@ test "LayerManager update z-index" {
     var manager = LayerManager.init(allocator);
     defer manager.deinit();
 
-    const layer = try manager.createLayer(ZIndex.BASE, 24, 80, "test");
+    const layer = try manager.createLayer(ZIndex.BASE, 24, 80, "buffer");
     const id = layer.id;
 
     // Update z-index

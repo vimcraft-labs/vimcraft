@@ -67,7 +67,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build build-essential \
-            libicu-dev python3 git curl zip unzip
+            libicu-dev python3 git curl zip unzip libssl-dev
 
       - name: Cache Hermes build
         id: cache-hermes

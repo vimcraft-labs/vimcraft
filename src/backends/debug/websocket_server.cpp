@@ -21,7 +21,12 @@
 #include <sstream>
 
 // For SHA1 hashing (WebSocket handshake)
+#ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
+#define SHA1_DIGEST_LENGTH CC_SHA1_DIGEST_LENGTH
+#else
+#include <openssl/sha.h>
+#endif
 
 // For base64 encoding
 static const char base64_chars[] =
@@ -121,10 +126,14 @@ static bool websocket_perform_handshake(int client_fd) {
     const char* magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     std::string accept_input = client_key + magic_string;
 
-    unsigned char hash[CC_SHA1_DIGEST_LENGTH];
+    unsigned char hash[SHA1_DIGEST_LENGTH];
+#ifdef __APPLE__
     CC_SHA1(accept_input.c_str(), accept_input.length(), hash);
+#else
+    SHA1(reinterpret_cast<const unsigned char*>(accept_input.c_str()), accept_input.length(), hash);
+#endif
 
-    std::string accept_key = base64_encode(hash, CC_SHA1_DIGEST_LENGTH);
+    std::string accept_key = base64_encode(hash, SHA1_DIGEST_LENGTH);
 
     // Send handshake response
     std::ostringstream response;

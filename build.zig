@@ -63,6 +63,54 @@ pub fn build(b: *std.Build) void {
     // Generate unicode property tables at build time using Ghostty's table generator
     // This provides grapheme cluster boundary detection (emoji, ZWJ, modifiers, etc.)
     const unicode_tables = blk: {
+        // Build tools need a native version of uucode
+        const uucode_native = b.dependency("uucode", .{
+            .target = b.graph.host,
+            .optimize = .ReleaseFast,
+            .@"build_config.zig" =
+                \\const config = @import("config.zig");
+                \\const config_x = @import("config.x.zig");
+                \\const d = config.default;
+                \\const wcwidth = config_x.wcwidth;
+                \\
+                \\fn computeWidth(
+                \\    alloc: @import("std").mem.Allocator,
+                \\    cp: u21,
+                \\    data: anytype,
+                \\    backing: anytype,
+                \\    tracking: anytype,
+                \\) @import("std").mem.Allocator.Error!void {
+                \\    _ = alloc;
+                \\    _ = cp;
+                \\    _ = backing;
+                \\    _ = tracking;
+                \\    data.width = @intCast(@min(2, @max(0, data.wcwidth)));
+                \\}
+                \\
+                \\const width = config.Extension{
+                \\    .inputs = &.{"wcwidth"},
+                \\    .compute = &computeWidth,
+                \\    .fields = &.{
+                \\        .{ .name = "width", .type = u2 },
+                \\    },
+                \\};
+                \\
+                \\pub const tables = [_]config.Table{
+                \\    .{
+                \\        .extensions = &.{ wcwidth, width },
+                \\        .fields = &.{
+                \\            width.field("width"),
+                \\            d.field("grapheme_break"),
+                \\            d.field("is_emoji"),
+                \\            d.field("is_emoji_presentation"),
+                \\            d.field("is_emoji_modifier"),
+                \\            d.field("is_emoji_modifier_base"),
+                \\        },
+                \\    },
+                \\};
+            ,
+        });
+
         // Create executable to generate unicode property tables
         const props_exe = b.addExecutable(.{
             .name = "props-unigen",
@@ -72,8 +120,8 @@ pub fn build(b: *std.Build) void {
             }),
         });
 
-        // Add uucode dependency to the generator
-        props_exe.root_module.addImport("uucode", uucode_module);
+        // Add native uucode dependency to the generator
+        props_exe.root_module.addImport("uucode", uucode_native.module("uucode"));
 
         // Add lut.zig and Properties.zig from Ghostty
         props_exe.root_module.addAnonymousImport("lut.zig", .{
@@ -236,6 +284,15 @@ pub fn build(b: *std.Build) void {
     exe.addLibraryPath(b.path("vendor/libuv/build"));
     exe.linkSystemLibrary("uv");
 
+    // ============================================================================
+    // OpenSSL (Linux only - for WebSocket SHA1 hashing)
+    // ============================================================================
+    // macOS uses CommonCrypto, Linux uses OpenSSL
+    if (target.result.os.tag == .linux) {
+        exe.linkSystemLibrary("ssl");
+        exe.linkSystemLibrary("crypto");
+    }
+
     b.installArtifact(exe);
 
     // ============================================================================
@@ -348,6 +405,12 @@ pub fn build(b: *std.Build) void {
     bench.addLibraryPath(b.path("vendor/libuv/build"));
     bench.linkSystemLibrary("uv");
 
+    // OpenSSL for Linux (WebSocket SHA1 hashing)
+    if (target.result.os.tag == .linux) {
+        bench.linkSystemLibrary("ssl");
+        bench.linkSystemLibrary("crypto");
+    }
+
     b.installArtifact(bench);
 
     const run_bench = b.addRunArtifact(bench);
@@ -448,6 +511,12 @@ pub fn build(b: *std.Build) void {
     unit_tests.addLibraryPath(b.path("vendor/hermes/build/jsi"));
     unit_tests.linkSystemLibrary("hermes_lean");
     unit_tests.linkSystemLibrary("jsi");
+
+    // OpenSSL for Linux (WebSocket SHA1 hashing)
+    if (target.result.os.tag == .linux) {
+        unit_tests.linkSystemLibrary("ssl");
+        unit_tests.linkSystemLibrary("crypto");
+    }
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
