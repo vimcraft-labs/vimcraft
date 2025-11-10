@@ -104,8 +104,8 @@ jobs:
               -DHERMES_BUILD_SHARED_JSI=ON \
               -GNinja
 
-            # Build required libraries (libhermes_lean is the shared library target)
-            ninja libhermes_lean hermesc jsi
+            # Build required libraries (hermesvmlean builds libhermes_lean.so/.dylib)
+            ninja hermesvmlean hermesc jsi
 
             echo "✓ Hermes built successfully"
           else

@@ -72,7 +72,7 @@ jobs:
               -DHERMES_ENABLE_TEST_SUITE=OFF \
               -DHERMES_BUILD_SHARED_JSI=ON \
               -GNinja
-            ninja libhermes_lean hermesc jsi
+            ninja hermesvmlean hermesc jsi
           else
             echo "✓ Hermes found in cache"
           fi
@@ -197,7 +197,7 @@ jobs:
               -DHERMES_ENABLE_INTL=OFF \
               -DHERMES_BUILD_SHARED_JSI=ON \
               -GNinja
-            ninja libhermes_lean hermesc jsi
+            ninja hermesvmlean hermesc jsi
           else
             echo "✓ Hermes found in cache"
           fi
