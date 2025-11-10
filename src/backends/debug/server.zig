@@ -59,8 +59,7 @@ pub const Server = struct {
 
     /// Run server using stdin/stdout with event loop integration
     fn runStdio(self: *Server) !void {
-        const event_loop = @import("../../system/event_loop/libuv.zig");
-        const jsi_api = @import("../../system/jsi/jsi_api.zig");
+        const EventLoopProcessor = @import("../../system/event_loop/processor.zig").EventLoopProcessor;
 
         // Import fcntl.h for O_NONBLOCK constant
         const c = @cImport({
@@ -78,15 +77,11 @@ pub const Server = struct {
         const flags = try std.posix.fcntl(stdin_fd, std.posix.F.GETFL, 0);
         _ = try std.posix.fcntl(stdin_fd, std.posix.F.SETFL, flags | c.O_NONBLOCK);
 
+        var event_processor = EventLoopProcessor.init(self.allocator);
+
         while (self.running) {
-            // Run event loop (non-blocking)
-            _ = event_loop.runOnce();
-
-            // Process timer queue (React Native pattern: call JS from main thread)
-            jsi_api.processTimerQueue(self.allocator);
-
-            // Process animation frame callbacks (React Native Reanimated pattern)
-            _ = jsi_api.processAnimationFrames(self.allocator);
+            // Process event loop: libuv + timers + animation frames
+            _ = event_processor.tick();
 
             // Check if stdin has data available (non-blocking poll)
             var poll_fds = [_]std.posix.pollfd{

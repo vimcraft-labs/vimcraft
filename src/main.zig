@@ -11,6 +11,7 @@ const ConfigPaths = @import("editor/config/loader.zig").ConfigPaths;
 const ConfigWatcher = @import("editor/config/watcher.zig").ConfigWatcher;
 const jsi_api = @import("system/jsi/jsi_api.zig");
 const event_loop = @import("system/event_loop/libuv.zig");
+const EventLoopProcessor = @import("system/event_loop/processor.zig").EventLoopProcessor;
 const debug_protocol = @import("debug.zig");
 const VisualState = @import("backends/terminal/visual/visual.zig").VisualState;
 const VisualMode = @import("backends/terminal/visual/visual.zig").VisualMode;
@@ -601,21 +602,13 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var running = true;
     var needs_render = false;
     var render_stats = RenderStats.init();
+    var event_processor = EventLoopProcessor.init(allocator);
 
     while (running) {
         render_stats.loop_iterations += 1;
 
-        // Run libuv event loop (timers, watchers)
-        _ = event_loop.runOnce();
-
-        // Process timer queue (React Native pattern: call JS from main thread)
-        // This must be AFTER libuv but BEFORE any rendering
-        jsi_api.processTimerQueue(allocator);
-
-        // Process animation frame callbacks (React Native Reanimated pattern)
-        // Runs animation callbacks synchronized with render loop for smooth 60fps
-        // If callbacks were processed, layers may have changed, so trigger render
-        if (jsi_api.processAnimationFrames(allocator)) {
+        // Process event loop: libuv + timers + animation frames
+        if (event_processor.tick()) {
             needs_render = true;
         }
 
@@ -935,20 +928,13 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     var running = true;
     var needs_render = false;
     var render_stats = RenderStats.init();
+    var event_processor = EventLoopProcessor.init(allocator);
 
     while (running) {
         render_stats.loop_iterations += 1;
 
-        // Run libuv event loop
-        _ = event_loop.runOnce();
-
-        // Process timer queue (React Native pattern: call JS from main thread)
-        jsi_api.processTimerQueue(allocator);
-
-        // Process animation frame callbacks (React Native Reanimated pattern)
-        // Runs animation callbacks synchronized with render loop for smooth 60fps
-        // If callbacks were processed, layers may have changed, so trigger render
-        if (jsi_api.processAnimationFrames(allocator)) {
+        // Process event loop: libuv + timers + animation frames
+        if (event_processor.tick()) {
             needs_render = true;
         }
 
