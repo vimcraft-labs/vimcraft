@@ -4,9 +4,10 @@ const std = @import("std");
 pub const Cursor = struct {
     row: usize = 0, // 0-indexed line number
     col: usize = 0, // 0-indexed column number (byte offset, not character)
+    goal_column: ?usize = null, // Target column for vertical movements (sticky column)
 
     pub fn init() Cursor {
-        return .{ .row = 0, .col = 0 };
+        return .{ .row = 0, .col = 0, .goal_column = null };
     }
 };
 

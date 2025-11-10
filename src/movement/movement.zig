@@ -10,6 +10,7 @@ pub fn moveLeft(buffer: *Buffer) void {
     if (buffer.cursor.col > 0) {
         const line = buffer.getLine(buffer.cursor.row) orelse {
             buffer.cursor.col -= 1;
+            buffer.cursor.goal_column = buffer.cursor.col;
             return;
         };
 
@@ -50,6 +51,7 @@ pub fn moveLeft(buffer: *Buffer) void {
         }
 
         buffer.cursor.col = cluster_start;
+        buffer.cursor.goal_column = buffer.cursor.col;
     }
 }
 
@@ -88,17 +90,34 @@ pub fn moveRight(buffer: *Buffer) void {
         }
 
         buffer.cursor.col = @min(pos, line_len - 1);
+        buffer.cursor.goal_column = buffer.cursor.col;
     }
 }
 
 /// Move up (k)
 pub fn moveUp(buffer: *Buffer) void {
     if (buffer.cursor.row > 0) {
+        // Set goal column to current column if not already set
+        if (buffer.cursor.goal_column == null) {
+            buffer.cursor.goal_column = buffer.cursor.col;
+        }
+
         buffer.cursor.row -= 1;
-        // Clamp column to new line length
+
+        // Try to restore goal column, but clamp to line length
+        const goal = buffer.cursor.goal_column.?;
         const line_len = buffer.getLineLength(buffer.cursor.row);
-        if (line_len > 0 and buffer.cursor.col >= line_len) {
-            buffer.cursor.col = line_len - 1;
+        const visual_len = if (line_len > 0) line_len - 1 else 0; // Exclude newline
+
+        if (visual_len == 0) {
+            // Empty line
+            buffer.cursor.col = 0;
+        } else if (goal < visual_len) {
+            // Can restore goal column
+            buffer.cursor.col = goal;
+        } else {
+            // Line is shorter, move to end but keep goal column
+            buffer.cursor.col = visual_len;
         }
     }
 }
@@ -106,11 +125,27 @@ pub fn moveUp(buffer: *Buffer) void {
 /// Move down (j)
 pub fn moveDown(buffer: *Buffer) void {
     if (buffer.cursor.row + 1 < buffer.lineCount()) {
+        // Set goal column to current column if not already set
+        if (buffer.cursor.goal_column == null) {
+            buffer.cursor.goal_column = buffer.cursor.col;
+        }
+
         buffer.cursor.row += 1;
-        // Clamp column to new line length
+
+        // Try to restore goal column, but clamp to line length
+        const goal = buffer.cursor.goal_column.?;
         const line_len = buffer.getLineLength(buffer.cursor.row);
-        if (line_len > 0 and buffer.cursor.col >= line_len) {
-            buffer.cursor.col = line_len - 1;
+        const visual_len = if (line_len > 0) line_len - 1 else 0; // Exclude newline
+
+        if (visual_len == 0) {
+            // Empty line
+            buffer.cursor.col = 0;
+        } else if (goal < visual_len) {
+            // Can restore goal column
+            buffer.cursor.col = goal;
+        } else {
+            // Line is shorter, move to end but keep goal column
+            buffer.cursor.col = visual_len;
         }
     }
 }
@@ -118,12 +153,14 @@ pub fn moveDown(buffer: *Buffer) void {
 /// Move to start of line (0)
 pub fn moveToLineStart(buffer: *Buffer) void {
     buffer.cursor.col = 0;
+    buffer.cursor.goal_column = buffer.cursor.col;
 }
 
 /// Move to end of line ($)
 pub fn moveToLineEnd(buffer: *Buffer) void {
     const line = buffer.getLine(buffer.cursor.row) orelse {
         buffer.cursor.col = 0;
+        buffer.cursor.goal_column = buffer.cursor.col;
         return;
     };
 
@@ -138,6 +175,7 @@ pub fn moveToLineEnd(buffer: *Buffer) void {
     } else {
         buffer.cursor.col = 0;
     }
+    buffer.cursor.goal_column = buffer.cursor.col;
 }
 
 /// Move to first non-blank character of line (^)
@@ -147,25 +185,28 @@ pub fn moveToFirstNonBlank(buffer: *Buffer) void {
     for (line, 0..) |char, i| {
         if (char != ' ' and char != '\t') {
             buffer.cursor.col = i;
+            buffer.cursor.goal_column = buffer.cursor.col;
             return;
         }
     }
 
     // Line is all whitespace, move to start
     buffer.cursor.col = 0;
+    buffer.cursor.goal_column = buffer.cursor.col;
 }
 
 /// Move to top of file (gg)
 pub fn moveToFileStart(buffer: *Buffer) void {
     buffer.cursor.row = 0;
     buffer.cursor.col = 0;
+    buffer.cursor.goal_column = buffer.cursor.col;
 }
 
 /// Move to bottom of file (G)
 pub fn moveToFileEnd(buffer: *Buffer) void {
     if (buffer.lineCount() > 0) {
         buffer.cursor.row = buffer.lineCount() - 1;
-        moveToLineEnd(buffer);
+        moveToLineEnd(buffer); // This already sets goal_column
     }
 }
 
@@ -198,12 +239,14 @@ pub fn moveWordForward(buffer: *Buffer) void {
         if (buffer.cursor.row + 1 < buffer.lineCount()) {
             buffer.cursor.row += 1;
             buffer.cursor.col = 0;
-            moveToFirstNonBlank(buffer);
+            moveToFirstNonBlank(buffer); // This already sets goal_column
         } else {
             buffer.cursor.col = if (line.len > 0) line.len - 1 else 0;
+            buffer.cursor.goal_column = buffer.cursor.col;
         }
     } else {
         buffer.cursor.col = col;
+        buffer.cursor.goal_column = buffer.cursor.col;
     }
 }
 
@@ -215,7 +258,7 @@ pub fn moveWordBackward(buffer: *Buffer) void {
         // Move to previous line
         if (buffer.cursor.row > 0) {
             buffer.cursor.row -= 1;
-            moveToLineEnd(buffer);
+            moveToLineEnd(buffer); // This already sets goal_column
         }
         return;
     }
@@ -241,6 +284,7 @@ pub fn moveWordBackward(buffer: *Buffer) void {
     }
 
     buffer.cursor.col = col;
+    buffer.cursor.goal_column = buffer.cursor.col;
 }
 
 /// Move to word end (e)
@@ -274,30 +318,55 @@ pub fn moveWordEnd(buffer: *Buffer) void {
     }
 
     buffer.cursor.col = col;
+    buffer.cursor.goal_column = buffer.cursor.col;
 }
 
 /// Scroll half page down (Ctrl+D)
 pub fn scrollHalfPageDown(buffer: *Buffer, viewport_height: usize) void {
+    // Set goal column to current column if not already set
+    if (buffer.cursor.goal_column == null) {
+        buffer.cursor.goal_column = buffer.cursor.col;
+    }
+
     const half = viewport_height / 2;
     const new_row = @min(buffer.cursor.row + half, buffer.lineCount() -| 1);
     buffer.cursor.row = new_row;
 
-    // Clamp column
+    // Try to restore goal column, but clamp to line length
+    const goal = buffer.cursor.goal_column.?;
     const line_len = buffer.getLineLength(buffer.cursor.row);
-    if (line_len > 0 and buffer.cursor.col >= line_len) {
-        buffer.cursor.col = line_len - 1;
+    const visual_len = if (line_len > 0) line_len - 1 else 0; // Exclude newline
+
+    if (visual_len == 0) {
+        buffer.cursor.col = 0;
+    } else if (goal < visual_len) {
+        buffer.cursor.col = goal;
+    } else {
+        buffer.cursor.col = visual_len;
     }
 }
 
 /// Scroll half page up (Ctrl+U)
 pub fn scrollHalfPageUp(buffer: *Buffer, viewport_height: usize) void {
+    // Set goal column to current column if not already set
+    if (buffer.cursor.goal_column == null) {
+        buffer.cursor.goal_column = buffer.cursor.col;
+    }
+
     const half = viewport_height / 2;
     buffer.cursor.row -|= half;
 
-    // Clamp column
+    // Try to restore goal column, but clamp to line length
+    const goal = buffer.cursor.goal_column.?;
     const line_len = buffer.getLineLength(buffer.cursor.row);
-    if (line_len > 0 and buffer.cursor.col >= line_len) {
-        buffer.cursor.col = line_len - 1;
+    const visual_len = if (line_len > 0) line_len - 1 else 0; // Exclude newline
+
+    if (visual_len == 0) {
+        buffer.cursor.col = 0;
+    } else if (goal < visual_len) {
+        buffer.cursor.col = goal;
+    } else {
+        buffer.cursor.col = visual_len;
     }
 }
 
