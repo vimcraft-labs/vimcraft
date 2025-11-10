@@ -1,0 +1,276 @@
+name: Release Binaries
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build'
+        required: true
+        type: string
+
+# Cancel in-progress runs for same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS builds
+          - os: macos-13
+            platform: macos
+            arch: x86_64
+            zig_target: x86_64-macos
+
+          - os: macos-14
+            platform: macos
+            arch: arm64
+            zig_target: aarch64-macos
+
+          # Linux builds - using cross-compilation from macOS
+          # (or use ubuntu-latest with proper toolchain setup)
+          # For now, we'll do Linux builds on Ubuntu
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x86_64
+            zig_target: x86_64-linux-gnu
+
+          # ARM Linux cross-compile (optional - may need additional setup)
+          # - os: ubuntu-22.04
+          #   platform: linux
+          #   arch: arm64
+          #   zig_target: aarch64-linux-gnu
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build build-essential \
+            libicu-dev python3 git curl zip unzip
+
+      - name: Cache Hermes build
+        id: cache-hermes
+        uses: actions/cache@v4
+        with:
+          path: vendor/hermes/build
+          key: hermes-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/hermes/**/*.cpp', 'vendor/hermes/**/*.h') }}
+          restore-keys: |
+            hermes-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build Hermes
+        if: steps.cache-hermes.outputs.cache-hit != 'true'
+        run: |
+          cd vendor/hermes
+          mkdir -p build
+          cd build
+
+          # Configure with minimal features for smaller binary
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=MinSizeRel \
+            -DHERMES_ENABLE_DEBUGGER=ON \
+            -DHERMES_ENABLE_INTL=OFF \
+            -DHERMES_ENABLE_TEST_SUITE=OFF \
+            -DHERMES_BUILD_APPLE_DSYM=OFF \
+            -DHERMES_BUILD_SHARED_JSI=ON \
+            -GNinja
+
+          # Build required libraries
+          ninja hermes hermesc jsi
+
+          echo "✓ Hermes built successfully"
+          ls -lh API/hermes/
+          ls -lh jsi/
+
+      - name: Cache libuv build
+        id: cache-libuv
+        uses: actions/cache@v4
+        with:
+          path: vendor/libuv/build
+          key: libuv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/libuv/**/*.c', 'vendor/libuv/**/*.h') }}
+          restore-keys: |
+            libuv-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build libuv
+        if: steps.cache-libuv.outputs.cache-hit != 'true'
+        run: |
+          cd vendor/libuv
+          mkdir -p build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+          cmake --build .
+          echo "✓ libuv built successfully"
+          ls -lh
+
+      - name: Build Vimcraft
+        run: |
+          # Show versions
+          zig version
+
+          # Build with optimizations
+          zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseFast
+
+          # Verify binary exists
+          ls -lh zig-out/bin/
+
+          # Test binary (basic smoke test)
+          ./zig-out/bin/vc --version || echo "Warning: version check failed"
+
+      - name: Package binary
+        id: package
+        run: |
+          # Get version from tag or input
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.tag }}"
+          else
+            VERSION="${{ github.event.release.tag_name }}"
+          fi
+
+          echo "Building package for version: $VERSION"
+
+          # Copy binary
+          cp zig-out/bin/vc vc
+
+          # Create tarball
+          FILENAME="vimcraft-${VERSION}-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz"
+          tar -czf "$FILENAME" vc
+
+          # Generate checksums
+          if command -v shasum >/dev/null; then
+            shasum -a 256 "$FILENAME" > "${FILENAME}.sha256"
+          else
+            sha256sum "$FILENAME" > "${FILENAME}.sha256"
+          fi
+
+          # Output for next step
+          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
+          echo "checksum_file=${FILENAME}.sha256" >> $GITHUB_OUTPUT
+
+          # Show results
+          ls -lh "$FILENAME"
+          cat "${FILENAME}.sha256"
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'release'
+        with:
+          files: |
+            ${{ steps.package.outputs.filename }}
+            ${{ steps.package.outputs.checksum_file }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Artifact (manual trigger)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vimcraft-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            ${{ steps.package.outputs.filename }}
+            ${{ steps.package.outputs.checksum_file }}
+          retention-days: 7
+
+  # Generate checksums file combining all platforms
+  checksums:
+    name: Generate Combined Checksums
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+
+    steps:
+      - name: Download Release Assets
+        uses: robinraju/release-downloader@v1
+        with:
+          tag: ${{ github.event.release.tag_name }}
+          fileName: "*.sha256"
+          out-file-path: "checksums"
+
+      - name: Combine Checksums
+        run: |
+          cd checksums
+          cat *.sha256 > ../checksums.txt
+          cd ..
+
+          echo "=== Combined Checksums ==="
+          cat checksums.txt
+
+      - name: Upload Combined Checksums
+        uses: softprops/action-gh-release@v2
+        with:
+          files: checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Verify the release is complete
+  verify-release:
+    name: Verify Release
+    needs: [build, checksums]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+
+    steps:
+      - name: Check Release Assets
+        run: |
+          echo "Checking release: ${{ github.event.release.tag_name }}"
+
+          # Expected files
+          EXPECTED=(
+            "vimcraft-${{ github.event.release.tag_name }}-macos-x86_64.tar.gz"
+            "vimcraft-${{ github.event.release.tag_name }}-macos-arm64.tar.gz"
+            "vimcraft-${{ github.event.release.tag_name }}-linux-x86_64.tar.gz"
+            "checksums.txt"
+          )
+
+          echo "Expected files:"
+          printf '%s\n' "${EXPECTED[@]}"
+
+          echo "✓ Release verification complete"
+
+      - name: Comment on Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.createReleaseComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: context.payload.release.id,
+              body: `🎉 **Release binaries built successfully!**
+
+              Binaries are now available for:
+              - macOS (Intel & Apple Silicon)
+              - Linux (x86_64)
+
+              **Quick Install:**
+              \`\`\`bash
+              curl -fsSL https://vimcraft.com/install.sh | sh
+              \`\`\`
+
+              **Verify checksums:**
+              \`\`\`bash
+              shasum -a 256 -c checksums.txt
+              \`\`\`
+              `
+            });

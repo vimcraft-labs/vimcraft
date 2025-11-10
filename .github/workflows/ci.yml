@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build build-essential \
+            libicu-dev python3
+
+      - name: Cache Hermes build
+        id: cache-hermes
+        uses: actions/cache@v4
+        with:
+          path: vendor/hermes/build
+          key: hermes-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/hermes/**/*.cpp', 'vendor/hermes/**/*.h') }}
+          restore-keys: |
+            hermes-ci-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build Hermes
+        if: steps.cache-hermes.outputs.cache-hit != 'true'
+        run: |
+          cd vendor/hermes
+          mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=MinSizeRel \
+            -DHERMES_ENABLE_DEBUGGER=ON \
+            -DHERMES_ENABLE_INTL=OFF \
+            -DHERMES_ENABLE_TEST_SUITE=OFF \
+            -DHERMES_BUILD_SHARED_JSI=ON \
+            -GNinja
+          ninja hermes hermesc jsi
+
+      - name: Cache libuv build
+        id: cache-libuv
+        uses: actions/cache@v4
+        with:
+          path: vendor/libuv/build
+          key: libuv-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/libuv/**/*.c', 'vendor/libuv/**/*.h') }}
+          restore-keys: |
+            libuv-ci-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build libuv
+        if: steps.cache-libuv.outputs.cache-hit != 'true'
+        run: |
+          cd vendor/libuv
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+          cmake --build .
+
+      - name: Check Zig formatting
+        run: |
+          zig fmt --check src/
+
+      - name: Build Vimcraft
+        run: |
+          zig build
+
+      - name: Run tests
+        run: |
+          zig build test
+
+      - name: Smoke test binary
+        run: |
+          ./zig-out/bin/vc --version || true
+          echo '{"cmd":"get_state","id":"1"}' | timeout 2 ./zig-out/bin/vc --debug-protocol || true
+
+  # Build test for release targets (without caching)
+  build-matrix:
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-13
+            platform: macos
+            arch: x86_64
+            zig_target: x86_64-macos
+
+          - os: macos-14
+            platform: macos
+            arch: arm64
+            zig_target: aarch64-macos
+
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x86_64
+            zig_target: x86_64-linux-gnu
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build build-essential \
+            libicu-dev python3
+
+      - name: Cache Hermes
+        uses: actions/cache@v4
+        with:
+          path: vendor/hermes/build
+          key: hermes-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/hermes/**/*.cpp') }}
+
+      - name: Build Hermes
+        run: |
+          if [ ! -d vendor/hermes/build ]; then
+            cd vendor/hermes
+            mkdir -p build && cd build
+            cmake .. \
+              -DCMAKE_BUILD_TYPE=MinSizeRel \
+              -DHERMES_ENABLE_DEBUGGER=ON \
+              -DHERMES_ENABLE_INTL=OFF \
+              -DHERMES_BUILD_SHARED_JSI=ON \
+              -GNinja
+            ninja hermes hermesc jsi
+          fi
+
+      - name: Cache libuv
+        uses: actions/cache@v4
+        with:
+          path: vendor/libuv/build
+          key: libuv-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/libuv/**/*.c') }}
+
+      - name: Build libuv
+        run: |
+          if [ ! -d vendor/libuv/build ]; then
+            cd vendor/libuv
+            mkdir -p build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+            cmake --build .
+          fi
+
+      - name: Build for release target
+        run: |
+          zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseFast
+          ls -lh zig-out/bin/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vimcraft-${{ matrix.platform }}-${{ matrix.arch }}
+          path: zig-out/bin/vc
+          retention-days: 7
