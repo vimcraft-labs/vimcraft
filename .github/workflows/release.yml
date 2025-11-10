@@ -55,7 +55,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v1
         with:
-          version: 0.13.0
+          version: 0.15.2
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
