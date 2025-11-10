@@ -4,6 +4,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Option to use static Hermes linking (for release builds)
+    const use_static_hermes = b.option(bool, "static-hermes", "Link Hermes statically for portable binaries") orelse false;
+
     // ============================================================================
     // Unicode Support: Ghostty's uucode library + grapheme module
     // ============================================================================
@@ -117,6 +120,7 @@ pub fn build(b: *std.Build) void {
             .root_module = b.createModule(.{
                 .root_source_file = b.path("vendor/ghostty/src/unicode/props_uucode.zig"),
                 .target = b.graph.host,
+                .optimize = .ReleaseFast, // Match uucode_native optimization
             }),
         });
 
@@ -269,13 +273,18 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    // Link Hermes dynamic library (includes CDP debugger support)
-    // The libhermes_lean.dylib contains all Hermes runtime + CDP API
-    // Note: addLibraryPath automatically sets rpath for dynamic library loading
-    exe.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
-    exe.addLibraryPath(b.path("vendor/hermes/build/jsi"));
-    exe.linkSystemLibrary("hermes_lean");
-    exe.linkSystemLibrary("jsi");
+    // Link Hermes (conditional: static for releases, dynamic for local dev)
+    if (use_static_hermes) {
+        // Static linking for portable release binaries (no dylib dependencies)
+        exe.addObjectFile(b.path("vendor/hermes/build/lib/libhermesVMRuntime.a"));
+        exe.addObjectFile(b.path("vendor/hermes/build/jsi/libjsi.a"));
+    } else {
+        // Dynamic linking for local development
+        exe.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
+        exe.addLibraryPath(b.path("vendor/hermes/build/jsi"));
+        exe.linkSystemLibrary("hermes_lean");
+        exe.linkSystemLibrary("jsi");
+    }
 
     // ============================================================================
     // libuv (Event Loop & Async I/O)
@@ -288,7 +297,19 @@ pub fn build(b: *std.Build) void {
     // OpenSSL (Linux only - for WebSocket SHA1 hashing)
     // ============================================================================
     // macOS uses CommonCrypto, Linux uses OpenSSL
-    if (target.result.os.tag == .linux) {
+    // Note: Only link for native builds; cross-compilation requires target sysroot
+    const is_native_linux = target.result.os.tag == .linux and
+        target.result.cpu.arch == b.graph.host.result.cpu.arch;
+
+    if (is_native_linux) {
+        // Add system library path for OpenSSL (required when using addLibraryPath)
+        // Ubuntu/Debian: /usr/lib/x86_64-linux-gnu or /usr/lib/aarch64-linux-gnu
+        const lib_dir = switch (target.result.cpu.arch) {
+            .x86_64 => "/usr/lib/x86_64-linux-gnu",
+            .aarch64 => "/usr/lib/aarch64-linux-gnu",
+            else => "/usr/lib",
+        };
+        exe.addLibraryPath(.{ .cwd_relative = lib_dir });
         exe.linkSystemLibrary("ssl");
         exe.linkSystemLibrary("crypto");
     }
@@ -395,18 +416,29 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    // Link Hermes and libuv
-    bench.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
-    bench.addLibraryPath(b.path("vendor/hermes/build/jsi"));
-    bench.linkSystemLibrary("hermes_lean");
-    bench.linkSystemLibrary("jsi");
+    // Link Hermes (conditional: static for releases, dynamic for local dev)
+    if (use_static_hermes) {
+        bench.addObjectFile(b.path("vendor/hermes/build/lib/libhermesVMRuntime.a"));
+        bench.addObjectFile(b.path("vendor/hermes/build/jsi/libjsi.a"));
+    } else {
+        bench.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
+        bench.addLibraryPath(b.path("vendor/hermes/build/jsi"));
+        bench.linkSystemLibrary("hermes_lean");
+        bench.linkSystemLibrary("jsi");
+    }
 
     bench.addIncludePath(b.path("vendor/libuv/include"));
     bench.addLibraryPath(b.path("vendor/libuv/build"));
     bench.linkSystemLibrary("uv");
 
-    // OpenSSL for Linux (WebSocket SHA1 hashing)
-    if (target.result.os.tag == .linux) {
+    // OpenSSL for Linux (WebSocket SHA1 hashing) - native builds only
+    if (is_native_linux) {
+        const lib_dir = switch (target.result.cpu.arch) {
+            .x86_64 => "/usr/lib/x86_64-linux-gnu",
+            .aarch64 => "/usr/lib/aarch64-linux-gnu",
+            else => "/usr/lib",
+        };
+        bench.addLibraryPath(.{ .cwd_relative = lib_dir });
         bench.linkSystemLibrary("ssl");
         bench.linkSystemLibrary("crypto");
     }
@@ -501,19 +533,30 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    // Link Hermes for tests (addLibraryPath handles rpath automatically)
-    unit_tests.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
+    // Link Hermes for tests (conditional: static for releases, dynamic for local dev)
+    if (use_static_hermes) {
+        unit_tests.addObjectFile(b.path("vendor/hermes/build/lib/libhermesVMRuntime.a"));
+        unit_tests.addObjectFile(b.path("vendor/hermes/build/jsi/libjsi.a"));
+    } else {
+        unit_tests.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
+        unit_tests.addLibraryPath(b.path("vendor/hermes/build/jsi"));
+        unit_tests.linkSystemLibrary("hermes_lean");
+        unit_tests.linkSystemLibrary("jsi");
+    }
 
     // libuv for tests
     unit_tests.addIncludePath(b.path("vendor/libuv/include"));
     unit_tests.addLibraryPath(b.path("vendor/libuv/build"));
     unit_tests.linkSystemLibrary("uv");
-    unit_tests.addLibraryPath(b.path("vendor/hermes/build/jsi"));
-    unit_tests.linkSystemLibrary("hermes_lean");
-    unit_tests.linkSystemLibrary("jsi");
 
-    // OpenSSL for Linux (WebSocket SHA1 hashing)
-    if (target.result.os.tag == .linux) {
+    // OpenSSL for Linux (WebSocket SHA1 hashing) - native builds only
+    if (is_native_linux) {
+        const lib_dir = switch (target.result.cpu.arch) {
+            .x86_64 => "/usr/lib/x86_64-linux-gnu",
+            .aarch64 => "/usr/lib/aarch64-linux-gnu",
+            else => "/usr/lib",
+        };
+        unit_tests.addLibraryPath(.{ .cwd_relative = lib_dir });
         unit_tests.linkSystemLibrary("ssl");
         unit_tests.linkSystemLibrary("crypto");
     }

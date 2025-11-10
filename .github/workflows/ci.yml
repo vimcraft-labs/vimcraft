@@ -144,10 +144,11 @@ jobs:
             arch: x86_64
             zig_target: x86_64-linux-gnu
 
-          - os: ubuntu-22.04
-            platform: linux
-            arch: arm64
-            zig_target: aarch64-linux-gnu
+          # TODO: ARM64 Linux requires cross-compilation sysroot for OpenSSL
+          # - os: ubuntu-22.04
+          #   platform: linux
+          #   arch: arm64
+          #   zig_target: aarch64-linux-gnu
 
     steps:
       - name: Checkout code

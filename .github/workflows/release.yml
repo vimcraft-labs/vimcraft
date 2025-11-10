@@ -15,6 +15,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Permissions needed for releasing
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build ${{ matrix.platform }}-${{ matrix.arch }}
@@ -40,10 +44,11 @@ jobs:
             arch: x86_64
             zig_target: x86_64-linux-gnu
 
-          - os: ubuntu-22.04
-            platform: linux
-            arch: arm64
-            zig_target: aarch64-linux-gnu
+          # TODO: ARM64 Linux requires cross-compilation sysroot for OpenSSL
+          # - os: ubuntu-22.04
+          #   platform: linux
+          #   arch: arm64
+          #   zig_target: aarch64-linux-gnu
 
     steps:
       - name: Checkout code
@@ -80,40 +85,36 @@ jobs:
 
       - name: Build Hermes
         run: |
-          # Check if Hermes libraries exist (platform-specific)
+          # Check if Hermes static libraries exist
           HERMES_BUILT=false
-          if [ "$RUNNER_OS" == "macOS" ]; then
-            [ -f "vendor/hermes/build/API/hermes/libhermes_lean.dylib" ] && HERMES_BUILT=true
-          else
-            [ -f "vendor/hermes/build/API/hermes/libhermes_lean.so" ] && HERMES_BUILT=true
-          fi
+          [ -f "vendor/hermes/build/lib/libhermesVMRuntime.a" ] && HERMES_BUILT=true
 
           if [ "$HERMES_BUILT" = false ]; then
-            echo "Hermes libraries not found, building..."
+            echo "Hermes libraries not found, building static libraries..."
             cd vendor/hermes
             mkdir -p build
             cd build
 
-            # Configure with minimal features for smaller binary
+            # Configure for STATIC linking (no shared libraries)
             cmake .. \
               -DCMAKE_BUILD_TYPE=MinSizeRel \
               -DHERMES_ENABLE_DEBUGGER=ON \
               -DHERMES_ENABLE_INTL=OFF \
               -DHERMES_ENABLE_TEST_SUITE=OFF \
               -DHERMES_BUILD_APPLE_DSYM=OFF \
-              -DHERMES_BUILD_SHARED_JSI=ON \
+              -DHERMES_STATIC_LINK=ON \
               -GNinja
 
-            # Build required libraries (hermesvmlean builds libhermes_lean.so/.dylib)
-            ninja hermesvmlean hermesc jsi
+            # Build static libraries
+            ninja hermesVMRuntime hermesc jsi
 
-            echo "✓ Hermes built successfully"
+            echo "✓ Hermes static libraries built successfully"
           else
-            echo "✓ Hermes libraries found in cache"
+            echo "✓ Hermes static libraries found in cache"
           fi
 
           # Verify libraries exist
-          ls -lh vendor/hermes/build/API/hermes/ || echo "Warning: API/hermes directory missing"
+          ls -lh vendor/hermes/build/lib/ || echo "Warning: lib directory missing"
           ls -lh vendor/hermes/build/jsi/ || echo "Warning: jsi directory missing"
 
       - name: Cache libuv build
@@ -153,8 +154,8 @@ jobs:
           # Show versions
           zig version
 
-          # Build with optimizations
-          zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseFast
+          # Build with optimizations and static Hermes linking
+          zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseFast -Dstatic-hermes=true
 
           # Verify binary exists
           ls -lh zig-out/bin/
@@ -200,11 +201,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: github.event_name == 'release'
         with:
+          tag_name: ${{ github.event.release.tag_name }}
           files: |
             ${{ steps.package.outputs.filename }}
             ${{ steps.package.outputs.checksum_file }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Artifact (manual trigger)
         if: github.event_name == 'workflow_dispatch'
@@ -243,9 +243,8 @@ jobs:
       - name: Upload Combined Checksums
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.release.tag_name }}
           files: checksums.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Verify the release is complete
   verify-release:
@@ -264,7 +263,8 @@ jobs:
             "vimcraft-${{ github.event.release.tag_name }}-macos-x86_64.tar.gz"
             "vimcraft-${{ github.event.release.tag_name }}-macos-arm64.tar.gz"
             "vimcraft-${{ github.event.release.tag_name }}-linux-x86_64.tar.gz"
-            "vimcraft-${{ github.event.release.tag_name }}-linux-arm64.tar.gz"
+            # TODO: Add back when ARM64 Linux cross-compilation is supported
+            # "vimcraft-${{ github.event.release.tag_name }}-linux-arm64.tar.gz"
             "checksums.txt"
           )
 
@@ -285,7 +285,7 @@ jobs:
 
               Binaries are now available for:
               - macOS (Intel & Apple Silicon)
-              - Linux (x86_64 & ARM64)
+              - Linux (x86_64 only - ARM64 coming soon)
 
               **Quick Install:**
               \`\`\`bash
