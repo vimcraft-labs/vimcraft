@@ -5,6 +5,12 @@
 
 Neovim-compatible text editor built in [Zig](https://ziglang.org/) with [Hermes](https://hermesengine.dev/) JavaScript engine. Designed for building AI-powered development tools with TypeScript/JavaScript plugins using [JSI](https://github.com/react-native-community/discussions-and-proposals/issues/91) zero-copy integration.
 
+> **⚠️ Early Stage - Developer Preview**
+>
+> Vimcraft is in **active development** and **not ready for general use**. This early public release is for **hackers and developers** who want to experience the project early and contribute to its development.
+>
+> **Expect bugs**, incomplete features, and breaking changes. Most functionality is still under active development. Not recommended for production use.
+
 ## Installation
 
 **Requirements**: [Zig](https://ziglang.org/) 0.13+, Git, C++ compiler (clang++)
