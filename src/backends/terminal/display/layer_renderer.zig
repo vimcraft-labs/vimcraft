@@ -330,7 +330,7 @@ fn updateCursorLayer(
     // This allows the background to show through without hiding the base layer text
     for (0..self.terminal_cols) |col| {
         self.cursor_layer.grid.setCell(screen_row, col, .{
-            .char = 0,  // NULL character - won't hide base layer text
+            .char = 0, // NULL character - won't hide base layer text
             .bg = cursorline_bg,
         });
     }

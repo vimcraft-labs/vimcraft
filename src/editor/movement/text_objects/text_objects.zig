@@ -5,16 +5,16 @@ const Range = @import("../../buffer/edit.zig").Range;
 
 /// Text object types (the thing after i/a)
 pub const TextObjectType = enum {
-    word,           // w
-    WORD,           // W (includes punctuation)
-    bracket,        // [ ]
-    brace,          // { }
-    paren,          // ( )
-    angle,          // < >
-    quote_double,   // "
-    quote_single,   // '
-    quote_back,     // `
-    tag,            // t (HTML/XML tags)
+    word, // w
+    WORD, // W (includes punctuation)
+    bracket, // [ ]
+    brace, // { }
+    paren, // ( )
+    angle, // < >
+    quote_double, // "
+    quote_single, // '
+    quote_back, // `
+    tag, // t (HTML/XML tags)
 
     pub fn fromChar(c: u8) ?TextObjectType {
         return switch (c) {
@@ -35,7 +35,7 @@ pub const TextObjectType = enum {
 
 /// Modifier for text objects (i = inner, a = around/all)
 pub const TextObjectModifier = enum {
-    inner,  // i - excludes delimiters/whitespace
+    inner, // i - excludes delimiters/whitespace
     around, // a - includes delimiters/whitespace
 
     pub fn fromChar(c: u8) ?TextObjectModifier {

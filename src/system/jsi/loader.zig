@@ -1,7 +1,6 @@
 /// Loader Module
 /// Handles JavaScript plugin and config file loading
 /// Compiles JS to Hermes bytecode for performance
-
 const std = @import("std");
 
 // Import shared Hermes C API

@@ -47,16 +47,16 @@ pub const Highlight = struct {
 
 /// Global highlight configuration
 pub const HighlightConfig = struct {
-    normal: ?Highlight = null,      // Normal text (background/foreground)
-    cursor: ?Highlight = null,      // Cursor highlight
+    normal: ?Highlight = null, // Normal text (background/foreground)
+    cursor: ?Highlight = null, // Cursor highlight
     cursorline: ?Highlight = null,
     visual: ?Highlight = null,
-    yank_flash: ?Highlight = null,  // Brief flash after yank
+    yank_flash: ?Highlight = null, // Brief flash after yank
     line_nr: ?Highlight = null,
     cursorline_nr: ?Highlight = null, // Line number on cursor line (CursorLineNr)
 
     // Options
-    cursorline_enabled: bool = true,  // Enabled by default (standard Vim/Neovim behavior)
+    cursorline_enabled: bool = true, // Enabled by default (standard Vim/Neovim behavior)
 
     // Sign column config (stored here temporarily for JSI access)
     signcolumn_mode: []const u8 = "no", // "yes", "no", "auto"

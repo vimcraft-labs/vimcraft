@@ -4,7 +4,6 @@ const state = @import("state.zig");
 
 /// JSON serialization for debug protocol
 /// All protocol types can be serialized to/from JSON for LLM-friendly communication
-
 /// Serialize Command to JSON
 pub fn serializeCommand(command: protocol.Command, allocator: std.mem.Allocator) ![]const u8 {
     var string: std.ArrayList(u8) = .empty;

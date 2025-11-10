@@ -1,7 +1,6 @@
 /// Console API Module
 /// Handles console.log JSI function with Chrome DevTools Console integration
 /// Forwards logs to BOTH CDP debugger AND editor.logger (Core→Backend architecture)
-
 const std = @import("std");
 const Editor = @import("../../editor/editor.zig").Editor;
 const EditorContext = @import("../../backends/debug/editor_context.zig").EditorContext;

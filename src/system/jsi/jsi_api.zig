@@ -1,7 +1,6 @@
 /// JSI API - Main Integration Module
 /// Coordinates all JSI API modules and provides unified initialization
 /// This file has been refactored from 1824 lines into 8 focused modules
-
 const std = @import("std");
 const highlights = @import("../../editor/config/highlights.zig");
 const Display = @import("../../backends/terminal/display/display.zig").Display;

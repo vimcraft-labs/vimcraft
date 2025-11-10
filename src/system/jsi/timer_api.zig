@@ -2,7 +2,6 @@
 /// Handles setTimeout, setInterval, clearTimer JSI functions
 /// React Native pattern: JavaScript manages callbacks, Zig only triggers them
 /// Uses libuv for async timer management with thread-safe queue
-
 const std = @import("std");
 const debug_log = @import("../../backends/debug/log.zig");
 

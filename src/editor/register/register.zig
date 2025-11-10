@@ -2,8 +2,8 @@ const std = @import("std");
 
 /// Motion type for yanked text (affects paste behavior)
 pub const MotionType = enum {
-    char_wise,  // Character-wise: 'v' or 'yw'
-    line_wise,  // Line-wise: 'V' or 'yy'
+    char_wise, // Character-wise: 'v' or 'yw'
+    line_wise, // Line-wise: 'V' or 'yy'
     block_wise, // Block-wise: Ctrl-V
 
     pub fn toString(self: MotionType) []const u8 {

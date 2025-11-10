@@ -18,8 +18,8 @@ pub const Position = struct {
 
 /// Visual mode types (Neovim-compatible)
 pub const VisualMode = enum {
-    char,  // 'v' - character-wise selection
-    line,  // 'V' - line-wise selection
+    char, // 'v' - character-wise selection
+    line, // 'V' - line-wise selection
     block, // Ctrl-V - block-wise (rectangular) selection
 
     pub fn toString(self: VisualMode) []const u8 {

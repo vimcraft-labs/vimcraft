@@ -126,44 +126,44 @@ pub const Server = struct {
 
                 // Parse command (use trimmed line)
                 var cmd = json.parseCommand(trimmed, self.allocator) catch |err| {
-                // Send error response for parse failure
-                const err_str = try std.fmt.allocPrint(self.allocator, "Failed to parse command: {}", .{err});
-                defer self.allocator.free(err_str);
+                    // Send error response for parse failure
+                    const err_str = try std.fmt.allocPrint(self.allocator, "Failed to parse command: {}", .{err});
+                    defer self.allocator.free(err_str);
 
-                const response = try json.createErrorResponse(
-                    self.allocator,
-                    "unknown",
-                    err_str,
-                    0,
-                );
-                defer {
-                    var mut_response = response;
-                    mut_response.deinit(self.allocator);
-                }
+                    const response = try json.createErrorResponse(
+                        self.allocator,
+                        "unknown",
+                        err_str,
+                        0,
+                    );
+                    defer {
+                        var mut_response = response;
+                        mut_response.deinit(self.allocator);
+                    }
 
+                    const response_json = try json.serializeResponse(response, self.allocator);
+                    defer self.allocator.free(response_json);
+
+                    try stdout.writeAll(response_json);
+                    try stdout.writeAll("\n");
+                    line_pos = 0; // Reset for next line
+                    continue;
+                };
+                defer cmd.deinit(self.allocator);
+
+                // Handle command and get response
+                var response = try self.handleCommand(cmd);
+                defer response.deinit(self.allocator);
+
+                // Serialize and send response
                 const response_json = try json.serializeResponse(response, self.allocator);
                 defer self.allocator.free(response_json);
 
                 try stdout.writeAll(response_json);
                 try stdout.writeAll("\n");
-                line_pos = 0; // Reset for next line
-                continue;
-            };
-            defer cmd.deinit(self.allocator);
 
-            // Handle command and get response
-            var response = try self.handleCommand(cmd);
-            defer response.deinit(self.allocator);
-
-            // Serialize and send response
-            const response_json = try json.serializeResponse(response, self.allocator);
-            defer self.allocator.free(response_json);
-
-            try stdout.writeAll(response_json);
-            try stdout.writeAll("\n");
-
-            // Reset line buffer for next line
-            line_pos = 0;
+                // Reset line buffer for next line
+                line_pos = 0;
             } else {
                 // Accumulate character into line buffer
                 if (line_pos < line_buffer.len) {

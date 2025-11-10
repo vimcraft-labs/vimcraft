@@ -37,7 +37,6 @@ const hermes_c = @cImport({
 ///   vc --test <file>    - Run test script
 ///   vc --repl           - Interactive debugging REPL
 ///   vc --help           - Show help
-
 /// Pending command for multi-key sequences (like dd, dw)
 const PendingCommand = struct {
     char: ?u8 = null,
@@ -58,7 +57,7 @@ const PendingCommand = struct {
 /// Pending register selection (after pressing ")
 const PendingRegister = struct {
     waiting_for_name: bool = false, // Waiting for register name after "
-    selected: ?u8 = null,           // Selected register (a-z, A-Z, ", etc.)
+    selected: ?u8 = null, // Selected register (a-z, A-Z, ", etc.)
 
     fn startSelection(self: *PendingRegister) void {
         self.waiting_for_name = true;

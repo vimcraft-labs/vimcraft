@@ -199,7 +199,8 @@ pub const ScreenGrid = struct {
         for (self.current) |row| {
             for (row) |cell| {
                 if (cell.char != ' ' or cell.fg != null or cell.bg != null or
-                    cell.bold or cell.italic or cell.underline or cell.combining_count > 0) {
+                    cell.bold or cell.italic or cell.underline or cell.combining_count > 0)
+                {
                     return true;
                 }
             }
@@ -215,7 +216,8 @@ pub const ScreenGrid = struct {
             for (row) |*cell| {
                 // Check if cell is non-blank before clearing
                 if (cell.char != ' ' or cell.fg != null or cell.bg != null or
-                    cell.bold or cell.italic or cell.underline or cell.combining_count > 0) {
+                    cell.bold or cell.italic or cell.underline or cell.combining_count > 0)
+                {
                     row_has_content = true;
                     cell.reset();
                 } else {

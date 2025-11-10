@@ -2,8 +2,8 @@ const std = @import("std");
 
 /// Extrapolation mode for values outside the input range
 pub const Extrapolation = enum {
-    clamp,    // Clamp to range edges (default)
-    extend,   // Linear extrapolation beyond range
+    clamp, // Clamp to range edges (default)
+    extend, // Linear extrapolation beyond range
     identity, // Return input value unchanged
 };
 

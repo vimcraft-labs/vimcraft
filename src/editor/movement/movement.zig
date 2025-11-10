@@ -4,7 +4,6 @@ const grapheme = @import("ghostty_grapheme");
 
 /// Movement primitives for cursor navigation
 /// Implements Vim-style movement commands
-
 /// Move left (h)
 pub fn moveLeft(buffer: *Buffer) void {
     if (buffer.cursor.col > 0) {

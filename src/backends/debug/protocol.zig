@@ -16,11 +16,11 @@ pub const CommandType = enum {
     get_registers,
     get_register,
     get_buffer,
-    get_layers,        // Get layer system state
-    get_layer,         // Get specific layer state
-    get_layer_cells,   // NEW: Get cells from specific layer
-    get_output_grid,   // NEW: Get final composited output grid
-    get_logs,          // Get log entries from editor.logger
+    get_layers, // Get layer system state
+    get_layer, // Get specific layer state
+    get_layer_cells, // NEW: Get cells from specific layer
+    get_output_grid, // NEW: Get final composited output grid
+    get_logs, // Get log entries from editor.logger
 
     // Commands
     execute_keys,
@@ -64,12 +64,12 @@ pub const CommandArgs = union(enum) {
     none: void,
     get_register: struct { name: u8 },
     get_layer: struct { name: []const u8 },
-    get_layer_cells: struct { name: []const u8, region: ?GridRegion },  // NEW
-    get_output_grid: struct { region: ?GridRegion },  // NEW
+    get_layer_cells: struct { name: []const u8, region: ?GridRegion }, // NEW
+    get_output_grid: struct { region: ?GridRegion }, // NEW
     get_logs: struct {
-        count: ?usize,          // Number of recent logs (null = all, but limited by max_bytes)
-        level: ?[]const u8,     // Filter by level: "debug", "info", "warning", "err" (null = all)
-        max_bytes: ?usize,      // Maximum response size in bytes (null = unlimited, but recommended for LLM: 4096-8192)
+        count: ?usize, // Number of recent logs (null = all, but limited by max_bytes)
+        level: ?[]const u8, // Filter by level: "debug", "info", "warning", "err" (null = all)
+        max_bytes: ?usize, // Maximum response size in bytes (null = unlimited, but recommended for LLM: 4096-8192)
     },
     execute_keys: struct { keys: []const u8 },
     load_file: struct { path: []const u8 },
@@ -143,9 +143,9 @@ pub const ResponseResult = union(enum) {
     buffer: BufferState,
     layers: LayersState,
     layer: LayerState,
-    layer_cells: LayerCells,   // NEW: Layer cell data
-    output_grid: OutputGrid,   // NEW: Final composited output
-    logs: LogsState,            // NEW: Log entries from editor.logger
+    layer_cells: LayerCells, // NEW: Layer cell data
+    output_grid: OutputGrid, // NEW: Final composited output
+    logs: LogsState, // NEW: Log entries from editor.logger
     execute_keys: struct { keys_processed: usize },
     assertion: AssertionResult,
     pong: struct { version: []const u8 },
@@ -367,7 +367,7 @@ pub const CompositorStats = struct {
 /// Log entry from editor.logger
 pub const LogEntry = struct {
     message: []const u8,
-    level: []const u8,  // "debug", "info", "warning", "err"
+    level: []const u8, // "debug", "info", "warning", "err"
     timestamp_ms: i64,
 };
 
@@ -375,9 +375,9 @@ pub const LogEntry = struct {
 pub const LogsState = struct {
     logs: []const LogEntry,
     count: usize,
-    total_in_buffer: usize,  // Total logs available in ring buffer
-    truncated: bool,         // Whether response was truncated due to max_bytes limit
-    bytes_used: usize,       // Approximate bytes used by returned logs
+    total_in_buffer: usize, // Total logs available in ring buffer
+    truncated: bool, // Whether response was truncated due to max_bytes limit
+    bytes_used: usize, // Approximate bytes used by returned logs
 };
 
 // Tests

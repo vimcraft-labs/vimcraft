@@ -10,9 +10,9 @@ pub const CellWidthEntry = struct {
 
 /// Ambiguous width mode (similar to Neovim's 'ambiwidth' option)
 pub const AmbiWidthMode = enum {
-    single,  // Ambiguous width chars are single-width
-    double,  // Ambiguous width chars are double-width
-    auto,    // Auto-detect based on terminal
+    single, // Ambiguous width chars are single-width
+    double, // Ambiguous width chars are double-width
+    auto, // Auto-detect based on terminal
 };
 
 /// Configuration for character width handling
@@ -124,45 +124,44 @@ fn detectTerminalAndConfigure(config: *CellWidthConfig) !void {
             config.terminal_quirks.emoji_wcwidth_mismatch = true;
             config.terminal_quirks.is_wezterm = true;
 
-
             // WezTerm-specific: Force ALL emoji/symbol ranges to width 2
             // WezTerm renders these as 2-wide regardless of what wcwidth says
 
             // ALL emoji and symbol blocks that might render wide in WezTerm
-            try config.addOverride(0x2190, 0x21FF, 2);    // Arrows
-            try config.addOverride(0x2300, 0x23FF, 2);    // Misc Technical
-            try config.addOverride(0x2460, 0x24FF, 2);    // Enclosed Alphanumerics
-            try config.addOverride(0x25A0, 0x25FF, 2);    // Geometric Shapes
-            try config.addOverride(0x2600, 0x27BF, 2);    // Misc Symbols & Dingbats
-            try config.addOverride(0x2900, 0x297F, 2);    // Supplemental Arrows-B
-            try config.addOverride(0x2B00, 0x2BFF, 2);    // Misc Symbols and Arrows
+            try config.addOverride(0x2190, 0x21FF, 2); // Arrows
+            try config.addOverride(0x2300, 0x23FF, 2); // Misc Technical
+            try config.addOverride(0x2460, 0x24FF, 2); // Enclosed Alphanumerics
+            try config.addOverride(0x25A0, 0x25FF, 2); // Geometric Shapes
+            try config.addOverride(0x2600, 0x27BF, 2); // Misc Symbols & Dingbats
+            try config.addOverride(0x2900, 0x297F, 2); // Supplemental Arrows-B
+            try config.addOverride(0x2B00, 0x2BFF, 2); // Misc Symbols and Arrows
 
             // All emoji blocks
-            try config.addOverride(0x1F000, 0x1FFFF, 2);  // ALL emoji ranges
+            try config.addOverride(0x1F000, 0x1FFFF, 2); // ALL emoji ranges
 
             // Even more specific problem characters in WezTerm
-            try config.addOverride(0x203C, 0x203C, 2);    // ‼
-            try config.addOverride(0x2049, 0x2049, 2);    // ⁉
-            try config.addOverride(0x2122, 0x2122, 2);    // ™
-            try config.addOverride(0x2139, 0x2139, 2);    // ℹ
-            try config.addOverride(0x2194, 0x2199, 2);    // ↔ ↕ etc
-            try config.addOverride(0x21A9, 0x21AA, 2);    // ↩ ↪
-            try config.addOverride(0x231A, 0x231B, 2);    // ⌚ ⌛
-            try config.addOverride(0x2328, 0x2328, 2);    // ⌨
-            try config.addOverride(0x23E9, 0x23F3, 2);    // ⏩ ⏪ etc
-            try config.addOverride(0x23F8, 0x23FA, 2);    // ⏸ ⏹ ⏺
-            try config.addOverride(0x24C2, 0x24C2, 2);    // Ⓜ
+            try config.addOverride(0x203C, 0x203C, 2); // ‼
+            try config.addOverride(0x2049, 0x2049, 2); // ⁉
+            try config.addOverride(0x2122, 0x2122, 2); // ™
+            try config.addOverride(0x2139, 0x2139, 2); // ℹ
+            try config.addOverride(0x2194, 0x2199, 2); // ↔ ↕ etc
+            try config.addOverride(0x21A9, 0x21AA, 2); // ↩ ↪
+            try config.addOverride(0x231A, 0x231B, 2); // ⌚ ⌛
+            try config.addOverride(0x2328, 0x2328, 2); // ⌨
+            try config.addOverride(0x23E9, 0x23F3, 2); // ⏩ ⏪ etc
+            try config.addOverride(0x23F8, 0x23FA, 2); // ⏸ ⏹ ⏺
+            try config.addOverride(0x24C2, 0x24C2, 2); // Ⓜ
 
         } else if (std.mem.eql(u8, tp, "ghostty")) {
             config.terminal_quirks.emoji_wcwidth_mismatch = false;
             // Ghostty is more consistent, but still apply modern emoji
-            try config.addOverride(0x1F000, 0x1FFFF, 2);  // Modern emoji
+            try config.addOverride(0x1F000, 0x1FFFF, 2); // Modern emoji
         }
     } else {
         // Default: assume emoji should be width 2
         if (config.emoji_mode) {
-            try config.addOverride(0x1F000, 0x1FFFF, 2);  // Modern emoji
-            try config.addOverride(0x2600, 0x27BF, 2);    // Common symbols
+            try config.addOverride(0x1F000, 0x1FFFF, 2); // Modern emoji
+            try config.addOverride(0x2600, 0x27BF, 2); // Common symbols
         }
     }
 }
@@ -195,18 +194,18 @@ pub fn getWidth(codepoint: u21) u8 {
 
             // Check for emoji and symbol ranges that WezTerm renders as double-width
             // Note: Box drawing (0x2500-0x257F) are typically single-width
-            if ((codepoint >= 0x203C and codepoint <= 0x203C) or    // ‼
-                (codepoint >= 0x2049 and codepoint <= 0x2049) or    // ⁉
-                (codepoint >= 0x2122 and codepoint <= 0x2122) or    // ™
-                (codepoint >= 0x2139 and codepoint <= 0x2139) or    // ℹ
-                (codepoint >= 0x2190 and codepoint <= 0x21FF) or    // Arrows
-                (codepoint >= 0x2300 and codepoint <= 0x23FF) or    // Misc Technical
-                (codepoint >= 0x2460 and codepoint <= 0x24FF) or    // Enclosed Alphanumerics
-                (codepoint >= 0x25A0 and codepoint <= 0x25FF) or    // Geometric Shapes
-                (codepoint >= 0x2600 and codepoint <= 0x27BF) or    // Misc Symbols & Dingbats
-                (codepoint >= 0x2900 and codepoint <= 0x297F) or    // Supplemental Arrows-B
-                (codepoint >= 0x2B00 and codepoint <= 0x2BFF) or    // Misc Symbols and Arrows
-                (codepoint >= 0x1F000 and codepoint <= 0x1FFFF))    // All modern emoji
+            if ((codepoint >= 0x203C and codepoint <= 0x203C) or // ‼
+                (codepoint >= 0x2049 and codepoint <= 0x2049) or // ⁉
+                (codepoint >= 0x2122 and codepoint <= 0x2122) or // ™
+                (codepoint >= 0x2139 and codepoint <= 0x2139) or // ℹ
+                (codepoint >= 0x2190 and codepoint <= 0x21FF) or // Arrows
+                (codepoint >= 0x2300 and codepoint <= 0x23FF) or // Misc Technical
+                (codepoint >= 0x2460 and codepoint <= 0x24FF) or // Enclosed Alphanumerics
+                (codepoint >= 0x25A0 and codepoint <= 0x25FF) or // Geometric Shapes
+                (codepoint >= 0x2600 and codepoint <= 0x27BF) or // Misc Symbols & Dingbats
+                (codepoint >= 0x2900 and codepoint <= 0x297F) or // Supplemental Arrows-B
+                (codepoint >= 0x2B00 and codepoint <= 0x2BFF) or // Misc Symbols and Arrows
+                (codepoint >= 0x1F000 and codepoint <= 0x1FFFF)) // All modern emoji
             {
                 // For WezTerm, ALWAYS force these chars to width 2 regardless of base width
                 // This ensures consistent rendering in WezTerm
@@ -235,7 +234,7 @@ fn isZeroWidth(codepoint: u21) bool {
     if (codepoint == 0x200B or // Zero Width Space
         codepoint == 0x200C or // Zero Width Non-Joiner
         codepoint == 0x200D or // Zero Width Joiner
-        codepoint == 0xFEFF)   // Zero Width No-Break Space
+        codepoint == 0xFEFF) // Zero Width No-Break Space
         return true;
 
     // Combining marks
@@ -334,10 +333,10 @@ test "cellwidth: emoji widths" {
     try std.testing.expectEqual(@as(u8, 2), getWidth(0x1F3AF)); // 🎯
     try std.testing.expectEqual(@as(u8, 2), getWidth(0x1F680)); // 🚀
     try std.testing.expectEqual(@as(u8, 2), getWidth(0x1F5A5)); // 🖥️
-    try std.testing.expectEqual(@as(u8, 2), getWidth(0x2699));  // ⚙️
-    try std.testing.expectEqual(@as(u8, 2), getWidth(0x26A1));  // ⚡
-    try std.testing.expectEqual(@as(u8, 2), getWidth(0x21A9));  // ↩️
-    try std.testing.expectEqual(@as(u8, 2), getWidth(0x2702));  // ✂️
+    try std.testing.expectEqual(@as(u8, 2), getWidth(0x2699)); // ⚙️
+    try std.testing.expectEqual(@as(u8, 2), getWidth(0x26A1)); // ⚡
+    try std.testing.expectEqual(@as(u8, 2), getWidth(0x21A9)); // ↩️
+    try std.testing.expectEqual(@as(u8, 2), getWidth(0x2702)); // ✂️
 
     // ASCII should still be width 1
     try std.testing.expectEqual(@as(u8, 1), getWidth('A'));

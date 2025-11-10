@@ -186,10 +186,7 @@ pub const TestHarness = struct {
     pub fn dumpState(self: *TestHarness) !void {
         try self.write("\n");
         try self.print("Mode: {s}\n", .{self.mode_manager.getModeString()});
-        try self.print("Cursor: row={}, col={}\n", .{
-            self.buffer.cursor.row,
-            self.buffer.cursor.col
-        });
+        try self.print("Cursor: row={}, col={}\n", .{ self.buffer.cursor.row, self.buffer.cursor.col });
         try self.print("Lines: {}\n", .{self.buffer.lineCount()});
         try self.write("\n--- BUFFER CONTENT ---\n");
 

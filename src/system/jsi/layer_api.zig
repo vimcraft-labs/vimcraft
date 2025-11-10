@@ -1,7 +1,6 @@
 /// Layer API Module
 /// Handles all layer-related JSI functions for virtual text rendering
 /// Generic layer system for plugins to create custom overlays (Neovim-style extmarks)
-
 const std = @import("std");
 const Display = @import("../../backends/terminal/display/display.zig").Display;
 const helpers = @import("helpers.zig");

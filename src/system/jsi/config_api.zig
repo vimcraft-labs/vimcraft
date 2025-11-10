@@ -1,7 +1,6 @@
 /// Configuration API Module
 /// Handles setHighlight and setOption JSI functions
 /// Allows JavaScript to configure editor appearance and behavior
-
 const std = @import("std");
 const highlights = @import("../../editor/config/highlights.zig");
 const helpers = @import("helpers.zig");

@@ -6,8 +6,7 @@ pub fn enterRawMode(self: *Display) !void {
     const stdin = std.fs.File.stdin();
     const builtin = @import("builtin");
 
-    if (builtin.os.tag == .linux or builtin.os.tag == .macos)
-    {
+    if (builtin.os.tag == .linux or builtin.os.tag == .macos) {
         // Only enter raw mode if stdin is a TTY
         if (!std.posix.isatty(stdin.handle)) {
             return error.NotATTY;
@@ -53,8 +52,7 @@ pub fn exitRawMode(self: *Display) void {
     const stdin = std.fs.File.stdin();
     const builtin = @import("builtin");
 
-    if (builtin.os.tag == .linux or builtin.os.tag == .macos)
-    {
+    if (builtin.os.tag == .linux or builtin.os.tag == .macos) {
         // Disable mouse tracking
         write(self, "\x1b[?1000l") catch {}; // Disable mouse button tracking
         write(self, "\x1b[?1006l") catch {}; // Disable SGR mouse mode

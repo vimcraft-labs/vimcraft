@@ -5,7 +5,7 @@ const AnimatedValue = @import("value.zig").AnimatedValue;
 pub const AnimationType = enum {
     timing, // Duration-based with easing
     spring, // Physics-based (damped spring)
-    decay,  // Velocity-based deceleration
+    decay, // Velocity-based deceleration
 };
 
 /// Easing functions for timing animations
@@ -79,10 +79,10 @@ pub const TimingConfig = struct {
 /// Based on Roblox Fraktality's damped spring algorithm
 /// https://gist.github.com/Fraktality/1033625223e13c01aa7144abe4aaf54d
 pub const SpringConfig = struct {
-    damping: f64 = 10.0,    // Resistance (higher = less bounce)
+    damping: f64 = 10.0, // Resistance (higher = less bounce)
     stiffness: f64 = 100.0, // Spring strength (higher = faster)
-    mass: f64 = 1.0,        // Object mass (higher = slower)
-    velocity: f64 = 0.0,    // Initial velocity
+    mass: f64 = 1.0, // Object mass (higher = slower)
+    velocity: f64 = 0.0, // Initial velocity
 
     /// Gentle spring (smooth, no overshoot)
     pub fn gentle() SpringConfig {

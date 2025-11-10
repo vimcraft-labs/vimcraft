@@ -111,9 +111,9 @@ pub const SignColumnConfig = struct {
     mode: SignColumnMode = .no,
 
     pub const SignColumnMode = enum {
-        no,    // Never show sign column
-        yes,   // Always show sign column (2 chars wide)
-        auto,  // Show only when signs exist
+        no, // Never show sign column
+        yes, // Always show sign column (2 chars wide)
+        auto, // Show only when signs exist
         // TODO: number (merge with line numbers)
     };
 

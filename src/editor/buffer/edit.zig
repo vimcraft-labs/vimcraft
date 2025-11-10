@@ -11,11 +11,10 @@ const Change = @import("buffer.zig").Change;
 /// - Transactions track changes for undo/redo
 /// - Operations are composable with motions
 /// - Registers store deleted/yanked text
-
 /// Range of text to operate on (byte offsets)
 pub const Range = struct {
     start: usize, // Inclusive start byte offset
-    end: usize,   // Exclusive end byte offset
+    end: usize, // Exclusive end byte offset
 
     /// Create a range from two cursor positions
     pub fn fromCursors(buffer: *const Buffer, start_cursor: Cursor, end_cursor: Cursor) Range {
@@ -76,15 +75,15 @@ pub const Range = struct {
 
 /// Motion type for delete/change/yank operators
 pub const MotionType = enum {
-    char,      // Character-wise (x, dw, d$)
-    line,      // Line-wise (dd, yy)
-    block,     // Block-wise (visual block)
+    char, // Character-wise (x, dw, d$)
+    line, // Line-wise (dd, yy)
+    block, // Block-wise (visual block)
 };
 
 /// Delete operation result
 pub const DeleteResult = struct {
-    deleted_text: []const u8,  // Text that was deleted (caller must free)
-    cursor_after: Cursor,       // Where cursor should be after delete
+    deleted_text: []const u8, // Text that was deleted (caller must free)
+    cursor_after: Cursor, // Where cursor should be after delete
 };
 
 /// Edit operations context

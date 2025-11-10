@@ -96,7 +96,7 @@ fn extractCharWise(
 
     // Remove trailing newline if present
     const last_text = if (last_end > 0 and last_line[last_end - 1] == '\n')
-        last_line[0 .. @min(last_end, last_line.len - 1)]
+        last_line[0..@min(last_end, last_line.len - 1)]
     else
         last_line[0..last_end];
 

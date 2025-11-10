@@ -43,12 +43,12 @@ pub const Display = struct {
     // Multi-layer rendering system (Phase 2)
     layer_manager: LayerManager,
     compositor: Compositor,
-    base_layer: *Layer,          // Buffer content (z=0)
-    gutter_layer: *Layer,        // Line numbers, signs (z=100)
-    cursor_layer: *Layer,        // Cursor highlight (z=200)
-    virtual_text_layer: *Layer,  // Plugin overlays (z=300)
-    selection_layer: *Layer,     // Visual mode (z=400)
-    yank_layer: *Layer,          // Yank highlight (z=500)
+    base_layer: *Layer, // Buffer content (z=0)
+    gutter_layer: *Layer, // Line numbers, signs (z=100)
+    cursor_layer: *Layer, // Cursor highlight (z=200)
+    virtual_text_layer: *Layer, // Plugin overlays (z=300)
+    selection_layer: *Layer, // Visual mode (z=400)
+    yank_layer: *Layer, // Yank highlight (z=500)
 
     // Gutter system (line numbers, signs, etc.)
     gutter_manager: gutter.GutterManager,
@@ -272,8 +272,7 @@ pub const Display = struct {
         const stdout = std.fs.File.stdout();
         const builtin = @import("builtin");
 
-        if (builtin.os.tag == .linux or builtin.os.tag == .macos)
-        {
+        if (builtin.os.tag == .linux or builtin.os.tag == .macos) {
             // Check if stdout is a TTY
             if (std.posix.isatty(stdout.handle)) {
                 var winsize: std.posix.winsize = undefined;
@@ -465,7 +464,6 @@ pub const Display = struct {
         // Note: We DON'T call renderUpdates() or moveCursor() here
         // This keeps stdout clean for JSON responses in headless mode
     }
-
 
     /// Adjust viewport to keep cursor visible
     fn adjustViewport(self: *Display, buffer: *const Buffer) void {

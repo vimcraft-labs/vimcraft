@@ -1,7 +1,6 @@
 /// Cursor API Module
 /// Handles cursor position and rendering JSI functions
 /// Used for animated cursor plugins and cursor effects
-
 const std = @import("std");
 const Editor = @import("../../editor/editor.zig").Editor;
 const helpers = @import("helpers.zig");
