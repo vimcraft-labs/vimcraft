@@ -79,28 +79,35 @@ jobs:
             hermes-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build Hermes
-        if: steps.cache-hermes.outputs.cache-hit != 'true'
         run: |
-          cd vendor/hermes
-          mkdir -p build
-          cd build
+          # Check if Hermes libraries exist
+          if [ ! -f "vendor/hermes/build/API/hermes/libhermes_lean.dylib" ] && [ ! -f "vendor/hermes/build/API/hermes/libhermes_lean.so" ]; then
+            echo "Hermes libraries not found, building..."
+            cd vendor/hermes
+            mkdir -p build
+            cd build
 
-          # Configure with minimal features for smaller binary
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=MinSizeRel \
-            -DHERMES_ENABLE_DEBUGGER=ON \
-            -DHERMES_ENABLE_INTL=OFF \
-            -DHERMES_ENABLE_TEST_SUITE=OFF \
-            -DHERMES_BUILD_APPLE_DSYM=OFF \
-            -DHERMES_BUILD_SHARED_JSI=ON \
-            -GNinja
+            # Configure with minimal features for smaller binary
+            cmake .. \
+              -DCMAKE_BUILD_TYPE=MinSizeRel \
+              -DHERMES_ENABLE_DEBUGGER=ON \
+              -DHERMES_ENABLE_INTL=OFF \
+              -DHERMES_ENABLE_TEST_SUITE=OFF \
+              -DHERMES_BUILD_APPLE_DSYM=OFF \
+              -DHERMES_BUILD_SHARED_JSI=ON \
+              -GNinja
 
-          # Build required libraries
-          ninja hermes hermesc jsi
+            # Build required libraries
+            ninja hermes hermesc jsi
 
-          echo "✓ Hermes built successfully"
-          ls -lh API/hermes/
-          ls -lh jsi/
+            echo "✓ Hermes built successfully"
+          else
+            echo "✓ Hermes libraries found in cache"
+          fi
+
+          # Verify libraries exist
+          ls -lh vendor/hermes/build/API/hermes/ || echo "Warning: API/hermes directory missing"
+          ls -lh vendor/hermes/build/jsi/ || echo "Warning: jsi directory missing"
 
       - name: Cache libuv build
         id: cache-libuv
@@ -112,15 +119,22 @@ jobs:
             libuv-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build libuv
-        if: steps.cache-libuv.outputs.cache-hit != 'true'
         run: |
-          cd vendor/libuv
-          mkdir -p build
-          cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
-          cmake --build .
-          echo "✓ libuv built successfully"
-          ls -lh
+          # Check if libuv library exists
+          if [ ! -f "vendor/libuv/build/libuv.a" ] && [ ! -f "vendor/libuv/build/libuv.dylib" ] && [ ! -f "vendor/libuv/build/libuv.so" ]; then
+            echo "libuv library not found, building..."
+            cd vendor/libuv
+            mkdir -p build
+            cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+            cmake --build .
+            echo "✓ libuv built successfully"
+          else
+            echo "✓ libuv library found in cache"
+          fi
+
+          # Verify library exists
+          ls -lh vendor/libuv/build/ || echo "Warning: libuv/build directory missing"
 
       - name: Build Vimcraft
         run: |

@@ -53,18 +53,22 @@ jobs:
             hermes-ci-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build Hermes
-        if: steps.cache-hermes.outputs.cache-hit != 'true'
         run: |
-          cd vendor/hermes
-          mkdir -p build && cd build
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=MinSizeRel \
-            -DHERMES_ENABLE_DEBUGGER=ON \
-            -DHERMES_ENABLE_INTL=OFF \
-            -DHERMES_ENABLE_TEST_SUITE=OFF \
-            -DHERMES_BUILD_SHARED_JSI=ON \
-            -GNinja
-          ninja hermes hermesc jsi
+          if [ ! -f "vendor/hermes/build/API/hermes/libhermes_lean.dylib" ] && [ ! -f "vendor/hermes/build/API/hermes/libhermes_lean.so" ]; then
+            echo "Building Hermes..."
+            cd vendor/hermes
+            mkdir -p build && cd build
+            cmake .. \
+              -DCMAKE_BUILD_TYPE=MinSizeRel \
+              -DHERMES_ENABLE_DEBUGGER=ON \
+              -DHERMES_ENABLE_INTL=OFF \
+              -DHERMES_ENABLE_TEST_SUITE=OFF \
+              -DHERMES_BUILD_SHARED_JSI=ON \
+              -GNinja
+            ninja hermes hermesc jsi
+          else
+            echo "✓ Hermes found in cache"
+          fi
 
       - name: Cache libuv build
         id: cache-libuv
@@ -76,12 +80,16 @@ jobs:
             libuv-ci-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build libuv
-        if: steps.cache-libuv.outputs.cache-hit != 'true'
         run: |
-          cd vendor/libuv
-          mkdir -p build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
-          cmake --build .
+          if [ ! -f "vendor/libuv/build/libuv.a" ] && [ ! -f "vendor/libuv/build/libuv.dylib" ] && [ ! -f "vendor/libuv/build/libuv.so" ]; then
+            echo "Building libuv..."
+            cd vendor/libuv
+            mkdir -p build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+            cmake --build .
+          else
+            echo "✓ libuv found in cache"
+          fi
 
       - name: Check Zig formatting
         run: |
@@ -160,7 +168,8 @@ jobs:
 
       - name: Build Hermes
         run: |
-          if [ ! -d vendor/hermes/build ]; then
+          if [ ! -f "vendor/hermes/build/API/hermes/libhermes_lean.dylib" ] && [ ! -f "vendor/hermes/build/API/hermes/libhermes_lean.so" ]; then
+            echo "Building Hermes..."
             cd vendor/hermes
             mkdir -p build && cd build
             cmake .. \
@@ -170,6 +179,8 @@ jobs:
               -DHERMES_BUILD_SHARED_JSI=ON \
               -GNinja
             ninja hermes hermesc jsi
+          else
+            echo "✓ Hermes found in cache"
           fi
 
       - name: Cache libuv
@@ -180,11 +191,14 @@ jobs:
 
       - name: Build libuv
         run: |
-          if [ ! -d vendor/libuv/build ]; then
+          if [ ! -f "vendor/libuv/build/libuv.a" ] && [ ! -f "vendor/libuv/build/libuv.dylib" ] && [ ! -f "vendor/libuv/build/libuv.so" ]; then
+            echo "Building libuv..."
             cd vendor/libuv
             mkdir -p build && cd build
             cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
             cmake --build .
+          else
+            echo "✓ libuv found in cache"
           fi
 
       - name: Build for release target
