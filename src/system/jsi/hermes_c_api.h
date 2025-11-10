@@ -1,5 +1,5 @@
 /**
- * Hermes C API Wrapper for OpenVim
+ * Hermes C API Wrapper for Vimcraft
  *
  * This provides a C ABI interface to Hermes JSI (which is C++)
  * so that Zig can easily call into Hermes with zero-copy performance.

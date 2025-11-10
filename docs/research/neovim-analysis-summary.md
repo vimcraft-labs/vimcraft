@@ -108,7 +108,7 @@ Neovim uses a proven four-layer design:
 
 Mirror Neovim's structure:
 ```
-~/.config/openvim/
+~/.config/vimcraft/
 ├── init.js                  # User config (JS instead of Lua)
 ├── plugin/*.js              # Auto-loaded plugins
 └── ftplugin/*.js            # File-type plugins
@@ -181,7 +181,7 @@ ov.cmd           // Command execution
 
 ## Deliverable
 
-**File**: `/Users/le/projects/openvim/NEOVIM_ARCHITECTURE_ANALYSIS.md` (1,723 lines)
+**File**: `/Users/le/projects/vimcraft/NEOVIM_ARCHITECTURE_ANALYSIS.md` (1,723 lines)
 
 Contains:
 - 13 detailed API reference sections with code examples

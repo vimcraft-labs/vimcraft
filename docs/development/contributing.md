@@ -9,7 +9,7 @@ How to contribute to OpenVim.
 1. **Fork & Clone**
 ```bash
 git clone https://github.com/vimcraft-labs/vimcraft
-cd openvim
+cd vimcraft
 ```
 
 2. **Create Branch**

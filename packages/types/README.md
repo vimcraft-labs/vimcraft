@@ -1,15 +1,15 @@
-# @openvim/types
+# @vimcraft/types
 
 TypeScript type definitions for OpenVim configuration API.
 
 ## Installation
 
 ```bash
-npm install --save-dev @openvim/types
+npm install --save-dev @vimcraft/types
 # or
-yarn add --dev @openvim/types
+yarn add --dev @vimcraft/types
 # or
-pnpm add --save-dev @openvim/types
+pnpm add --save-dev @vimcraft/types
 ```
 
 ## Usage
@@ -20,7 +20,7 @@ Add type checking to your `init.js`:
 
 ```javascript
 // @ts-check
-/// <reference types="@openvim/types" />
+/// <reference types="@vimcraft/types" />
 
 // Now you get autocomplete and type checking!
 vim.highlight('CursorLine', { bg: '#2b2b2b' });
@@ -36,7 +36,7 @@ setInterval(() => {
 Create `init.ts`:
 
 ```typescript
-/// <reference types="@openvim/types" />
+/// <reference types="@vimcraft/types" />
 
 vim.highlight('Comment', {
   fg: '#6c6c6c',
@@ -51,7 +51,7 @@ vim.opt.cursorline = true;
 Then compile to JavaScript:
 
 ```bash
-npx tsc init.ts --outDir ~/.config/openvim
+npx tsc init.ts --outDir ~/.config/vimcraft
 ```
 
 ### Available APIs

@@ -37,7 +37,7 @@ This section contains practical guides for users and developers getting started 
 **Purpose**: Set up TypeScript for config files
 **Read if**: You want IDE autocomplete and type checking
 **Key topics**:
-- Installing @openvim/types
+- Installing @vimcraft/types
 - Configuring tsconfig.json
 - Using types in init.ts
 - IDE integration
@@ -53,7 +53,7 @@ This section contains practical guides for users and developers getting started 
 ```bash
 # Clone repository
 git clone https://github.com/vimcraft-labs/vimcraft
-cd openvim
+cd vimcraft
 
 # Initialize Hermes submodule
 git submodule update --init
@@ -62,24 +62,24 @@ git submodule update --init
 zig build
 
 # Run with a file
-./zig-out/bin/openvim README.md
+./zig-out/bin/vimcraft README.md
 ```
 
 ### Create Basic Config
 
 ```bash
 # Create config directory
-mkdir -p ~/.config/openvim
+mkdir -p ~/.config/vimcraft
 
 # Create init.js
-cat > ~/.config/openvim/init.js << 'EOF'
+cat > ~/.config/vimcraft/init.js << 'EOF'
 // Basic OpenVim configuration
 vim.opt.cursorLine = true;
 console.log('OpenVim ready!');
 EOF
 
 # Run OpenVim (config loads automatically)
-./zig-out/bin/openvim README.md
+./zig-out/bin/vimcraft README.md
 ```
 
 See: [Getting Started Guide](./getting-started.md) for complete instructions.
@@ -111,7 +111,7 @@ See: [Getting Started Guide](./getting-started.md) for complete instructions.
 
 1. **TypeScript Setup**
    - [TypeScript Setup](./typescript-setup.md)
-   - Install @openvim/types
+   - Install @vimcraft/types
    - Configure IDE
    - Get autocomplete working
 
@@ -183,7 +183,7 @@ See: [Getting Started Guide](./getting-started.md) for complete instructions.
 ### "I want to change how OpenVim looks"
 
 ```typescript
-// ~/.config/openvim/init.ts
+// ~/.config/vimcraft/init.ts
 const colors = {
   bg: '#1e1e1e',
   fg: '#d4d4d4',
@@ -200,7 +200,7 @@ See: [Configuration Guide - Highlights](./configuration.md#highlights)
 ### "I want to customize editor behavior"
 
 ```typescript
-// ~/.config/openvim/init.ts
+// ~/.config/vimcraft/init.ts
 vim.opt.number = true;
 vim.opt.relativeNumber = true;
 vim.opt.cursorLine = true;
@@ -265,7 +265,7 @@ A: Install Zig 0.13+ from [ziglang.org](https://ziglang.org)
 A: Run `git submodule update --init`
 
 **Q: Config file not loading**
-A: Check location: `~/.config/openvim/init.js`
+A: Check location: `~/.config/vimcraft/init.js`
 
 **Q: TypeScript errors in init.ts**
 A: Install types: `npm install --save-dev ./packages/types`

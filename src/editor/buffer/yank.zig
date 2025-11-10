@@ -235,7 +235,7 @@ test "yank: extract single line character-wise" {
     defer buffer.deinit();
 
     // Create temp file with test content
-    const tmp_path = "/tmp/openvim_yank_test.txt";
+    const tmp_path = "/tmp/vimcraft_yank_test.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();
@@ -261,7 +261,7 @@ test "yank: extract multi-line character-wise" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    const tmp_path = "/tmp/openvim_yank_multi.txt";
+    const tmp_path = "/tmp/vimcraft_yank_multi.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();
@@ -288,7 +288,7 @@ test "yank: extract line-wise" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    const tmp_path = "/tmp/openvim_yank_line.txt";
+    const tmp_path = "/tmp/vimcraft_yank_line.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();
@@ -315,7 +315,7 @@ test "yank: extract block-wise" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    const tmp_path = "/tmp/openvim_yank_block.txt";
+    const tmp_path = "/tmp/vimcraft_yank_block.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();
@@ -346,7 +346,7 @@ test "yank: integration with RegisterManager" {
     var register_mgr = RegisterManager.init(allocator);
     defer register_mgr.deinit();
 
-    const tmp_path = "/tmp/openvim_yank_reg.txt";
+    const tmp_path = "/tmp/vimcraft_yank_reg.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();

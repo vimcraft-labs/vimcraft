@@ -1,4 +1,4 @@
-/// <reference types="@openvim/types" />
+/// <reference types="@vimcraft/types" />
 
 const colors = {
   bg: '#1A1B26',

@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 /// Virtual text cell - a character rendered at a specific screen position
-/// This is OpenVim's equivalent to Neovim's extmarks with virt_text
+/// This is Vimcraft's equivalent to Neovim's extmarks with virt_text
 /// Plugins can use this to render arbitrary content overlaid on the buffer
 pub const VirtualTextCell = struct {
     /// Screen row (0-indexed, relative to viewport)

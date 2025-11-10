@@ -3,7 +3,7 @@
     "target": "ES2017",
     "module": "commonjs",
     "lib": ["ES2017"],
-    "outDir": "/Users/le/.config/openvim",
+    "outDir": "/Users/le/.config/vimcraft",
     "rootDir": "./",
     "strict": false,
     "esModuleInterop": true,

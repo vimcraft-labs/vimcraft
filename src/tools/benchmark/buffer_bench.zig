@@ -1,8 +1,8 @@
 const std = @import("std");
-const openvim = @import("openvim");
-const Buffer = openvim.__Buffer;
-const RegisterManager = openvim.__RegisterManager;
-const paste = openvim.__paste;
+const vimcraft = @import("vimcraft");
+const Buffer = vimcraft.__Buffer;
+const RegisterManager = vimcraft.__RegisterManager;
+const paste = vimcraft.__paste;
 const benchmark = @import("benchmark.zig");
 
 /// Create a test file with N lines

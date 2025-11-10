@@ -524,7 +524,7 @@ test "Buffer: load simple content" {
     defer buffer.deinit();
 
     // Create temp file
-    const tmp_path = "/tmp/openvim_test.txt";
+    const tmp_path = "/tmp/vimcraft_test.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();
@@ -549,7 +549,7 @@ test "Buffer: cursor movement" {
     defer buffer.deinit();
 
     // Load content
-    const tmp_path = "/tmp/openvim_test_cursor.txt";
+    const tmp_path = "/tmp/vimcraft_test_cursor.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();

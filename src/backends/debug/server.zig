@@ -6,7 +6,7 @@ const EditorContext = @import("editor_context.zig").EditorContext;
 
 /// Debug server configuration
 pub const ServerConfig = struct {
-    socket_path: ?[]const u8 = null, // Unix socket path (e.g., "/tmp/openvim-debug.sock")
+    socket_path: ?[]const u8 = null, // Unix socket path (e.g., "/tmp/vimcraft-debug.sock")
     use_stdio: bool = true, // Use stdin/stdout for communication
 };
 

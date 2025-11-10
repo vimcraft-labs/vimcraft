@@ -18,9 +18,9 @@ Enable IDE autocomplete and type checking for OpenVim configuration.
 ### 1. Install Dependencies
 
 ```bash
-cd /path/to/openvim
+cd /path/to/vimcraft
 
-# Install @openvim/types package
+# Install @vimcraft/types package
 npm install --save-dev ./packages/types
 ```
 
@@ -32,7 +32,7 @@ npm install --save-dev ./packages/types
     "target": "ES2017",
     "module": "commonjs",
     "lib": ["ES2017"],
-    "outDir": "/Users/yourusername/.config/openvim",
+    "outDir": "/Users/yourusername/.config/vimcraft",
     "rootDir": "./",
     "strict": false,
     "esModuleInterop": true,
@@ -48,7 +48,7 @@ npm install --save-dev ./packages/types
 ### 3. Create init.ts
 
 ```typescript
-/// <reference types="@openvim/types" />
+/// <reference types="@vimcraft/types" />
 
 // Now you get full autocomplete!
 vim.opt.cursorLine = true;

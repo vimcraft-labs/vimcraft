@@ -143,7 +143,7 @@
 ### 4. Updated Project Structure
 
 ```
-openvim/
+vimcraft/
 ├── packages/types/
 │   └── src/index.d.ts          ✅ Updated to v0.3.0 (1,091 lines)
 ├── README_ANALYSIS.md           ✅ New (315 lines)

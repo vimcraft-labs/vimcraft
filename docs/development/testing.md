@@ -30,7 +30,7 @@ zig test src/buffer/buffer.zig
 ### Integration Tests
 
 ```bash
-./test_openvim.sh
+./test_vimcraft.sh
 ```
 
 ---

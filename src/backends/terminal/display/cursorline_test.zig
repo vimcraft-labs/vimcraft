@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 // Test cursorline rendering using Debug Protocol
-// This spawns OpenVim in --debug-protocol mode and verifies layer state
+// This spawns Vimcraft in --debug-protocol mode and verifies layer state
 
 test "Cursorline: renders background to cursor layer via debug protocol" {
     const allocator = testing.allocator;
@@ -14,9 +14,9 @@ test "Cursorline: renders background to cursor layer via debug protocol" {
     try test_file.writeAll("Line 1\nLine 2\nLine 3\n");
     test_file.close();
 
-    // Spawn OpenVim in debug protocol mode
+    // Spawn Vimcraft in debug protocol mode
     var child = std.process.Child.init(&[_][]const u8{
-        "./zig-out/bin/openvim",
+        "./zig-out/bin/vimcraft",
         "--debug-protocol",
     }, allocator);
     child.stdin_behavior = .Pipe;
@@ -152,9 +152,9 @@ test "Cursorline: visible in final composited output via debug protocol" {
     try test_file.writeAll("Line 1\nLine 2\nLine 3\n");
     test_file.close();
 
-    // Spawn OpenVim
+    // Spawn Vimcraft
     var child = std.process.Child.init(&[_][]const u8{
-        "./zig-out/bin/openvim",
+        "./zig-out/bin/vimcraft",
         "--debug-protocol",
     }, allocator);
     child.stdin_behavior = .Pipe;

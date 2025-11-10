@@ -1,5 +1,5 @@
 // Animation system public exports
-// This module provides the complete animation API for OpenVim
+// This module provides the complete animation API for Vimcraft
 
 // Core types
 pub const AnimatedValue = @import("editor/animation/value.zig").AnimatedValue;

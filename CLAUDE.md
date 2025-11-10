@@ -38,12 +38,12 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 **❌ WRONG** (one-shot mode wastes 67% on startup):
 ```bash
-echo '{"cmd":"get_state","id":"1"}' | ./zig-out/bin/openvim --debug-protocol  # 195ms (130ms startup!)
+echo '{"cmd":"get_state","id":"1"}' | ./zig-out/bin/vimcraft --debug-protocol  # 195ms (130ms startup!)
 ```
 
 **✅ CORRECT** (background mode - 10x faster):
 ```bash
-./zig-out/bin/openvim --debug-protocol &
+./zig-out/bin/vimcraft --debug-protocol &
 OPENVIM_PID=$!
 echo '{"cmd":"get_state","id":"1"}'        # 65ms (no startup overhead)
 echo '{"cmd":"execute_keys","args":{"keys":"viw"},"id":"2"}'  # 65ms
@@ -76,7 +76,7 @@ kill $OPENVIM_PID
 **Workflow Template for Bugs**:
 ```bash
 # 1. Start in background mode (CRITICAL for multi-command debugging)
-./zig-out/bin/openvim --debug-protocol &
+./zig-out/bin/vimcraft --debug-protocol &
 PID=$!
 
 # 2. Load test case
@@ -149,7 +149,7 @@ kill $PID
 **Rendering Bug Investigation Workflow**:
 ```bash
 # Use debug protocol to inspect each pipeline stage
-./zig-out/bin/openvim --debug-protocol &
+./zig-out/bin/vimcraft --debug-protocol &
 
 # 1. Verify source data (Buffer layer)
 echo '{"cmd":"get_state","id":"1"}'  # Check buffer content
@@ -282,7 +282,7 @@ EOF
     echo '{"cmd":"execute_keys","args":{"keys":"def"},"id":"3"}'
     echo '{"cmd":"get_cursor","id":"4"}'
     echo '{"cmd":"shutdown","id":"99"}'
-} | ./zig-out/bin/openvim --debug-protocol
+} | ./zig-out/bin/vimcraft --debug-protocol
 
 # Verify: cursor at (1,3), file contains "abc\ndef"
 ```
@@ -325,7 +325,7 @@ Debug Protocol (--debug-protocol) → Verify end-to-end behavior
 ### Current (Phase 1+2)
 
 ```
-openvim/
+vimcraft/
 ├── src/
 │   ├── main.zig              # Entry point, event loop
 │   ├── buffer/buffer.zig     # Text storage (ArrayList-based)
@@ -363,7 +363,7 @@ This is the **proper solution**, not a workaround.
 
 ```bash
 zig build                          # Build
-./zig-out/bin/openvim <filename>   # Run
+./zig-out/bin/vimcraft <filename>   # Run
 zig build test                     # Test
 zig fmt src/                       # Format (4 spaces)
 ```

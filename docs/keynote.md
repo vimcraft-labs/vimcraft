@@ -99,7 +99,7 @@ agent.navigate.openFile(path)
 ### **Agent 1: Code Analyzer**
 
 ```javascript
-// ~/.config/openvim/agents/analyzer.js
+// ~/.config/vimcraft/agents/analyzer.js
 
 export const analyzer = {
   async analyze(filePath) {
@@ -128,7 +128,7 @@ export const analyzer = {
 ### **Agent 2: Debug Helper**
 
 ```javascript
-// ~/.config/openvim/agents/debug-helper.js
+// ~/.config/vimcraft/agents/debug-helper.js
 
 export const debugHelper = {
   async help(errorMsg) {
@@ -163,7 +163,7 @@ export const debugHelper = {
 ### **Agent 3: Test Generator**
 
 ```javascript
-// ~/.config/openvim/agents/test-generator.js
+// ~/.config/vimcraft/agents/test-generator.js
 
 export const testGen = {
   async generateFor(functionName) {
@@ -262,7 +262,7 @@ export const testGen = {
 **[Terminal]**
 
 ```bash
-$ openvim
+$ vimcraft
 
 # Open OpenVim, see Neovim as always
 
@@ -270,7 +270,7 @@ $ openvim
 # Results in context blocks
 
 # Edit agent:
-:e ~/.config/openvim/agents/analyzer.js
+:e ~/.config/vimcraft/agents/analyzer.js
 
 # Modify for your needs
 

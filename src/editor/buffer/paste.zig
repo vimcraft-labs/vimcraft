@@ -540,7 +540,7 @@ test "paste: single line after cursor" {
     defer register_mgr.deinit();
 
     // Create buffer with content
-    const tmp_path = "/tmp/openvim_paste_test.txt";
+    const tmp_path = "/tmp/vimcraft_paste_test.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();
@@ -578,7 +578,7 @@ test "paste: single line before cursor" {
     defer register_mgr.deinit();
 
     // Create buffer with content
-    const tmp_path = "/tmp/openvim_paste_before.txt";
+    const tmp_path = "/tmp/vimcraft_paste_before.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();
@@ -616,7 +616,7 @@ test "paste: multi-line character-wise after cursor" {
     defer register_mgr.deinit();
 
     // Create buffer with content
-    const tmp_path = "/tmp/openvim_paste_multi.txt";
+    const tmp_path = "/tmp/vimcraft_paste_multi.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();
@@ -658,7 +658,7 @@ test "paste: empty register returns unchanged cursor" {
     defer register_mgr.deinit();
 
     // Create buffer with content
-    const tmp_path = "/tmp/openvim_paste_empty.txt";
+    const tmp_path = "/tmp/vimcraft_paste_empty.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();
@@ -688,7 +688,7 @@ test "paste: block-wise after cursor" {
     defer register_mgr.deinit();
 
     // Create buffer with content
-    const tmp_path = "/tmp/openvim_paste_block_after.txt";
+    const tmp_path = "/tmp/vimcraft_paste_block_after.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();
@@ -734,7 +734,7 @@ test "paste: block-wise before cursor" {
     defer register_mgr.deinit();
 
     // Create buffer with content
-    const tmp_path = "/tmp/openvim_paste_block_before.txt";
+    const tmp_path = "/tmp/vimcraft_paste_block_before.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();
@@ -780,7 +780,7 @@ test "paste: block-wise with padding (short lines)" {
     defer register_mgr.deinit();
 
     // Create buffer with short lines
-    const tmp_path = "/tmp/openvim_paste_block_pad.txt";
+    const tmp_path = "/tmp/vimcraft_paste_block_pad.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();

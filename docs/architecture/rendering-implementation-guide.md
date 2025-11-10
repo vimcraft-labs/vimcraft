@@ -371,7 +371,7 @@ zig build test
 
 Manual testing with terminal:
 ```bash
-./zig-out/bin/openvim test_file.txt
+./zig-out/bin/vimcraft test_file.txt
 ```
 
 Check:
@@ -384,7 +384,7 @@ Check:
 
 Benchmark with large files:
 ```bash
-./zig-out/bin/openvim --bench large_file.txt
+./zig-out/bin/vimcraft --bench large_file.txt
 ```
 
 Should see:
@@ -405,7 +405,7 @@ const ENABLE_LOGGING = true;  // Set to true
 
 Then run with:
 ```bash
-./zig-out/bin/openvim file.txt 2>debug.log
+./zig-out/bin/vimcraft file.txt 2>debug.log
 ```
 
 Check debug.log for timing info.

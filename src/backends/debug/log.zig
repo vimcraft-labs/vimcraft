@@ -4,7 +4,7 @@ var log_file: ?std.fs.File = null;
 var log_mutex = std.Thread.Mutex{};
 
 pub fn init() !void {
-    log_file = try std.fs.cwd().createFile("/tmp/openvim_debug.log", .{ .truncate = true });
+    log_file = try std.fs.cwd().createFile("/tmp/vimcraft_debug.log", .{ .truncate = true });
 }
 
 pub fn deinit() void {

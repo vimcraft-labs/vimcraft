@@ -28,15 +28,15 @@ const hermes_c = @cImport({
     @cInclude("system/jsi/hermes_c_api.h");
 });
 
-/// OpenVim - Neovim-compatible editor written in Zig
+/// Vimcraft - Neovim-compatible editor written in Zig
 /// Phase 1+2+3+4: Text display, Vim navigation, text editing, and JavaScript config
 ///
 /// Modes:
-///   openvim <file>           - Interactive editor
-///   openvim --debug <file>   - Interactive editor with Chrome DevTools debugging
-///   openvim --test <file>    - Run test script
-///   openvim --repl           - Interactive debugging REPL
-///   openvim --help           - Show help
+///   vc <file>           - Interactive editor
+///   vc --debug <file>   - Interactive editor with Chrome DevTools debugging
+///   vc --test <file>    - Run test script
+///   vc --repl           - Interactive debugging REPL
+///   vc --help           - Show help
 
 /// Pending command for multi-key sequences (like dd, dw)
 const PendingCommand = struct {
@@ -259,14 +259,14 @@ pub fn main() !void {
     } else if (std.mem.eql(u8, first_arg, "--debug")) {
         if (args.len < 3) {
             std.debug.print("Error: --debug requires a file\n", .{});
-            std.debug.print("Usage: openvim --debug <file>\n", .{});
+            std.debug.print("Usage: vc --debug <file>\n", .{});
             return;
         }
         return try runEditorWithDebugger(allocator, args[2]);
     } else if (std.mem.eql(u8, first_arg, "--test")) {
         if (args.len < 3) {
             std.debug.print("Error: --test requires a test file\n", .{});
-            std.debug.print("Usage: openvim --test <test_file>\n", .{});
+            std.debug.print("Usage: vc --test <test_file>\n", .{});
             return;
         }
         return try runTestMode(allocator, args[2]);
@@ -281,15 +281,15 @@ pub fn main() !void {
 /// Print help message
 fn printHelp() void {
     const help =
-        \\OpenVim - Neovim-compatible text editor
+        \\Vimcraft - Neovim-compatible text editor
         \\
         \\Usage:
-        \\  openvim <file>                 Open file in interactive editor
-        \\  openvim --debug <file>         Open file with Chrome DevTools debugging
-        \\  openvim --debug-protocol       Start debug protocol server (for ovdb)
-        \\  openvim --test <test_file>     Run automated test script
-        \\  openvim --repl                 Interactive debugging REPL
-        \\  openvim --help                 Show this help message
+        \\  vc <file>                 Open file in interactive editor
+        \\  vc --debug <file>         Open file with Chrome DevTools debugging
+        \\  vc --debug-protocol       Start debug protocol server (for ovdb)
+        \\  vc --test <test_file>     Run automated test script
+        \\  vc --repl                 Interactive debugging REPL
+        \\  vc --help                 Show this help message
         \\
         \\Interactive Mode:
         \\  Normal Vim keybindings (hjkl, i/a/o, dd/dw, u, :w, :q, :debug, etc.)
@@ -310,16 +310,16 @@ fn printHelp() void {
         \\  Type 'help' for available commands, 'quit' to exit
         \\
         \\Examples:
-        \\  openvim myfile.txt            # Edit a file
-        \\  openvim --test bug.test       # Run test script
-        \\  openvim --repl                # Start debugging REPL
-        \\  openvim --debug-protocol      # Start debug server (used by ovdb)
+        \\  vc myfile.txt            # Edit a file
+        \\  vc --test bug.test       # Run test script
+        \\  vc --repl                # Start debugging REPL
+        \\  vc --debug-protocol      # Start debug server (used by ovdb)
         \\
     ;
     std.debug.print("{s}", .{help});
 }
 
-/// Load configuration from ~/.config/openvim/init.js
+/// Load configuration from ~/.config/vimcraft/init.js
 /// NOTE: Caller must call jsi_api.initJSI() before calling this function
 fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightConfig, debugger_state: *DebuggerState) !void {
     // Get config paths
@@ -823,7 +823,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
     // Load configuration from init.js (but NOT plugins yet)
     if (paths.initJsExists()) {
-        debugger.log("OpenVim: Loading init.js...", .info);
+        debugger.log("Vimcraft: Loading init.js...", .info);
         jsi_api.loadConfig(@ptrCast(runtime), paths.init_js_path, allocator) catch |err| {
             const msg = try std.fmt.allocPrint(allocator, "Failed to load init.js: {}", .{err});
             defer allocator.free(msg);
@@ -1015,7 +1015,7 @@ fn runTestMode(allocator: std.mem.Allocator, test_file_path: []const u8) !void {
 
     var harness = TestHarness.init(allocator, &buffer, &display, &mode_manager, &edit_ops, stdout_file);
 
-    try stdout.print("=== OpenVim Test Mode ===\n", .{});
+    try stdout.print("=== Vimcraft Test Mode ===\n", .{});
     try stdout.print("Running: {s}\n\n", .{test_file_path});
 
     // Read test file
@@ -1091,7 +1091,7 @@ fn runREPL(allocator: std.mem.Allocator) !void {
     var stdin_reader = stdin_file.reader(&stdin_buf);
     const stdin = &stdin_reader.interface;
 
-    try stdout.print("\n=== OpenVim Debug REPL ===\n", .{});
+    try stdout.print("\n=== Vimcraft Debug REPL ===\n", .{});
     try stdout.print("Interactive debugging mode\n", .{});
     try stdout.print("Type 'help' for commands, 'quit' to exit\n\n", .{});
 

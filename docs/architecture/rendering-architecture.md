@@ -10,7 +10,7 @@
 ## Table of Contents
 
 1. [Executive Summary](#executive-summary)
-2. [Current OpenVim Rendering Implementation](#current-openvim-rendering-implementation)
+2. [Current OpenVim Rendering Implementation](#current-vimcraft-rendering-implementation)
 3. [Reference Architecture Analysis](#reference-architecture-analysis)
 4. [React-like Concepts for Terminal Rendering](#react-like-concepts-for-terminal-rendering)
 5. [Plugin Requirements Analysis](#plugin-requirements-analysis)

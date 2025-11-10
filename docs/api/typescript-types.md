@@ -19,13 +19,13 @@ OpenVim now has comprehensive TypeScript type definitions with full autocomplete
 ### Install Types
 
 ```bash
-npm install --save-dev @openvim/types
+npm install --save-dev @vimcraft/types
 ```
 
 ### Configure TypeScript
 
 ```typescript
-/// <reference types="@openvim/types" />
+/// <reference types="@vimcraft/types" />
 
 // Your config here with full type support!
 ```
@@ -151,7 +151,7 @@ vim.clearHighlight('Comment');
 ## Example Configuration
 
 ```typescript
-/// <reference types="@openvim/types" />
+/// <reference types="@vimcraft/types" />
 
 const colors = {
   bg: '#1e1e1e',
@@ -192,7 +192,7 @@ console.log('✅ Config loaded!');
 # Edit init.ts
 vim init.ts
 
-# Build to ~/.config/openvim/init.js
+# Build to ~/.config/vimcraft/init.js
 npm run build:config
 
 # Watch mode (auto-rebuild on changes)

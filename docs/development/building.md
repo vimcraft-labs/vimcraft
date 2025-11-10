@@ -21,7 +21,7 @@ Build system and development setup.
 zig build
 ```
 
-Binary: `./zig-out/bin/openvim`
+Binary: `./zig-out/bin/vimcraft`
 
 ### Development Build
 

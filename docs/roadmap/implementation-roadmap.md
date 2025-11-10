@@ -27,7 +27,7 @@ OpenVim aims to create a **Neovim-compatible text editor** with:
 ```
 ┌─────────────────────────────────────────────────────┐
 │  Layer 4: User Configuration (init.js)              │
-│  - User's ~/.config/openvim/init.js                 │
+│  - User's ~/.config/vimcraft/init.js                 │
 │  - Plugins loaded from plugin/**/*.js               │
 │  - File-type plugins from ftplugin/**/*.js          │
 └─────────────────────────────────────────────────────┘
@@ -226,7 +226,7 @@ OpenVim aims to create a **Neovim-compatible text editor** with:
 - ✅ vim.g/b/w/t/v/env variable scopes (stub)
 
 **TypeScript Types**:
-- ✅ @openvim/types package v0.3.0
+- ✅ @vimcraft/types package v0.3.0
 - ✅ Full vim.api.* types (150+ functions)
 - ✅ vim.opt interface (80+ options)
 - ✅ vim.keymap types
@@ -333,7 +333,7 @@ src/
 - Event firing
 - Keymap registration
 
-**End-to-End Tests** (test_openvim.sh):
+**End-to-End Tests** (test_vimcraft.sh):
 - Load config
 - Execute operations
 - Verify state
@@ -458,7 +458,7 @@ src/
 **API Layer**: Expose nvim_* functions AND ergonomic wrappers
 - Reason: Power users want low-level, beginners want simple
 
-**Configuration**: JavaScript in ~/.config/openvim/init.js
+**Configuration**: JavaScript in ~/.config/vimcraft/init.js
 - Reason: Neovim-style but with JavaScript instead of Lua
 
 ---
@@ -567,7 +567,7 @@ src/
 zig build
 
 # Run with config
-./zig-out/bin/openvim init.ts
+./zig-out/bin/vimcraft init.ts
 
 # Run tests
 zig build test
@@ -579,7 +579,7 @@ npm run build:config
 npm run watch:config
 
 # Test specific feature
-./test_openvim.sh
+./test_vimcraft.sh
 ```
 
 ### Coding Standards
@@ -592,7 +592,7 @@ npm run watch:config
 
 **JavaScript/TypeScript**:
 - Use TypeScript for types
-- Follow @openvim/types interfaces
+- Follow @vimcraft/types interfaces
 - Test with hot reload
 
 **Documentation**:

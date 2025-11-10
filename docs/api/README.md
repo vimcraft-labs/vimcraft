@@ -71,10 +71,10 @@ All APIs are fully typed with TypeScript for excellent IDE support.
 - Examples for common use cases
 
 ### [TypeScript Types](./typescript-types.md)
-**Purpose**: Guide to using @openvim/types package
+**Purpose**: Guide to using @vimcraft/types package
 **Read if**: You want IDE autocomplete and type checking
 **Key topics**:
-- Installing @openvim/types
+- Installing @vimcraft/types
 - Setting up tsconfig.json
 - Using types in init.ts
 - Full type coverage

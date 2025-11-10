@@ -1,5 +1,5 @@
 {
-  "name": "openvim",
+  "name": "vimcraft",
   "version": "1.0.0",
   "description": "**Status**: ✅ Zig executes JavaScript via Hermes + JSI bridge working",
   "main": "init.js",
@@ -25,7 +25,7 @@
   },
   "homepage": "https://github.com/vimcraft-labs/vimcraft#readme",
   "devDependencies": {
-    "@openvim/types": "file:packages/types"
+    "@vimcraft/types": "file:packages/types"
   },
   "packageManager": "yarn@4.10.3"
 }

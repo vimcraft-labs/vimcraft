@@ -1,6 +1,6 @@
 # Test with assertions - verify correct behavior
 
-LOAD /tmp/test_openvim.txt
+LOAD /tmp/test_vimcraft.txt
 
 # Verify initial state
 ASSERT_LINES 3

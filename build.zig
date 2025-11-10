@@ -116,10 +116,10 @@ pub fn build(b: *std.Build) void {
     // rather than creating a separate static library
 
     // ============================================================================
-    // Main OpenVim executable
+    // Main Vimcraft executable
     // ============================================================================
     const exe = b.addExecutable(.{
-        .name = "openvim",
+        .name = "vc",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -269,23 +269,23 @@ pub fn build(b: *std.Build) void {
     // ============================================================================
     // Benchmark Suite
     // ============================================================================
-    // Create a module for benchmark that can access all openvim modules
+    // Create a module for benchmark that can access all vimcraft modules
     const bench_root_module = b.createModule(.{
         .root_source_file = b.path("src/tools/benchmark/main.zig"),
         .target = target,
         .optimize = .ReleaseFast, // Use optimized build for benchmarks
     });
 
-    // Add openvim modules as imports (with uucode dependency)
-    const openvim_module_for_bench = b.createModule(.{
+    // Add vimcraft modules as imports (with uucode dependency)
+    const vimcraft_module_for_bench = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
     });
-    openvim_module_for_bench.addImport("uucode", uucode_module);
+    vimcraft_module_for_bench.addImport("uucode", uucode_module);
 
-    bench_root_module.addImport("openvim", openvim_module_for_bench);
+    bench_root_module.addImport("vimcraft", vimcraft_module_for_bench);
 
     const bench = b.addExecutable(.{
-        .name = "openvim-bench",
+        .name = "vc-bench",
         .root_module = bench_root_module,
     });
 
@@ -366,7 +366,7 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const run_step = b.step("run", "Run OpenVim");
+    const run_step = b.step("run", "Run Vimcraft");
     run_step.dependOn(&run_cmd.step);
 
     // ============================================================================
@@ -462,5 +462,5 @@ pub fn build(b: *std.Build) void {
     // The previous Makefile.hermes workaround is no longer needed for the main
     // executable. It remains available for standalone demos/testing.
     //
-    // JavaScript configuration is loaded from ~/.config/openvim/init.js
+    // JavaScript configuration is loaded from ~/.config/vimcraft/init.js
 }

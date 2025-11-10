@@ -9,7 +9,7 @@ pub fn main() !void {
 
     std.debug.print("\n", .{});
     std.debug.print("╔════════════════════════════════════════════════════════════╗\n", .{});
-    std.debug.print("║         OpenVim Performance Benchmark Suite                ║\n", .{});
+    std.debug.print("║        Vimcraft Performance Benchmark Suite                ║\n", .{});
     std.debug.print("║         Target: <16ms per operation (60fps)                ║\n", .{});
     std.debug.print("╚════════════════════════════════════════════════════════════╝\n", .{});
     std.debug.print("\n", .{});

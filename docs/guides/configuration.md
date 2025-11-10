@@ -9,13 +9,13 @@ Learn how to configure OpenVim with init.js and TypeScript.
 OpenVim uses JavaScript for configuration, similar to Neovim's Lua. Your config file is located at:
 
 ```
-~/.config/openvim/init.js
+~/.config/vimcraft/init.js
 ```
 
 With TypeScript, you can use:
 
 ```
-~/.config/openvim/init.ts
+~/.config/vimcraft/init.ts
 ```
 
 ---
@@ -25,7 +25,7 @@ With TypeScript, you can use:
 ### Setting Options
 
 ```javascript
-// ~/.config/openvim/init.js
+// ~/.config/vimcraft/init.js
 
 // Display options
 vim.opt.number = true;
@@ -74,7 +74,7 @@ vim.b.filetype = 'javascript';
 OpenVim automatically reloads config when you save the file!
 
 ```javascript
-// Edit ~/.config/openvim/init.js
+// Edit ~/.config/vimcraft/init.js
 // Save the file
 // Config reloads automatically - no restart needed!
 
@@ -88,7 +88,7 @@ console.log('Config reloaded!');
 ### Organizing Your Config
 
 ```javascript
-// ~/.config/openvim/init.js
+// ~/.config/vimcraft/init.js
 
 // Colors
 const colors = require('./colors.js');

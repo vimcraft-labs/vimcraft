@@ -1,5 +1,5 @@
 // @ts-check
-/// <reference types="@openvim/types" />
+/// <reference types="@vimcraft/types" />
 
 // OpenVim Configuration Example (JavaScript with type checking)
 // Add the @ts-check comment above to enable type checking in VS Code

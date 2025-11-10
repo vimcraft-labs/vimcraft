@@ -1,4 +1,4 @@
-/// <reference types="@openvim/types" />
+/// <reference types="@vimcraft/types" />
 
 // OpenVim Configuration Example (TypeScript)
 // This file demonstrates the typed OpenVim API

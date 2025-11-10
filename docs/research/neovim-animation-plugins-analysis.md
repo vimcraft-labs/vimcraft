@@ -379,7 +379,7 @@ vim.api.nvim__redraw({ win = win, flush = true })  -- Private API!
 **Solution OpenVim Should Provide**:
 ```javascript
 // Plugin API
-const manager = openvim.animation.createManager();
+const manager = vimcraft.animation.createManager();
 
 manager.onFrame((deltaTime) => {
     // Called 60-120 times per second by Zig
@@ -424,7 +424,7 @@ const scrollY = Animated.Value(0);
 const opacity = Animated.Value(1);
 
 scrollY.addListener((value) => {
-    openvim.viewport.setScrollY(value);
+    vimcraft.viewport.setScrollY(value);
 });
 ```
 
@@ -503,7 +503,7 @@ Animated.spring(scrollY, {
 
 **Solution OpenVim Should Provide**:
 ```javascript
-openvim.on('scroll', (event) => {
+vimcraft.on('scroll', (event) => {
     if (event.velocity) {
         Animated.decay(scrollY, {
             velocity: event.velocity,
@@ -524,10 +524,10 @@ openvim.on('scroll', (event) => {
 **Solution OpenVim Should Provide**:
 ```javascript
 // Debug API
-openvim.animation.getActiveAnimations()  // List all running
-openvim.animation.pause()                // Pause all
-openvim.animation.resume()               // Resume all
-openvim.animation.setSpeed(0.5)          // Slow-mo for debugging
+vimcraft.animation.getActiveAnimations()  // List all running
+vimcraft.animation.pause()                // Pause all
+vimcraft.animation.resume()               // Resume all
+vimcraft.animation.setSpeed(0.5)          // Slow-mo for debugging
 ```
 
 **Benefits**:
@@ -564,7 +564,7 @@ AnimationAPI (timing, spring, decay, parallel, sequence)
 
 ```javascript
 // React Native Reanimated-style API
-const Animated = openvim.animation;
+const Animated = vimcraft.animation;
 
 const scrollY = Animated.Value(0);
 const opacity = Animated.Value(1);

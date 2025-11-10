@@ -1,10 +1,10 @@
 const std = @import("std");
-const openvim = @import("openvim");
-const Buffer = openvim.__Buffer;
-const Display = openvim.__Display;
-const VisualState = openvim.__VisualState;
-const YankHighlight = openvim.__YankHighlight;
-const highlights = openvim.__highlights;
+const vimcraft = @import("vimcraft");
+const Buffer = vimcraft.__Buffer;
+const Display = vimcraft.__Display;
+const VisualState = vimcraft.__VisualState;
+const YankHighlight = vimcraft.__YankHighlight;
+const highlights = vimcraft.__highlights;
 const benchmark = @import("benchmark.zig");
 
 /// Create a test file with N lines

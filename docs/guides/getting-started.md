@@ -19,7 +19,7 @@ Quick guide to installing and running OpenVim for the first time.
 
 ```bash
 git clone https://github.com/vimcraft-labs/vimcraft
-cd openvim
+cd vimcraft
 ```
 
 ### 2. Initialize Submodules
@@ -36,7 +36,7 @@ This downloads the Hermes JavaScript engine.
 zig build
 ```
 
-The binary will be at `./zig-out/bin/openvim`.
+The binary will be at `./zig-out/bin/vimcraft`.
 
 ---
 
@@ -45,7 +45,7 @@ The binary will be at `./zig-out/bin/openvim`.
 ### Open a File
 
 ```bash
-./zig-out/bin/openvim README.md
+./zig-out/bin/vimcraft README.md
 ```
 
 ### Basic Navigation
@@ -68,13 +68,13 @@ The binary will be at `./zig-out/bin/openvim`.
 ### 1. Create Config Directory
 
 ```bash
-mkdir -p ~/.config/openvim
+mkdir -p ~/.config/vimcraft
 ```
 
 ### 2. Create init.js
 
 ```bash
-cat > ~/.config/openvim/init.js << 'ENDJS'
+cat > ~/.config/vimcraft/init.js << 'ENDJS'
 // Basic OpenVim configuration
 vim.opt.cursorLine = true;
 console.log('✅ OpenVim ready!');
@@ -86,7 +86,7 @@ ENDJS
 Config loads automatically:
 
 ```bash
-./zig-out/bin/openvim README.md
+./zig-out/bin/vimcraft README.md
 ```
 
 ---
@@ -111,7 +111,7 @@ Run: `git submodule update --init`
 
 ### Config not loading
 
-Check file location: `~/.config/openvim/init.js`
+Check file location: `~/.config/vimcraft/init.js`
 
 ---
 

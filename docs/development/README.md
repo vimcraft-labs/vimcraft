@@ -69,7 +69,7 @@ Welcome to OpenVim development! This guide will help you set up your development
 ```bash
 # Clone repository
 git clone https://github.com/vimcraft-labs/vimcraft
-cd openvim
+cd vimcraft
 
 # Initialize submodules
 git submodule update --init
@@ -81,7 +81,7 @@ zig build
 zig build test
 
 # Run OpenVim
-./zig-out/bin/openvim README.md
+./zig-out/bin/vimcraft README.md
 ```
 
 ### 2. Set Up Development Environment
@@ -97,7 +97,7 @@ npm run build:config
 npm run watch:config &
 
 # Run with hot reload
-./zig-out/bin/openvim init.ts
+./zig-out/bin/vimcraft init.ts
 ```
 
 ### 3. Make Your First Change
@@ -113,7 +113,7 @@ zig build
 zig build test
 
 # Run manual test
-./zig-out/bin/openvim test-file.txt
+./zig-out/bin/vimcraft test-file.txt
 
 # Commit changes
 git add .
@@ -130,7 +130,7 @@ See: [Contributing Guidelines](./contributing.md) for complete workflow.
 ## 🗂️ Project Structure
 
 ```
-openvim/
+vimcraft/
 ├── src/                        # Core editor (Zig)
 │   ├── main.zig               # Entry point
 │   ├── buffer/                # Text buffer management
@@ -179,7 +179,7 @@ git checkout -b feature/my-feature
 zig build && zig build test
 
 # Run manual tests
-./zig-out/bin/openvim test-file.txt
+./zig-out/bin/vimcraft test-file.txt
 
 # Commit incrementally
 git add .
@@ -196,7 +196,7 @@ git push origin feature/my-feature
 npm run watch:config
 
 # Terminal 2: Run OpenVim
-./zig-out/bin/openvim init.ts
+./zig-out/bin/vimcraft init.ts
 
 # Edit init.ts
 # Save file
@@ -213,7 +213,7 @@ zig build test
 zig test src/buffer/buffer.zig
 
 # Run integration tests
-./test_openvim.sh
+./test_vimcraft.sh
 
 # Check for memory leaks (future)
 zig build test -Doptimize=Debug

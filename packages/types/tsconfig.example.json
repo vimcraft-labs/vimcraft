@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["@openvim/types"],
+    "types": ["@vimcraft/types"],
     "moduleResolution": "node"
   },
   "include": ["init.ts"],

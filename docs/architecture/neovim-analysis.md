@@ -11,7 +11,7 @@
 1. [Configuration Interface Reference](#configuration-interface-reference)
 2. [Architecture Overview](#architecture-overview)
 3. [Feature Gap Analysis](#feature-gap-analysis)
-4. [Design Recommendations for OpenVim](#design-recommendations-for-openvim)
+4. [Design Recommendations for OpenVim](#design-recommendations-for-vimcraft)
 5. [Implementation Priority Roadmap](#implementation-priority-roadmap)
 6. [Code Examples & Patterns](#code-examples--patterns)
 
@@ -979,7 +979,7 @@ All complex APIs use named options instead of positional args.
 
 **Structure**:
 ```
-~/.config/openvim/
+~/.config/vimcraft/
 ├── init.lua                    # Main config (compiled from init.js)
 ├── init.js                     # User-friendly entry point
 ├── plugin/
@@ -1000,7 +1000,7 @@ All complex APIs use named options instead of positional args.
 2. **JavaScript API Layer** (user-facing)
    ```javascript
    // init.js
-   const ov = require('openvim');
+   const ov = require('vimcraft');
    ov.keymap.set('n', '<leader>x', () => {
      console.log('hello');
    });
@@ -1126,7 +1126,7 @@ const ExtMark = struct {
 **Recommendation**: Generate type definitions for IDE support
 
 ```typescript
-// types/openvim.d.ts
+// types/vimcraft.d.ts
 declare namespace ov {
   namespace api {
     function nvim_get_current_buf(): number;
@@ -1219,7 +1219,7 @@ ov.keymap.set('n', 'x', 'dd');
    - Hot reload mechanism (refine existing)
 
 3. **Plugin Loader** (1 week)
-   - Auto-load from `~/.config/openvim/plugin/`
+   - Auto-load from `~/.config/vimcraft/plugin/`
    - File type plugins from `ftplugin/`
    - Plugin isolation (separate Hermes contexts? or shared?)
 
@@ -1346,9 +1346,9 @@ pub const OptionsManager = struct {
 ### Example 2: JavaScript Configuration Interface
 
 ```javascript
-// config/openvim.js - User's init file
+// config/vimcraft.js - User's init file
 
-const ov = require('openvim');
+const ov = require('vimcraft');
 
 // Options
 ov.opt.number = true;

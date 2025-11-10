@@ -1,7 +1,7 @@
 .{
-    .name = .openvim,
+    .name = .vimcraft,
     .version = "0.1.0",
-    .fingerprint = 0xb6db4f57c41b94a7,
+    .fingerprint = 0x9727ef55fd2a096f,
     .minimum_zig_version = "0.15.0",
     .paths = .{""},
     .dependencies = .{

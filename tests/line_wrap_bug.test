@@ -2,7 +2,7 @@
 # When typing at end of line 2, text should NOT appear on line 3
 
 # Load the test file
-LOAD /tmp/test_openvim.txt
+LOAD /tmp/test_vimcraft.txt
 
 # Show initial state
 DUMP

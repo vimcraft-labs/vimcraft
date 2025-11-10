@@ -33,7 +33,7 @@
 **stdin/stdout (MCP-Style)**
 ```bash
 # Start OpenVim in debug protocol mode
-./openvim --debug-protocol
+./vimcraft --debug-protocol
 
 # Send JSON commands via stdin
 echo '{"cmd":"get_state","id":"1"}'
@@ -307,7 +307,7 @@ OpenVim can emit events for debugging:
 
 ```bash
 # Start OpenVim in debug mode (background process)
-$ ./openvim --debug-protocol &
+$ ./vimcraft --debug-protocol &
 
 # Send commands via stdin
 $ echo '{"cmd":"load_file","args":{"path":"/tmp/test.txt"},"id":"1"}'
@@ -324,7 +324,7 @@ $ echo '{"cmd":"get_visual","id":"3"}'
 
 ```bash
 # 1. Start OpenVim
-$ ./openvim --debug-protocol > /tmp/responses.jsonl &
+$ ./vimcraft --debug-protocol > /tmp/responses.jsonl &
 
 # 2. Send test sequence
 $ cat > /tmp/test_commands.jsonl << EOF
@@ -335,7 +335,7 @@ $ cat > /tmp/test_commands.jsonl << EOF
 EOF
 
 # 3. Pipe commands
-$ cat /tmp/test_commands.jsonl | ./openvim --debug-protocol
+$ cat /tmp/test_commands.jsonl | ./vimcraft --debug-protocol
 
 # 4. Parse responses (all JSON)
 $ cat /tmp/responses.jsonl | jq '.status'
@@ -359,7 +359,7 @@ src/
 ```bash
 # 1. Claude implements visual mode feature
 # 2. Start OpenVim in debug mode
-$ ./openvim --debug-protocol &
+$ ./vimcraft --debug-protocol &
 
 # 3. Send test sequence via stdin
 $ echo '{"cmd":"load_file","args":{"path":"/tmp/test.txt"},"id":"1"}'

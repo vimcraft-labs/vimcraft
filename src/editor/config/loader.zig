@@ -10,11 +10,11 @@ pub const ConfigPaths = struct {
         // Get home directory
         const home = std.posix.getenv("HOME") orelse return error.NoHomeDir;
 
-        // Config directory: ~/.config/openvim
-        const config_dir = try std.fs.path.join(allocator, &[_][]const u8{ home, ".config", "openvim" });
+        // Config directory: ~/.config/vimcraft
+        const config_dir = try std.fs.path.join(allocator, &[_][]const u8{ home, ".config", "vimcraft" });
         errdefer allocator.free(config_dir);
 
-        // init.js path: ~/.config/openvim/init.js
+        // init.js path: ~/.config/vimcraft/init.js
         const init_js_path = try std.fs.path.join(allocator, &[_][]const u8{ config_dir, "init.js" });
 
         return .{
@@ -58,7 +58,7 @@ pub const ConfigPaths = struct {
         if (self.initJsExists()) return;
 
         const default_config =
-            \\// OpenVim Configuration (JavaScript via Hermes+JSI)
+            \\// Vimcraft Configuration (JavaScript via Hermes+JSI)
             \\// This file is executed on startup
             \\
             \\// Set normal text background and foreground

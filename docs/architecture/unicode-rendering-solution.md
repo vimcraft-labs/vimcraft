@@ -119,7 +119,7 @@ See: `docs/architecture/ghostty-integration-plan.md`
 
 ### Manual Testing
 ```bash
-./zig-out/bin/openvim /tmp/variation_selector_test.txt
+./zig-out/bin/vimcraft /tmp/variation_selector_test.txt
 # Navigate with hjkl
 # Press 'v' for visual mode
 # Verify emoji stable, no flickering

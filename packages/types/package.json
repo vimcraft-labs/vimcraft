@@ -1,5 +1,5 @@
 {
-  "name": "@openvim/types",
+  "name": "@vimcraft/types",
   "version": "0.3.0",
   "description": "TypeScript type definitions for OpenVim configuration API",
   "main": "src/index.d.ts",
@@ -8,7 +8,7 @@
     "src/index.d.ts"
   ],
   "keywords": [
-    "openvim",
+    "vimcraft",
     "vim",
     "neovim",
     "types",

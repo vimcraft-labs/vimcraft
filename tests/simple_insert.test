@@ -1,6 +1,6 @@
 # Simple test - insert at end of line
 
-LOAD /tmp/test_openvim.txt
+LOAD /tmp/test_vimcraft.txt
 DUMP
 
 # Go to line 2

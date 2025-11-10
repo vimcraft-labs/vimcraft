@@ -377,7 +377,7 @@ test "Movement: basic hjkl" {
     defer buffer.deinit();
 
     // Create test file
-    const tmp_path = "/tmp/openvim_test_movement.txt";
+    const tmp_path = "/tmp/vimcraft_test_movement.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();
@@ -412,7 +412,7 @@ test "Movement: line start/end" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    const tmp_path = "/tmp/openvim_test_line.txt";
+    const tmp_path = "/tmp/vimcraft_test_line.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();
@@ -436,7 +436,7 @@ test "Movement: word forward/backward" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    const tmp_path = "/tmp/openvim_test_word.txt";
+    const tmp_path = "/tmp/vimcraft_test_word.txt";
     {
         const file = try std.fs.cwd().createFile(tmp_path, .{});
         defer file.close();

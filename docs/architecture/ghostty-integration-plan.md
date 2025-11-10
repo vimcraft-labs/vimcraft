@@ -155,7 +155,7 @@ Ancient: 𒀀 𒀁 (Cuneiform)
 Math: ∫∬∭ ∮∯∰
 EOF
 
-./zig-out/bin/openvim /tmp/unicode_edge_cases.txt
+./zig-out/bin/vimcraft /tmp/unicode_edge_cases.txt
 ```
 
 Compare rendering with Neovim/Ghostty to verify correctness.

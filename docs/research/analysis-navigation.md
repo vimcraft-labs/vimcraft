@@ -64,7 +64,7 @@ This directory contains a comprehensive analysis of Neovim's configuration inter
 - Phase estimation (3-6: time and complexity)
 
 **Section 4: Design Recommendations for OpenVim**
-- Configuration Architecture (~/.config/openvim/)
+- Configuration Architecture (~/.config/vimcraft/)
 - API Organization (matching Neovim's structure)
 - Options System Design (ov.opt.*)
 - Autocommand Architecture
@@ -259,10 +259,10 @@ This directory contains a comprehensive analysis of Neovim's configuration inter
 
 ### Related Files in OpenVim
 
-- `/Users/le/projects/openvim/CLAUDE.md` - Project overview
-- `/Users/le/projects/openvim/src/main.zig` - Current architecture
-- `/Users/le/projects/openvim/src/config/` - Configuration system
-- `/Users/le/projects/openvim/src/jsi/` - Zig/JavaScript bridge
+- `/Users/le/projects/vimcraft/CLAUDE.md` - Project overview
+- `/Users/le/projects/vimcraft/src/main.zig` - Current architecture
+- `/Users/le/projects/vimcraft/src/config/` - Configuration system
+- `/Users/le/projects/vimcraft/src/jsi/` - Zig/JavaScript bridge
 
 ### Reference Repositories
 
