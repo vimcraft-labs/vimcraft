@@ -1,7 +1,7 @@
 const std = @import("std");
 const Display = @import("display.zig").Display;
-const Buffer = @import("../buffer/buffer.zig").Buffer;
-const highlights = @import("../config/highlights.zig");
+const Buffer = @import("../../../editor/buffer/buffer.zig").Buffer;
+const highlights = @import("../../../editor/config/highlights.zig");
 const VisualState = @import("../visual/visual.zig").VisualState;
 const YankHighlight = @import("../visual/yank_highlight.zig").YankHighlight;
 

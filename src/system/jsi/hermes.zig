@@ -1,5 +1,5 @@
 const std = @import("std");
-const Editor = @import("../editor.zig").Editor;
+const Editor = @import("../../editor/editor.zig").Editor;
 
 /// C API bindings (our wrapper around C++ Hermes)
 const c = @cImport({

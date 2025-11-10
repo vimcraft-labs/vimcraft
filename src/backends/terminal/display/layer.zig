@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ScreenGrid = @import("screen_grid.zig").ScreenGrid;
 const DirtyRectTracker = @import("dirty_rect.zig").DirtyRectTracker;
-const debug_log = @import("../debug/log.zig");
+const debug_log = @import("../../debug/log.zig");
 
 /// Layer z-index constants (Neovim-compatible ordering)
 pub const ZIndex = struct {

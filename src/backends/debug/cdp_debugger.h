@@ -8,7 +8,7 @@
 #ifndef OPENVIM_CDP_DEBUGGER_H
 #define OPENVIM_CDP_DEBUGGER_H
 
-#include "../jsi/hermes_c_api.h"
+#include "../../system/jsi/hermes_c_api.h"
 #include <stdint.h>
 #include <stdbool.h>
 

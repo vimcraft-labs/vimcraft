@@ -6,7 +6,7 @@
 
 #include "cdp_debugger.h"
 #include "websocket_server.h"
-#include "../jsi/hermes_c_api.h"
+#include "../../system/jsi/hermes_c_api.h"
 
 #include <stdio.h>
 #include <string.h>

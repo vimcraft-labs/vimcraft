@@ -189,7 +189,7 @@ pub fn build(b: *std.Build) void {
 
     // Add C++ source files for Hermes+JSI wrapper
     exe.addCSourceFile(.{
-        .file = b.path("src/jsi/hermes_c_api.cpp"),
+        .file = b.path("src/system/jsi/hermes_c_api.cpp"),
         .flags = &[_][]const u8{
             "-std=c++17",
             "-fno-sanitize=all",
@@ -206,7 +206,7 @@ pub fn build(b: *std.Build) void {
 
     // Add CDP debugger C++ files
     exe.addCSourceFile(.{
-        .file = b.path("src/debug/websocket_server.cpp"),
+        .file = b.path("src/backends/debug/websocket_server.cpp"),
         .flags = &[_][]const u8{
             "-std=c++17",
             "-fno-sanitize=all",
@@ -214,7 +214,7 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.addCSourceFile(.{
-        .file = b.path("src/debug/cdp_debugger.cpp"),
+        .file = b.path("src/backends/debug/cdp_debugger.cpp"),
         .flags = &[_][]const u8{
             "-std=c++17",
             "-fno-sanitize=all",
@@ -271,7 +271,7 @@ pub fn build(b: *std.Build) void {
     // ============================================================================
     // Create a module for benchmark that can access all openvim modules
     const bench_root_module = b.createModule(.{
-        .root_source_file = b.path("src/benchmark/main.zig"),
+        .root_source_file = b.path("src/tools/benchmark/main.zig"),
         .target = target,
         .optimize = .ReleaseFast, // Use optimized build for benchmarks
     });
@@ -307,7 +307,7 @@ pub fn build(b: *std.Build) void {
 
     // Add C++ source files
     bench.addCSourceFile(.{
-        .file = b.path("src/jsi/hermes_c_api.cpp"),
+        .file = b.path("src/system/jsi/hermes_c_api.cpp"),
         .flags = &[_][]const u8{
             "-std=c++17",
             "-fno-sanitize=all",
@@ -323,7 +323,7 @@ pub fn build(b: *std.Build) void {
     });
 
     bench.addCSourceFile(.{
-        .file = b.path("src/debug/websocket_server.cpp"),
+        .file = b.path("src/backends/debug/websocket_server.cpp"),
         .flags = &[_][]const u8{
             "-std=c++17",
             "-fno-sanitize=all",
@@ -331,7 +331,7 @@ pub fn build(b: *std.Build) void {
     });
 
     bench.addCSourceFile(.{
-        .file = b.path("src/debug/cdp_debugger.cpp"),
+        .file = b.path("src/backends/debug/cdp_debugger.cpp"),
         .flags = &[_][]const u8{
             "-std=c++17",
             "-fno-sanitize=all",
@@ -407,7 +407,7 @@ pub fn build(b: *std.Build) void {
 
     // Add C++ source files for tests
     unit_tests.addCSourceFile(.{
-        .file = b.path("src/jsi/hermes_c_api.cpp"),
+        .file = b.path("src/system/jsi/hermes_c_api.cpp"),
         .flags = &[_][]const u8{
             "-std=c++17",
             "-fno-sanitize=all",
@@ -423,7 +423,7 @@ pub fn build(b: *std.Build) void {
     });
 
     unit_tests.addCSourceFile(.{
-        .file = b.path("src/debug/websocket_server.cpp"),
+        .file = b.path("src/backends/debug/websocket_server.cpp"),
         .flags = &[_][]const u8{
             "-std=c++17",
             "-fno-sanitize=all",
@@ -431,7 +431,7 @@ pub fn build(b: *std.Build) void {
     });
 
     unit_tests.addCSourceFile(.{
-        .file = b.path("src/debug/cdp_debugger.cpp"),
+        .file = b.path("src/backends/debug/cdp_debugger.cpp"),
         .flags = &[_][]const u8{
             "-std=c++17",
             "-fno-sanitize=all",

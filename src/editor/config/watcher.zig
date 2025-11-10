@@ -1,5 +1,5 @@
 const std = @import("std");
-const uv = @import("../event_loop/libuv.zig").uv;
+const uv = @import("../../system/event_loop/libuv.zig").uv;
 
 /// Configuration file watcher for hot reload
 pub const ConfigWatcher = struct {

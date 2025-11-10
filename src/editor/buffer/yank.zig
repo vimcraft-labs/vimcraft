@@ -1,8 +1,8 @@
 const std = @import("std");
 const Buffer = @import("buffer.zig").Buffer;
-const VisualState = @import("../visual/visual.zig").VisualState;
-const VisualMode = @import("../visual/visual.zig").VisualMode;
-const Position = @import("../visual/visual.zig").Position;
+const VisualState = @import("../../backends/terminal/visual/visual.zig").VisualState;
+const VisualMode = @import("../../backends/terminal/visual/visual.zig").VisualMode;
+const Position = @import("../../backends/terminal/visual/visual.zig").Position;
 const RegisterManager = @import("../register/register.zig").RegisterManager;
 const MotionType = @import("../register/register.zig").MotionType;
 

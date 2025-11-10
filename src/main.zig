@@ -1,30 +1,30 @@
 const std = @import("std");
-const Buffer = @import("buffer/buffer.zig").Buffer;
-const Display = @import("display/display.zig").Display;
-const Mode = @import("mode/mode.zig").Mode;
-const ModeManager = @import("mode/mode.zig").ModeManager;
-const movement = @import("movement/movement.zig");
-const debug_log = @import("debug/log.zig");
-const TestHarness = @import("test/harness.zig").TestHarness;
-const highlights = @import("config/highlights.zig");
-const ConfigPaths = @import("config/loader.zig").ConfigPaths;
-const ConfigWatcher = @import("config/watcher.zig").ConfigWatcher;
-const jsi_api = @import("jsi/jsi_api.zig");
-const event_loop = @import("event_loop/libuv.zig");
+const Buffer = @import("editor/buffer/buffer.zig").Buffer;
+const Display = @import("backends/terminal/display/display.zig").Display;
+const Mode = @import("editor/mode/mode.zig").Mode;
+const ModeManager = @import("editor/mode/mode.zig").ModeManager;
+const movement = @import("editor/movement/movement.zig");
+const debug_log = @import("backends/debug/log.zig");
+const TestHarness = @import("tools/test/harness.zig").TestHarness;
+const highlights = @import("editor/config/highlights.zig");
+const ConfigPaths = @import("editor/config/loader.zig").ConfigPaths;
+const ConfigWatcher = @import("editor/config/watcher.zig").ConfigWatcher;
+const jsi_api = @import("system/jsi/jsi_api.zig");
+const event_loop = @import("system/event_loop/libuv.zig");
 const debug_protocol = @import("debug.zig");
-const VisualState = @import("visual/visual.zig").VisualState;
-const VisualMode = @import("visual/visual.zig").VisualMode;
-const Position = @import("visual/visual.zig").Position;
-const YankHighlight = @import("visual/yank_highlight.zig").YankHighlight;
-const RegisterManager = @import("register/register.zig").RegisterManager;
-const yank = @import("buffer/yank.zig");
-const paste = @import("buffer/paste.zig");
-const cellwidth = @import("display/cellwidth.zig");
-const EditOps = @import("buffer/edit.zig").EditOps;
+const VisualState = @import("backends/terminal/visual/visual.zig").VisualState;
+const VisualMode = @import("backends/terminal/visual/visual.zig").VisualMode;
+const Position = @import("backends/terminal/visual/visual.zig").Position;
+const YankHighlight = @import("backends/terminal/visual/yank_highlight.zig").YankHighlight;
+const RegisterManager = @import("editor/register/register.zig").RegisterManager;
+const yank = @import("editor/buffer/yank.zig");
+const paste = @import("editor/buffer/paste.zig");
+const cellwidth = @import("backends/terminal/display/cellwidth.zig");
+const EditOps = @import("editor/buffer/edit.zig").EditOps;
 
 // Import Hermes C API (use hermes_c namespace to avoid shadowing)
 const hermes_c = @cImport({
-    @cInclude("jsi/hermes_c_api.h");
+    @cInclude("system/jsi/hermes_c_api.h");
 });
 
 /// OpenVim - Neovim-compatible editor written in Zig
@@ -92,7 +92,7 @@ const DebuggerState = struct {
     fn deinit(self: *DebuggerState) void {
         if (self.debugger_ptr) |ptr| {
             if (self.allocator) |alloc| {
-                const Debugger = @import("debug/debugger.zig").Debugger;
+                const Debugger = @import("backends/debug/debugger.zig").Debugger;
                 const debugger = @as(*Debugger, @ptrCast(@alignCast(ptr)));
                 debugger.deinit();
                 alloc.destroy(debugger);
@@ -362,7 +362,7 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
 
 /// Run debug protocol server (headless, stdin/stdout communication)
 fn runDebugProtocol(allocator: std.mem.Allocator) !void {
-    const EditorContext = @import("debug/editor_context.zig").EditorContext;
+    const EditorContext = @import("backends/debug/editor_context.zig").EditorContext;
 
     // Create headless editor context (includes Display for visual debugging)
     var editor_ctx = try EditorContext.init(allocator);
@@ -450,8 +450,8 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
 
 /// Run the interactive editor (normal mode)
 fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
-    const Editor = @import("core/editor.zig").Editor;
-    const TerminalBackend = @import("terminal/backend.zig").TerminalBackend;
+    const Editor = @import("editor/editor.zig").Editor;
+    const TerminalBackend = @import("backends/terminal/backend.zig").TerminalBackend;
 
     // Initialize cellwidth system for proper character width handling
     try cellwidth.initGlobal(allocator);
@@ -719,9 +719,9 @@ fn launchChromeDevTools(port: u16) !void {
 
 /// Run the interactive editor with Chrome DevTools debugging enabled
 fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !void {
-    const Editor = @import("core/editor.zig").Editor;
-    const TerminalBackend = @import("terminal/backend.zig").TerminalBackend;
-    const Debugger = @import("debug/debugger.zig").Debugger;
+    const Editor = @import("editor/editor.zig").Editor;
+    const TerminalBackend = @import("backends/terminal/backend.zig").TerminalBackend;
+    const Debugger = @import("backends/debug/debugger.zig").Debugger;
 
     // Initialize cellwidth system
     try cellwidth.initGlobal(allocator);
@@ -792,8 +792,8 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     // Store debugger pointer in global for callback access
     global_debugger = @ptrCast(&debugger);
 
-    const LogEntry = @import("core/log.zig").LogEntry;
-    const DebuggerLogLevel = @import("debug/debugger.zig").LogLevel;
+    const LogEntry = @import("editor/log.zig").LogEntry;
+    const DebuggerLogLevel = @import("backends/debug/debugger.zig").LogLevel;
 
     const logCallback = struct {
         fn callback(entry: LogEntry) void {
@@ -1218,8 +1218,8 @@ test "main: imports" {
 
 // Import test files for discovery
 comptime {
-    _ = @import("display/cursorline_test.zig");
-    _ = @import("config/highlights_test.zig");
+    _ = @import("backends/terminal/display/cursorline_test.zig");
+    _ = @import("editor/config/highlights_test.zig");
 }
 
 // ============================================================================

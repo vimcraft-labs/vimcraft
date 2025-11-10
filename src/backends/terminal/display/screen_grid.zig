@@ -1,5 +1,5 @@
 const std = @import("std");
-const highlights = @import("../config/highlights.zig");
+const highlights = @import("../../../editor/config/highlights.zig");
 const char_width = @import("char_width.zig");
 
 /// A single cell in the terminal grid

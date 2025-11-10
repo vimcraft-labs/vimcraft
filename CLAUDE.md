@@ -5,6 +5,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 ## Quick Navigation
 
 **Critical Workflows**:
+- [Test-Driven Development (TDD)](#test-driven-development-tdd) - MANDATORY workflow: write tests first
 - [Debug Protocol](#debug-protocol--verification-system) - LLM-optimized JSON testing (see [docs/development/debug-protocol.md](docs/development/debug-protocol.md))
 - [Logging Architecture](#logging-architecture) - Use `editor.logger`, not `std.debug.print`
 - [Debugging Principles](#debugging-principles) - 7 proven principles for efficient bug fixing
@@ -178,6 +179,146 @@ editor.logger.debug("BLEND: src={u} dst={u} result={u}", .{src.char, dst.char, r
 ```
 
 **Success Metrics**: Fix in 1-2 iterations (not 5-10), root cause identified (not guessed), verified with debug protocol.
+
+## Test-Driven Development (TDD)
+
+**CRITICAL**: OpenVim strictly follows TDD methodology to ensure correctness and prevent regressions.
+
+### TDD Workflow (MANDATORY)
+
+```
+1. WRITE FAILING TEST FIRST (specify correct behavior)
+2. VERIFY TEST FAILS (confirms test catches the bug)
+3. IMPLEMENT MINIMUM CODE (make test pass)
+4. VERIFY TEST PASSES (confirms fix works)
+5. REFACTOR IF NEEDED (improve code while tests pass)
+```
+
+### Why TDD Matters
+
+**Anti-Pattern** (testing current behavior):
+```zig
+// ❌ WRONG: Test validates what code DOES (buggy behavior)
+test "o command" {
+    try editor.executeKeys("o");
+    const result = editor.buffer.content.items;
+    try std.testing.expectEqualStrings("ab\nc", result); // Tests the BUG!
+}
+```
+
+**Correct Pattern** (testing desired behavior):
+```zig
+// ✅ CORRECT: Test specifies what code SHOULD do
+test "o command opens line AFTER current line" {
+    // Setup: "abc\n"
+    try editor.buffer.content.appendSlice(allocator, "abc\n");
+    try editor.buffer.buildLineIndex();
+
+    // Execute 'o' from position (0,0)
+    try editor.executeKeys("o");
+
+    // Expected: Cursor at (1,0), mode INSERT, buffer unchanged except newline added
+    try std.testing.expectEqual(@as(usize, 1), editor.buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.col);
+    try std.testing.expect(editor.mode_manager.isInsert());
+    // Verify newline was inserted AFTER 'abc', not before 'c'
+    try std.testing.expectEqualStrings("abc\n\n", editor.buffer.content.items);
+}
+```
+
+### TDD Rules for OpenVim
+
+1. **Write Test First**: NO exceptions. Test must fail before implementation.
+2. **Test Correct Behavior**: Specify what SHOULD happen, not what currently happens.
+3. **Edge Cases**: Explicitly test boundaries (empty lines, end of file, etc.).
+4. **One Test Per Behavior**: Each test verifies ONE specific behavior.
+5. **Use Debug Protocol**: Verify fixes with `--debug-protocol` for integration testing.
+
+### Example: TDD for Bug Fix
+
+**User Report**: "`o` command includes last character of current line"
+
+**Step 1: Write Failing Test**
+```zig
+test "o command does NOT include last character" {
+    try editor.buffer.content.appendSlice(allocator, "abc\n");
+    try editor.buffer.buildLineIndex();
+    editor.buffer.cursor = .{ .row = 0, .col = 1 }; // At 'b'
+
+    try editor.executeKeys("o");
+    try editor.executeKeys("def"); // Type on new line
+
+    // Should be "abc\ndef", NOT "ab\ndefc"
+    try std.testing.expectEqualStrings("abc\ndef\n", editor.buffer.content.items);
+}
+```
+
+**Step 2: Verify Test Fails** (run `zig build test`)
+- Test output: Expected "abc\ndef\n", got "ab\ndefc\n" ✅ Test correctly detects bug
+
+**Step 3: Implement Fix**
+```zig
+'o' => {
+    const visual_len = self.buffer.getLineLengthVisual(self.buffer.cursor.row);
+    self.buffer.cursor.col = visual_len; // Position AFTER last char
+    try self.buffer.insertChar('\n');
+    self.mode_manager.enterInsert();
+},
+```
+
+**Step 4: Verify Test Passes** (run `zig build test`)
+- All tests pass ✅
+
+**Step 5: Verify with Debug Protocol**
+```bash
+# Create integration test
+cat > /tmp/test_o.txt << 'EOF'
+abc
+EOF
+
+{
+    echo '{"cmd":"load_file","args":{"path":"/tmp/test_o.txt"},"id":"1"}'
+    echo '{"cmd":"execute_keys","args":{"keys":"o"},"id":"2"}'
+    echo '{"cmd":"execute_keys","args":{"keys":"def"},"id":"3"}'
+    echo '{"cmd":"get_cursor","id":"4"}'
+    echo '{"cmd":"shutdown","id":"99"}'
+} | ./zig-out/bin/openvim --debug-protocol
+
+# Verify: cursor at (1,3), file contains "abc\ndef"
+```
+
+### Common TDD Mistakes
+
+1. **Writing Tests After Implementation** → Tests validate bugs instead of catching them
+2. **Testing Implementation Details** → Tests break on refactoring
+3. **Vague Assertions** → Tests pass but don't verify correctness
+4. **No Edge Cases** → Bugs slip through common-case tests
+5. **Ignoring Test Failures** → "I'll fix the test later" → Technical debt
+
+### TDD + Debug Protocol
+
+**Best Practice**: Combine unit tests (fast) with debug protocol (integration):
+
+```
+Unit Test (zig build test)     → Verify logic correctness
+Debug Protocol (--debug-protocol) → Verify end-to-end behavior
+```
+
+**Workflow**:
+1. Write unit test specifying behavior
+2. Implement until unit test passes
+3. Verify with debug protocol to catch integration issues
+4. If debug protocol reveals issues, write MORE unit tests
+
+### Success Criteria
+
+- ✅ Test written BEFORE code
+- ✅ Test fails initially (proves it catches the bug)
+- ✅ Test specifies correct behavior (not current behavior)
+- ✅ Test passes after implementation
+- ✅ Debug protocol confirms fix works end-to-end
+
+**Remember**: Tests are specifications, not validation. Write the test you WISH you had when debugging.
 
 ## Architecture
 

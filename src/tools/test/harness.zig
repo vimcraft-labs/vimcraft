@@ -1,9 +1,9 @@
 const std = @import("std");
-const Buffer = @import("../buffer/buffer.zig").Buffer;
-const Display = @import("../display/display.zig").Display;
-const ModeManager = @import("../mode/mode.zig").ModeManager;
-const movement = @import("../movement/movement.zig");
-const EditOps = @import("../buffer/edit.zig").EditOps;
+const Buffer = @import("../../editor/buffer/buffer.zig").Buffer;
+const Display = @import("../../backends/terminal/display/display.zig").Display;
+const ModeManager = @import("../../editor/mode/mode.zig").ModeManager;
+const movement = @import("../../editor/movement/movement.zig");
+const EditOps = @import("../../editor/buffer/edit.zig").EditOps;
 
 /// Test harness for headless testing
 /// Allows scripting editor commands and seeing visual output

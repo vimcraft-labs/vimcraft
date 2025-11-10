@@ -1,12 +1,12 @@
 const std = @import("std");
-const highlights = @import("../config/highlights.zig");
-const Display = @import("../display/display.zig").Display;
-const Editor = @import("../core/editor.zig").Editor;
-const debug_log = @import("../debug/log.zig");
+const highlights = @import("../../editor/config/highlights.zig");
+const Display = @import("../../backends/terminal/display/display.zig").Display;
+const Editor = @import("../../editor/editor.zig").Editor;
+const debug_log = @import("../../backends/debug/log.zig");
 
 // Import Hermes C API
 const c = @cImport({
-    @cInclude("jsi/hermes_c_api.h");
+    @cInclude("system/jsi/hermes_c_api.h");
 });
 
 /// Context struct for host functions
@@ -25,7 +25,7 @@ var global_display: ?*Display = null;
 var global_editor_with_logger: ?*Editor = null;
 
 /// Global editor context pointer (for headless/debug protocol mode)
-const EditorContext = @import("../debug/editor_context.zig").EditorContext;
+const EditorContext = @import("../../backends/debug/editor_context.zig").EditorContext;
 var global_editor_context: ?*EditorContext = null;
 
 /// Zig host function: setHighlight(name, bg, fg)
@@ -156,7 +156,7 @@ export fn setOption(
 
 // Import CDP debugger for console.log
 const cdp_c = @cImport({
-    @cInclude("debug/cdp_debugger.h");
+    @cInclude("backends/debug/cdp_debugger.h");
 });
 
 /// Zig host function: consoleLog(...args)
@@ -1205,8 +1205,8 @@ export fn renderVirtualText(
     c.hermes_value_destroy(length_val);
 
     // Import Cell type
-    const Cell = @import("../display/screen_grid.zig").Cell;
-    const Color = @import("../config/highlights.zig").Color;
+    const Cell = @import("../../backends/terminal/display/screen_grid.zig").Cell;
+    const Color = @import("../../editor/config/highlights.zig").Color;
 
     // Iterate over cells array
     var i: usize = 0;

@@ -1,15 +1,16 @@
 const std = @import("std");
-const Buffer = @import("../buffer/buffer.zig").Buffer;
-const ModeManager = @import("../mode/mode.zig").ModeManager;
-const EditOps = @import("../buffer/edit.zig").EditOps;
-const RegisterManager = @import("../register/register.zig").RegisterManager;
-const VisualState = @import("../visual/visual.zig").VisualState;
-const YankHighlight = @import("../visual/yank_highlight.zig").YankHighlight;
-const movement = @import("../movement/movement.zig");
-const Position = @import("../visual/visual.zig").Position;
-const yank = @import("../buffer/yank.zig");
-const paste = @import("../buffer/paste.zig");
-const Logger = @import("log.zig").Logger;
+const Buffer = @import("../../editor/buffer/buffer.zig").Buffer;
+const Display = @import("../../backends/terminal/display/display.zig").Display;
+const ModeManager = @import("../../editor/mode/mode.zig").ModeManager;
+const EditOps = @import("../../editor/buffer/edit.zig").EditOps;
+const RegisterManager = @import("../../editor/register/register.zig").RegisterManager;
+const VisualState = @import("../../backends/terminal/visual/visual.zig").VisualState;
+const YankHighlight = @import("../../backends/terminal/visual/yank_highlight.zig").YankHighlight;
+const Logger = @import("../../editor/log.zig").Logger;
+const movement = @import("../../editor/movement/movement.zig");
+const Position = @import("../../backends/terminal/visual/visual.zig").Position;
+const yank = @import("../../editor/buffer/yank.zig");
+const paste = @import("../../editor/buffer/paste.zig");
 
 /// Pending command for multi-key sequences (like dd, dw)
 const PendingCommand = struct {
@@ -91,72 +92,39 @@ const CommandBuffer = struct {
     }
 };
 
-/// Cursor position for override (for animated cursor plugins)
-pub const CursorPosition = struct {
-    row: usize,
-    col: usize,
-};
-
-/// Cursor render position override (for animated cursor plugins)
-pub const CursorRenderOverride = struct {
-    active: bool = false,
-    row: usize = 0,
-    col: usize = 0,
-
-    pub fn clear(self: *CursorRenderOverride) void {
-        self.active = false;
-    }
-
-    pub fn set(self: *CursorRenderOverride, row: usize, col: usize) void {
-        self.active = true;
-        self.row = row;
-        self.col = col;
-    }
-
-    pub fn get(self: *const CursorRenderOverride) ?CursorPosition {
-        if (self.active) {
-            return CursorPosition{ .row = self.row, .col = self.col };
-        }
-        return null;
-    }
-};
-
-/// Headless editor core - no I/O, pure state and logic
-/// This is the single source of truth for editor behavior
-/// Both Terminal backend and Debug backend use this
-pub const Editor = struct {
+/// Complete editor context for headless operation
+/// This is what the debug protocol controls
+pub const EditorContext = struct {
     allocator: std.mem.Allocator,
 
-    // Core state (backends can access these directly)
+    // Core components
     buffer: Buffer,
+    display: Display,
     mode_manager: ModeManager,
     edit_ops: EditOps,
     register_mgr: RegisterManager,
     visual_state: VisualState,
     yank_highlight: YankHighlight,
-
-    // Logger (Core→Backend architecture: Core produces logs, backends consume them)
     logger: Logger,
-
-    // Cursor rendering override (for animated cursor plugins)
-    cursor_render_override: CursorRenderOverride = .{},
 
     // Internal state
     pending_cmd: PendingCommand,
     pending_register: PendingRegister,
     cmd_buffer: CommandBuffer,
 
-    // Viewport hints (for renderers, not actual rendering)
-    viewport_top: usize = 0,
-    viewport_left: usize = 0,
-
-    pub fn init(allocator: std.mem.Allocator) !Editor {
+    pub fn init(allocator: std.mem.Allocator) !EditorContext {
         var buffer = Buffer.init(allocator);
         errdefer buffer.deinit();
 
-        return Editor{
+        var display = try Display.init(allocator);
+        errdefer display.deinit();
+
+        // Note: Display won't actually render since we never call flush() in headless mode
+
+        return EditorContext{
             .allocator = allocator,
             .buffer = buffer,
+            .display = display,
             .mode_manager = ModeManager.init(),
             .edit_ops = EditOps.init(allocator),
             .register_mgr = RegisterManager.init(allocator),
@@ -173,16 +141,17 @@ pub const Editor = struct {
         };
     }
 
-    pub fn deinit(self: *Editor) void {
+    pub fn deinit(self: *EditorContext) void {
         self.buffer.deinit();
+        self.display.deinit();
         self.register_mgr.deinit();
         self.cmd_buffer.deinit();
         self.logger.deinit();
     }
 
     /// Execute a string of keys through the editor
-    /// This is used by both Terminal backend (keyboard input) and Debug backend (JSON commands)
-    pub fn executeKeys(self: *Editor, keys: []const u8) !void {
+    /// This is the main function for debug protocol testing
+    pub fn executeKeys(self: *EditorContext, keys: []const u8) !void {
         // Process each character/sequence
         var i: usize = 0;
         while (i < keys.len) {
@@ -201,13 +170,8 @@ pub const Editor = struct {
         }
     }
 
-    /// Get command buffer string (for status line in command mode)
-    pub fn getCommandString(self: *const Editor) []const u8 {
-        return self.cmd_buffer.getString();
-    }
-
     /// Process a single input sequence
-    fn processInput(self: *Editor, input: []const u8) !void {
+    fn processInput(self: *EditorContext, input: []const u8) !void {
         if (self.mode_manager.isNormal()) {
             try self.handleNormalMode(input);
         } else if (self.mode_manager.isInsert()) {
@@ -220,7 +184,7 @@ pub const Editor = struct {
     }
 
     /// Handle input in Normal mode
-    fn handleNormalMode(self: *Editor, input: []const u8) !void {
+    fn handleNormalMode(self: *EditorContext, input: []const u8) !void {
         // Check for pending register selection first
         if (self.pending_register.isWaitingForName()) {
             if (input.len == 1) {
@@ -252,24 +216,7 @@ pub const Editor = struct {
                             defer self.allocator.free(result.deleted_text);
                             // TODO: Store in register
                         },
-                        '$' => { // d$ - delete to end of line
-                            const result = try self.edit_ops.deleteToEndOfLine(&self.buffer);
-                            defer self.allocator.free(result.deleted_text);
-                            // TODO: Store in register
-                        },
-                        '0' => { // d0 - delete to start of line
-                            const result = try self.edit_ops.deleteToStartOfLine(&self.buffer);
-                            defer self.allocator.free(result.deleted_text);
-                            // TODO: Store in register
-                        },
                         else => {},
-                    }
-                }
-
-                // Handle pending 'g' commands (goto)
-                if (pending == 'g') {
-                    if (char == 'g') { // gg - go to file start
-                        movement.moveToFileStart(&self.buffer);
                     }
                 }
 
@@ -297,56 +244,6 @@ pub const Editor = struct {
                             const end_col = if (text.len > 0) text.len - 1 else 0;
                             const end_pos = Position{ .line = line_num, .col = end_col };
                             self.yank_highlight = YankHighlight.init(start_pos, end_pos, .line);
-
-                            self.pending_register.clear();
-                        },
-                        '$' => { // y$ - yank to end of line
-                            const text = try self.edit_ops.yankToEndOfLine(&self.buffer);
-                            defer self.allocator.free(text);
-
-                            if (text.len > 0) {
-                                const reg = self.pending_register.getSelected() orelse '"';
-                                const lines = [_][]const u8{text};
-                                try self.register_mgr.yank(reg, &lines, .char_wise);
-
-                                const start_pos = Position{ .line = self.buffer.cursor.row, .col = self.buffer.cursor.col };
-                                const end_col = self.buffer.cursor.col + text.len - 1;
-                                const end_pos = Position{ .line = self.buffer.cursor.row, .col = end_col };
-                                self.yank_highlight = YankHighlight.init(start_pos, end_pos, .char);
-                            }
-
-                            self.pending_register.clear();
-                        },
-                        '0' => { // y0 - yank to start of line
-                            const text = try self.edit_ops.yankToStartOfLine(&self.buffer);
-                            defer self.allocator.free(text);
-
-                            if (text.len > 0) {
-                                const reg = self.pending_register.getSelected() orelse '"';
-                                const lines = [_][]const u8{text};
-                                try self.register_mgr.yank(reg, &lines, .char_wise);
-
-                                const start_pos = Position{ .line = self.buffer.cursor.row, .col = 0 };
-                                const end_pos = Position{ .line = self.buffer.cursor.row, .col = self.buffer.cursor.col };
-                                self.yank_highlight = YankHighlight.init(start_pos, end_pos, .char);
-                            }
-
-                            self.pending_register.clear();
-                        },
-                        'w' => { // yw - yank word
-                            const text = try self.edit_ops.yankWord(&self.buffer);
-                            defer self.allocator.free(text);
-
-                            if (text.len > 0) {
-                                const reg = self.pending_register.getSelected() orelse '"';
-                                const lines = [_][]const u8{text};
-                                try self.register_mgr.yank(reg, &lines, .char_wise);
-
-                                const start_pos = Position{ .line = self.buffer.cursor.row, .col = self.buffer.cursor.col };
-                                const end_col = self.buffer.cursor.col + text.len - 1;
-                                const end_pos = Position{ .line = self.buffer.cursor.row, .col = end_col };
-                                self.yank_highlight = YankHighlight.init(start_pos, end_pos, .char);
-                            }
 
                             self.pending_register.clear();
                         },
@@ -396,14 +293,6 @@ pub const Editor = struct {
                 // Yank operations
                 'y' => {
                     self.pending_cmd.set('y');
-                },
-
-                // Goto operations (gg, G)
-                'g' => {
-                    self.pending_cmd.set('g');
-                },
-                'G' => {
-                    movement.moveToFileEnd(&self.buffer);
                 },
 
                 // Paste operations
@@ -473,12 +362,19 @@ pub const Editor = struct {
                     self.mode_manager.enterInsert();
                 },
 
-                // Ctrl+D, Ctrl+U (scrolling - viewport height passed by renderer)
-                4 => {}, // Handled by renderer with actual viewport height
-                21 => {}, // Handled by renderer with actual viewport height
+                // Ctrl+D, Ctrl+U (scrolling - use dummy viewport height)
+                4 => movement.scrollHalfPageDown(&self.buffer, 20),
+                21 => movement.scrollHalfPageUp(&self.buffer, 20),
 
                 else => {},
             }
+        }
+
+        // Multi-character commands
+        if (input.len == 2 and std.mem.eql(u8, input, "gg")) {
+            movement.moveToFileStart(&self.buffer);
+        } else if (input.len == 1 and input[0] == 'G') {
+            movement.moveToFileEnd(&self.buffer);
         }
 
         // Arrow keys
@@ -494,7 +390,7 @@ pub const Editor = struct {
     }
 
     /// Handle input in Insert mode
-    fn handleInsertMode(self: *Editor, input: []const u8) !void {
+    fn handleInsertMode(self: *EditorContext, input: []const u8) !void {
         if (input.len == 1 and input[0] == 27) { // ESC
             self.mode_manager.enterNormal();
             return;
@@ -527,7 +423,7 @@ pub const Editor = struct {
     }
 
     /// Handle input in Visual mode
-    fn handleVisualMode(self: *Editor, input: []const u8) !void {
+    fn handleVisualMode(self: *EditorContext, input: []const u8) !void {
         // Check for pending register selection
         if (self.pending_register.isWaitingForName()) {
             if (input.len == 1) {
@@ -615,7 +511,7 @@ pub const Editor = struct {
     }
 
     /// Handle input in Command mode
-    fn handleCommandMode(self: *Editor, input: []const u8) !void {
+    fn handleCommandMode(self: *EditorContext, input: []const u8) !void {
         if (input.len != 1) return;
 
         const char = input[0];
@@ -631,9 +527,7 @@ pub const Editor = struct {
                 if (std.mem.eql(u8, cmd, "w")) {
                     try self.buffer.saveFile();
                 } else if (std.mem.eql(u8, cmd, "q")) {
-                    // Quit - backends handle this differently
-                    // Terminal backend: exit program
-                    // Debug backend: just exit command mode
+                    // Quit - in headless mode, just exit command mode
                     self.cmd_buffer.clear();
                     self.mode_manager.enterNormal();
                 } else if (std.mem.eql(u8, cmd, "wq")) {
@@ -653,15 +547,6 @@ pub const Editor = struct {
                     try self.cmd_buffer.append(char);
                 }
             },
-        }
-    }
-
-    /// Handle scrolling commands (Ctrl+D, Ctrl+U)
-    /// Terminal backend calls this with actual viewport height
-    pub fn scroll(self: *Editor, direction: enum { up, down }, viewport_height: usize) void {
-        switch (direction) {
-            .down => movement.scrollHalfPageDown(&self.buffer, viewport_height),
-            .up => movement.scrollHalfPageUp(&self.buffer, viewport_height),
         }
     }
 };

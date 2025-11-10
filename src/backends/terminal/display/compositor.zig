@@ -3,9 +3,9 @@ const Allocator = std.mem.Allocator;
 const ScreenGrid = @import("screen_grid.zig").ScreenGrid;
 const Cell = @import("screen_grid.zig").Cell;
 const Layer = @import("layer.zig").Layer;
-const highlights = @import("../config/highlights.zig");
+const highlights = @import("../../../editor/config/highlights.zig");
 const Color = highlights.Color;
-const debug_log = @import("../debug/log.zig");
+const debug_log = @import("../../debug/log.zig");
 
 /// Compositor (blends multiple layers into final output grid)
 /// Uses Porter-Duff alpha compositing for layer blending

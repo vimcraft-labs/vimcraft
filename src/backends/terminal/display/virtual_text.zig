@@ -50,7 +50,7 @@ pub const VirtualTextRenderer = struct {
     /// Note: Coordinates are SCREEN coordinates (includes viewport scroll and gutter offset)
     pub fn applyToGrid(self: *const VirtualTextRenderer, grid: anytype) void {
         const Cell = @import("screen_grid.zig").Cell;
-        const highlights = @import("../config/highlights.zig");
+        const highlights = @import("../../../editor/config/highlights.zig");
 
         // Overlay virtual text cells on grid
         for (self.cells.items) |virt_cell| {

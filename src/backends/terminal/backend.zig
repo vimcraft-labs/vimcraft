@@ -1,7 +1,7 @@
 const std = @import("std");
-const Editor = @import("../core/editor.zig").Editor;
-const Display = @import("../display/display.zig").Display;
-const highlights = @import("../config/highlights.zig");
+const Editor = @import("../../editor/editor.zig").Editor;
+const Display = @import("display/display.zig").Display;
+const highlights = @import("../../editor/config/highlights.zig");
 
 /// Terminal backend for interactive editor
 /// Wraps the headless Editor core and adds terminal I/O

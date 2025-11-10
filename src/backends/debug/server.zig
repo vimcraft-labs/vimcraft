@@ -16,13 +16,13 @@ pub const Server = struct {
     config: ServerConfig,
     running: bool,
     editor: *EditorContext, // Reference to editor context (includes Display for visual debugging)
-    highlight_config: *const @import("../config/highlights.zig").HighlightConfig, // For rendering
+    highlight_config: *const @import("../../editor/config/highlights.zig").HighlightConfig, // For rendering
 
     pub fn init(
         allocator: std.mem.Allocator,
         config: ServerConfig,
         editor: *EditorContext,
-        highlight_config: *const @import("../config/highlights.zig").HighlightConfig,
+        highlight_config: *const @import("../../editor/config/highlights.zig").HighlightConfig,
     ) Server {
         return .{
             .allocator = allocator,
@@ -59,8 +59,8 @@ pub const Server = struct {
 
     /// Run server using stdin/stdout with event loop integration
     fn runStdio(self: *Server) !void {
-        const event_loop = @import("../event_loop/libuv.zig");
-        const jsi_api = @import("../jsi/jsi_api.zig");
+        const event_loop = @import("../../system/event_loop/libuv.zig");
+        const jsi_api = @import("../../system/jsi/jsi_api.zig");
 
         // Import fcntl.h for O_NONBLOCK constant
         const c = @cImport({
@@ -294,7 +294,7 @@ pub const Server = struct {
                 for (&reg_mgr.registers, 0..) |*reg, idx| {
                     if (reg.isEmpty()) continue; // Skip empty registers
 
-                    const name = @import("../register/register.zig").RegisterManager.indexToChar(idx);
+                    const name = @import("../../editor/register/register.zig").RegisterManager.indexToChar(idx);
                     const motion_type_str = reg.motion_type.toString();
 
                     // Duplicate register lines
@@ -523,7 +523,7 @@ pub const Server = struct {
             },
 
             .get_logs => {
-                const CoreLogLevel = @import("../core/log.zig").LogLevel;
+                const CoreLogLevel = @import("../../editor/log.zig").LogLevel;
                 const logger = &self.editor.logger;
                 const args = cmd.args.get_logs;
 

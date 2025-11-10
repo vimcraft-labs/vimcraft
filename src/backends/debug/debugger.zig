@@ -2,7 +2,7 @@ const std = @import("std");
 
 // C imports
 const c = @cImport({
-    @cInclude("debug/cdp_debugger.h");
+    @cInclude("backends/debug/cdp_debugger.h");
 });
 
 /// Chrome DevTools Protocol Debugger
