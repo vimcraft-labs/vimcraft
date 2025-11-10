@@ -1,298 +1,217 @@
-# OpenVim
+# Vimcraft
 
-**A Neovim-compatible text editor written in Zig with JavaScript/TypeScript plugin support**
+**AI-Native Editor Built in Zig**
 
-[![Phase](https://img.shields.io/badge/Phase-1+2%20Complete-success)](docs/roadmap/)
-[![Zig](https://img.shields.io/badge/Zig-0.13+-orange)](https://ziglang.org)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Zig](https://img.shields.io/badge/Zig-0.13+-orange)](https://ziglang.org)
+
+Neovim-compatible with metal speed. Zig + Hermes/JSI for instant performance, TypeScript for powerful plugins. The proven Neovim architecture meets modern AI workflows—no vendor lock-in.
 
 ---
 
-## 🎯 What is OpenVim?
+## Vision
 
-OpenVim is a modern text editor that combines:
-- **Zig core**: Fast, safe systems programming
-- **Hermes runtime**: JavaScript/TypeScript for configuration and plugins
-- **JSI bridge**: Zero-copy integration (Zig ↔ JavaScript)
-- **Neovim API**: Full compatibility for seamless migration
+Vimcraft is built for agentic AI development from the ground up. Unlike traditional editors that bolt on AI features as an afterthought, every aspect of Vimcraft is designed to support AI-powered workflows.
 
-**Vision**: Neovim's power with modern architecture, better performance, and JavaScript plugins.
+**Create custom AI agents. Build intelligent code assistants. Implement autonomous development tools**—all without waiting for vendor updates or fighting against the editor's architecture.
 
 ---
 
-## ✨ Key Features
+## Why Vimcraft?
 
-### Available Now (Phase 1+2) ✅
-- 📝 Text display and file loading
-- ⚡ Full Vim navigation (hjkl, w/b/e, gg/G, 0/$, Ctrl+D/U)
-- 🎮 Mode system (Normal/Insert/Visual)
-- 🖥️ Terminal rendering with ANSI codes
-- 🔄 Hot reload (automatic config reload on save)
-- 🎨 Syntax highlighting configuration
-- ⚙️ Basic configuration API (vim.opt, vim.highlight)
+### 🤖 AI-Native Workflows
 
-### Coming Soon (Phase 3-4) 🚧
-- ✂️ Text editing operators (delete, change, yank/paste)
-- ↩️ Undo/redo system
-- 🔌 Full plugin system (vim.keymap, autocommands)
-- 🎯 Neovim API compatibility
+Built for AI-powered development from day one. Create custom agents, intelligent assistants, and autonomous tools. No vendor lock-in, no waiting for feature releases—just pure creative freedom with TypeScript and proven Neovim APIs.
 
-### Future (Phase 5+) 📅
-- 🔍 Search and replace
-- 🌳 Tree-sitter syntax highlighting
-- 🔧 LSP integration
-- 📊 Diagnostics system
+### ⚡ Metal Speed
+
+Zig core + Hermes JSI delivers instant startup and zero-latency interactions. The Hermes engine (from React Native) provides a blazing-fast JavaScript runtime, while JSI enables direct Zig ↔ TypeScript communication with zero serialization overhead.
+
+### 🛠️ Neovim + TypeScript
+
+Battle-tested Neovim architecture with proven APIs you trust. Your muscle memory stays intact with full Neovim compatibility. Use TypeScript you know—with hot reload, Chrome debugger, and the entire ecosystem—to design your Editor + AI workflow.
+
+---
+
+## Quick Start
+
+### Installation
+
+```bash
+# Clone the repository
+git clone git@github.com:vimcraft-labs/vimcraft.git
+cd vimcraft
+
+# Initialize Hermes submodule
+git submodule update --init
+
+# Build Vimcraft
+zig build
+
+# Run
+./zig-out/bin/openvim myfile.txt
+```
+
+**Requirements**: Zig 0.13+, Git, C++ compiler (clang++)
+
+See [Getting Started Guide](docs/guides/getting-started.md) for detailed instructions.
+
+### Configuration
+
+Create `~/.config/openvim/init.js`:
+
+```javascript
+// Neovim-compatible API
+vim.opt.cursorLine = true;
+vim.opt.number = true;
+
+vim.highlight('Comment', {
+  fg: '#6c6c6c',
+  italic: true
+});
+
+console.log('✅ Vimcraft ready!');
+```
+
+With hot reload built-in, changes apply instantly on save. No plugins needed.
+
+See [Configuration Guide](docs/guides/configuration.md) for the full API.
+
+---
+
+## Architecture
+
+Vimcraft uses a **four-layer architecture** that separates concerns while maintaining zero-copy performance:
+
+```
+┌─────────────────────────────────────┐
+│  User Configuration (init.js)      │  ← Your TypeScript/JavaScript
+│  - Full IDE autocomplete            │
+│  - Hot reload on save               │
+└─────────────────────────────────────┘
+              ↓↑ JSI (zero-copy)
+┌─────────────────────────────────────┐
+│  JavaScript API (vim.*)             │  ← Neovim-compatible
+│  - vim.opt.* (Options)              │
+│  - vim.api.* (Core API)             │
+│  - vim.keymap.* (Keybindings)       │
+└─────────────────────────────────────┘
+              ↓↑ JSI Bridge
+┌─────────────────────────────────────┐
+│  Hermes Runtime                     │  ← React Native proven
+│  - Bytecode compilation             │
+│  - Instant startup                  │
+└─────────────────────────────────────┘
+              ↓↑ C API
+┌─────────────────────────────────────┐
+│  Editor Core (Zig)                  │  ← Metal performance
+│  - Buffer management                │
+│  - Rendering pipeline               │
+│  - Input handling                   │
+└─────────────────────────────────────┘
+```
+
+**Key Innovation**: JSI (JavaScript Interface) enables direct Zig ↔ TypeScript function calls with zero serialization. This is the same technology powering React Native's performance.
+
+See [Architecture Documentation](docs/architecture/) for technical details.
+
+---
+
+## Current Status
+
+Vimcraft is in active development with core functionality working:
+
+**Available Now** ✅
+- Full Vim navigation (hjkl, w/b/e, gg/G, 0/$, f/F/t/T, etc.)
+- Text editing (insert, delete, change, yank/paste)
+- Visual mode (character, line, block selection)
+- Mode system (Normal, Insert, Visual, Command)
+- Registers and clipboard integration
+- Undo/redo system
+- Configuration API (vim.opt, vim.highlight)
+- Hot reload (changes apply on save)
+- Chrome DevTools debugging (with `--debug` flag)
+
+**In Development** 🚧
+- Plugin system (vim.keymap, autocommands)
+- LSP integration
+- Tree-sitter syntax highlighting
+- Advanced Neovim API compatibility
 
 See [Implementation Roadmap](docs/roadmap/) for complete details.
 
 ---
 
-## 🚀 Quick Start
+## Documentation
 
-### Installation
+### For Users
+- **[Getting Started](docs/guides/getting-started.md)** - Install and first run
+- **[Configuration Guide](docs/guides/configuration.md)** - Full API reference
+- **[TypeScript Setup](docs/guides/typescript-setup.md)** - IDE autocomplete
 
-```bash
-# Clone repository
-git clone https://github.com/yourusername/openvim
-cd openvim
+### For Developers
+- **[Architecture Overview](docs/architecture/)** - System design
+- **[Development Guide](docs/development/)** - Contributing
+- **[API Reference](docs/api/)** - Function documentation
 
-# Initialize Hermes submodule
-git submodule update --init
+### Technical Deep Dives
+- **[Four-Layer Design](docs/architecture/four-layer-design.md)** - Core pattern
+- **[JSI Bridge](docs/architecture/)** - Zero-copy integration
+- **[Neovim Analysis](docs/architecture/neovim-analysis.md)** - Design inspiration
 
-# Build OpenVim
-zig build
-
-# Run with a file
-./zig-out/bin/openvim README.md
-```
-
-See [Getting Started Guide](docs/guides/getting-started.md) for detailed instructions.
-
-### Basic Configuration
-
-```bash
-# Create config directory
-mkdir -p ~/.config/openvim
-
-# Create init.js
-cat > ~/.config/openvim/init.js << 'EOF'
-// Basic OpenVim configuration
-vim.opt.cursorLine = true;
-vim.opt.number = true;
-
-vim.highlight('Comment', { fg: '#6c6c6c', italic: true });
-
-console.log('✅ OpenVim ready!');
-EOF
-
-# Run OpenVim (config loads automatically)
-./zig-out/bin/openvim README.md
-```
-
-See [Configuration Guide](docs/guides/configuration.md) for more options.
+**Full Documentation**: [docs/](docs/)
 
 ---
 
-## 📖 Documentation
+## Tech Stack
 
-### 🎯 [Main Documentation Hub](docs/)
-Complete index of all documentation.
-
-### Quick Links by Purpose
-
-**New Users**:
-- [Getting Started](docs/guides/getting-started.md) - Install and run
-- [Configuration Guide](docs/guides/configuration.md) - Customize your setup
-- [TypeScript Setup](docs/guides/typescript-setup.md) - IDE autocomplete
-
-**Understanding the Design**:
-- [Architecture Overview](docs/architecture/) - System design
-- [Four-Layer Design](docs/architecture/four-layer-design.md) - Core pattern
-- [Neovim Analysis](docs/architecture/neovim-analysis.md) - Design inspiration
-
-**API Reference**:
-- [API Quick Reference](docs/api/quick-reference.md) - Fast lookup
-- [vim.opt Reference](docs/api/vim-opt.md) - Editor options
-- [TypeScript Types](docs/api/typescript-types.md) - Type definitions
-
-**Contributing**:
-- [Development Guide](docs/development/) - Setup and workflow
-- [Implementation Roadmap](docs/roadmap/) - What to work on
-- [Contributing Guidelines](docs/development/contributing.md) - How to contribute
-
-**Research & Background**:
-- [Neovim Analysis Summary](docs/research/neovim-analysis-summary.md) - Research overview
-- [Design Decisions](docs/architecture/design-decisions.md) - Why we made choices
-
----
-
-## 🏗️ Architecture
-
-OpenVim follows a **four-layer architecture**:
-
-```
-┌─────────────────────────────────────────────────────┐
-│  Layer 4: User Configuration (init.js)              │
-│  - User's ~/.config/openvim/init.js                 │
-│  - JavaScript/TypeScript for maximum flexibility    │
-└─────────────────────────────────────────────────────┘
-                        ↓↑
-┌─────────────────────────────────────────────────────┐
-│  Layer 3: JavaScript API (vim.*)                    │
-│  - vim.api.* (Core Neovim API)                      │
-│  - vim.opt.* (Ergonomic options)                    │
-│  - vim.keymap.* (Key mappings)                      │
-│  - Full TypeScript type definitions                 │
-└─────────────────────────────────────────────────────┘
-                        ↓↑
-┌─────────────────────────────────────────────────────┐
-│  Layer 2: JSI Bridge (Zero-copy)                    │
-│  - Hermes C API wrapper (hermes_c_api.cpp)          │
-│  - Zig FFI bindings (src/jsi/hermes.zig)            │
-│  - Direct function calls, no serialization          │
-└─────────────────────────────────────────────────────┘
-                        ↓↑
-┌─────────────────────────────────────────────────────┐
-│  Layer 1: Editor Core (Zig)                         │
-│  - Buffer management, rendering, input handling     │
-│  - Performance-critical operations                  │
-│  - Direct hardware access                           │
-└─────────────────────────────────────────────────────┘
-```
-
-See [Architecture Documentation](docs/architecture/) for details.
-
----
-
-## 💡 Why OpenVim?
-
-### vs Neovim
-
-| Feature | Neovim | OpenVim |
-|---------|--------|---------|
-| **Core Language** | C | Zig |
-| **Plugin Language** | Lua | JavaScript/TypeScript |
-| **Startup Time** | ~150ms | < 100ms (target) |
-| **Hot Reload** | Plugin-based | Built-in |
-| **Type System** | Runtime hints | TypeScript native |
-| **API** | 150+ functions | Compatible 150+ |
-
-### Advantages
-
-- **Faster Startup**: Hermes bytecode vs Lua interpreter
-- **Better Hot Reload**: Native support, no plugins needed
-- **Modern Stack**: Zig + JavaScript with full IDE support
-- **Larger Ecosystem**: More developers know JavaScript
-- **Zero-Copy Bridge**: JSI enables direct Zig ↔ JS calls
-
-### Compatibility
-
-OpenVim replicates Neovim's API for easy migration:
-- Same `vim.api.*` functions
-- Similar `vim.opt`, `vim.keymap` interfaces
-- Compatible autocommand system (Phase 4)
-- Easy config porting (Lua → JavaScript)
-
----
-
-## 🎓 Development
-
-### Project Status
-
-- ✅ **Phase 1+2**: Text display & navigation (Complete)
-- 🚧 **Phase 3**: Text editing operators (Next, 4-6 weeks)
-- 📅 **Phase 4**: Plugin system (6-8 weeks)
-- 📅 **Phase 5+**: Advanced features (8+ weeks)
-
-See [Implementation Roadmap](docs/roadmap/implementation-roadmap.md) for complete timeline.
-
-### Contributing
-
-We welcome contributions! Here's how to get started:
-
-1. **Pick a Task**: Check [Roadmap](docs/roadmap/) for current work
-2. **Read Docs**: See [Development Guide](docs/development/)
-3. **Submit PR**: Follow [Contributing Guidelines](docs/development/contributing.md)
-
-**Priority Areas (Phase 3)**:
-- Delete operators (x, dd, dw, d{motion})
-- Change operators (c, cc, cw, c{motion})
-- Yank/paste & registers
-- Undo/redo system
-- Visual mode operators
-
-### Tech Stack
-
-- **Core**: Zig 0.13+ (systems programming language)
-- **Runtime**: Hermes (React Native's JS engine)
+- **Core**: Zig 0.13+ (modern systems programming)
+- **Runtime**: Hermes (React Native's JavaScript engine)
 - **Bridge**: JSI (JavaScript Interface for zero-copy)
-- **Types**: TypeScript (full IDE support)
+- **Config**: TypeScript/JavaScript (full IDE support)
 
-### Build Requirements
-
-- Zig 0.13 or later
-- Git (for submodules)
-- C++ compiler (clang++, for Hermes integration)
-- Node.js (optional, for TypeScript config)
-
-See [Building OpenVim](docs/development/building.md) for complete instructions.
+This combination delivers Neovim compatibility with instant startup, hot reload, and the entire JavaScript ecosystem for plugins.
 
 ---
 
-## 📊 Project Statistics
+## Contributing
 
-- **Core Code**: ~5,000 lines of Zig (Phase 1+2)
-- **Documentation**: 25+ documents, 15,000+ lines
-- **TypeScript Types**: 1,091 lines (v0.3.0)
-- **API Coverage**: 150+ functions typed
-- **Development Time**: Active since October 2024
+We welcome contributions! Vimcraft is built in public with transparent development.
 
----
+**How to Contribute**:
+1. Check [open issues](https://github.com/vimcraft-labs/vimcraft/issues) or [roadmap](docs/roadmap/)
+2. Read the [Development Guide](docs/development/)
+3. Submit a PR following [Contributing Guidelines](docs/development/contributing.md)
 
-## 🔗 Links
-
-- **Documentation**: [docs/](docs/)
-- **Issues**: [GitHub Issues](https://github.com/yourusername/openvim/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/openvim/discussions)
+**Good First Issues**: Check issues labeled `good-first-issue` for beginner-friendly tasks.
 
 ---
 
-## 📝 License
+## Community
 
-MIT License - see [LICENSE](LICENSE) file for details.
-
----
-
-## 🙏 Acknowledgments
-
-- **Neovim**: For API design and inspiration
-- **Hermes**: For fast, lightweight JavaScript runtime
-- **Zig**: For modern systems programming language
-- **Helix**: For design patterns and reference
-- **Ghostty**: For Zig best practices
+- **Issues**: [github.com/vimcraft-labs/vimcraft/issues](https://github.com/vimcraft-labs/vimcraft/issues)
+- **Discussions**: [github.com/vimcraft-labs/vimcraft/discussions](https://github.com/vimcraft-labs/vimcraft/discussions)
 
 ---
 
-## 🗺️ Roadmap Summary
+## License
 
-| Phase | Status | Timeline | Features |
-|-------|--------|----------|----------|
-| 1+2 | ✅ Complete | Done | Display, navigation, basic config |
-| 3 | 🚧 Next | 4-6 weeks | Text editing operators |
-| 4 | 📅 Planned | 6-8 weeks | Plugin system, full vim.opt |
-| 5+ | 📅 Future | 8+ weeks | LSP, Tree-sitter, advanced features |
-
-**Goal**: Full Neovim API parity in 6-12 months
+MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-## 💬 Contact
+## Acknowledgments
 
-- **GitHub Issues**: Bug reports and feature requests
-- **GitHub Discussions**: Questions and community discussion
+Vimcraft builds on the shoulders of giants:
+
+- **Neovim** - API design and architecture inspiration
+- **Hermes** - Fast, proven JavaScript runtime from React Native
+- **Zig** - Modern systems programming language
+- **Helix** - Design patterns and terminal rendering
+- **Ghostty** - Zig best practices and project structure
 
 ---
 
-**Happy coding! 🚀**
+**Built for developers who refuse to compromise.**
 
-For detailed documentation, visit [docs/](docs/)
+For complete documentation, visit [docs/](docs/)

@@ -18,7 +18,7 @@ Quick guide to installing and running OpenVim for the first time.
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/openvim
+git clone https://github.com/vimcraft-labs/vimcraft
 cd openvim
 ```
 

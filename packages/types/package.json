@@ -19,7 +19,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/openvim.git",
+    "url": "https://github.com/vimcraft-labs/vimcraft.git",
     "directory": "packages/types"
   },
   "engines": {

@@ -14,16 +14,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fluctlight-kayaba/openvim.git"
+    "url": "git+https://github.com/vimcraft-labs/vimcraft.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/fluctlight-kayaba/openvim/issues"
+    "url": "https://github.com/vimcraft-labs/vimcraft/issues"
   },
-  "homepage": "https://github.com/fluctlight-kayaba/openvim#readme",
+  "homepage": "https://github.com/vimcraft-labs/vimcraft#readme",
   "devDependencies": {
     "@openvim/types": "file:packages/types"
   },

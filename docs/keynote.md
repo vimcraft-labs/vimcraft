@@ -301,7 +301,7 @@ $ openvim
 **[Link]**
 
 ```
-github.com/openvim/openvim
+github.com/vimcraft-labs/vimcraft
 
 Primitives for agent development.
 Open source. Yours.

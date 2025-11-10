@@ -52,7 +52,7 @@ This section contains practical guides for users and developers getting started 
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/openvim
+git clone https://github.com/vimcraft-labs/vimcraft
 cd openvim
 
 # Initialize Hermes submodule

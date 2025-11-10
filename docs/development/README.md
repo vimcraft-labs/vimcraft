@@ -68,7 +68,7 @@ Welcome to OpenVim development! This guide will help you set up your development
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/openvim
+git clone https://github.com/vimcraft-labs/vimcraft
 cd openvim
 
 # Initialize submodules

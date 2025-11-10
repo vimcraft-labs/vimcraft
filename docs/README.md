@@ -232,7 +232,7 @@ A: See [Implementation Roadmap](./roadmap/implementation-roadmap.md)
 
 ### More Resources
 
-- **GitHub Issues**: [Report bugs or request features](https://github.com/yourusername/openvim/issues)
+- **GitHub Issues**: [Report bugs or request features](https://github.com/vimcraft-labs/vimcraft/issues)
 - **Project README**: [Root README.md](../README.md)
 - **CLAUDE.md**: [Project context for AI assistants](../CLAUDE.md)
 
