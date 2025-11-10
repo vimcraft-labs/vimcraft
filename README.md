@@ -1,7 +1,7 @@
 # Vimcraft
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Zig](https://img.shields.io/badge/Zig-0.13+-orange)](https://ziglang.org)
+[![Zig](https://img.shields.io/badge/Zig-0.15.2+-orange)](https://ziglang.org)
 
 Neovim-compatible text editor built in [Zig](https://ziglang.org/) with [Hermes](https://hermesengine.dev/) JavaScript engine. Designed for building AI-powered development tools with TypeScript/JavaScript plugins using [JSI](https://github.com/react-native-community/discussions-and-proposals/issues/91) zero-copy integration.
 
@@ -13,7 +13,7 @@ Neovim-compatible text editor built in [Zig](https://ziglang.org/) with [Hermes]
 
 ## Installation
 
-**Requirements**: [Zig](https://ziglang.org/) 0.13+, Git, C++ compiler (clang++)
+**Requirements**: [Zig](https://ziglang.org/) 0.15.2+, Git, C++ compiler (clang++)
 
 ```bash
 git clone git@github.com:vimcraft-labs/vimcraft.git
