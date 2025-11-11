@@ -276,8 +276,12 @@ pub fn build(b: *std.Build) void {
     // Link Hermes (conditional: static for releases, dynamic for local dev)
     if (use_static_hermes) {
         // Static linking for portable release binaries (no dylib dependencies)
-        exe.addObjectFile(b.path("vendor/hermes/build/lib/libhermesVMRuntime.a"));
-        exe.addObjectFile(b.path("vendor/hermes/build/jsi/libjsi.a"));
+        // Note: Hermes produces static libraries in lib/VM/ subdirectory
+        exe.addObjectFile(b.path("vendor/hermes/build/lib/VM/libhermesVMRuntimeLean.a"));
+        // JSI can be either static .a or shared .dylib depending on CMake flags
+        // Try static first, fall back to shared if needed
+        const jsi_static = b.path("vendor/hermes/build/jsi/libjsi.a");
+        exe.addObjectFile(jsi_static);
     } else {
         // Dynamic linking for local development
         exe.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
@@ -418,7 +422,7 @@ pub fn build(b: *std.Build) void {
 
     // Link Hermes (conditional: static for releases, dynamic for local dev)
     if (use_static_hermes) {
-        bench.addObjectFile(b.path("vendor/hermes/build/lib/libhermesVMRuntime.a"));
+        bench.addObjectFile(b.path("vendor/hermes/build/lib/VM/libhermesVMRuntimeLean.a"));
         bench.addObjectFile(b.path("vendor/hermes/build/jsi/libjsi.a"));
     } else {
         bench.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
@@ -535,7 +539,7 @@ pub fn build(b: *std.Build) void {
 
     // Link Hermes for tests (conditional: static for releases, dynamic for local dev)
     if (use_static_hermes) {
-        unit_tests.addObjectFile(b.path("vendor/hermes/build/lib/libhermesVMRuntime.a"));
+        unit_tests.addObjectFile(b.path("vendor/hermes/build/lib/VM/libhermesVMRuntimeLean.a"));
         unit_tests.addObjectFile(b.path("vendor/hermes/build/jsi/libjsi.a"));
     } else {
         unit_tests.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));

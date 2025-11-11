@@ -85,37 +85,36 @@ jobs:
 
       - name: Build Hermes
         run: |
-          # Check if Hermes static libraries exist
+          # Check if Hermes VM static library exists
           HERMES_BUILT=false
-          [ -f "vendor/hermes/build/lib/libhermesVMRuntime.a" ] && HERMES_BUILT=true
+          [ -f "vendor/hermes/build/lib/VM/libhermesVMRuntimeLean.a" ] && HERMES_BUILT=true
 
           if [ "$HERMES_BUILT" = false ]; then
-            echo "Hermes libraries not found, building static libraries..."
+            echo "Hermes static libraries not found, building..."
             cd vendor/hermes
             mkdir -p build
             cd build
 
-            # Configure for STATIC linking (no shared libraries)
+            # Configure WITHOUT shared JSI to get static libraries by default
             cmake .. \
               -DCMAKE_BUILD_TYPE=MinSizeRel \
               -DHERMES_ENABLE_DEBUGGER=ON \
               -DHERMES_ENABLE_INTL=OFF \
               -DHERMES_ENABLE_TEST_SUITE=OFF \
               -DHERMES_BUILD_APPLE_DSYM=OFF \
-              -DHERMES_STATIC_LINK=ON \
               -GNinja
 
-            # Build static libraries
-            ninja hermesVMRuntime hermesc jsi
+            # Build required targets (hermesVMRuntime for VM, hermesc for compiler, jsi for JSI)
+            ninja hermesVMRuntimeLean hermesc jsi
 
             echo "✓ Hermes static libraries built successfully"
           else
             echo "✓ Hermes static libraries found in cache"
           fi
 
-          # Verify libraries exist
-          ls -lh vendor/hermes/build/lib/ || echo "Warning: lib directory missing"
-          ls -lh vendor/hermes/build/jsi/ || echo "Warning: jsi directory missing"
+          # Verify static libraries exist
+          ls -lh vendor/hermes/build/lib/VM/ || echo "Warning: VM directory missing"
+          find vendor/hermes/build -name "*.a" -o -name "libjsi.*" | head -10
 
       - name: Cache libuv build
         id: cache-libuv
