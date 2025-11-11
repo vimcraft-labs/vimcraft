@@ -306,6 +306,9 @@ pub fn build(b: *std.Build) void {
         target.result.cpu.arch == b.graph.host.result.cpu.arch;
 
     if (is_native_linux) {
+        // Add OpenSSL include path for C++ compilation
+        exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+
         // Add system library path for OpenSSL (required when using addLibraryPath)
         // Ubuntu/Debian: /usr/lib/x86_64-linux-gnu or /usr/lib/aarch64-linux-gnu
         const lib_dir = switch (target.result.cpu.arch) {
@@ -437,6 +440,8 @@ pub fn build(b: *std.Build) void {
 
     // OpenSSL for Linux (WebSocket SHA1 hashing) - native builds only
     if (is_native_linux) {
+        bench.addIncludePath(.{ .cwd_relative = "/usr/include" });
+
         const lib_dir = switch (target.result.cpu.arch) {
             .x86_64 => "/usr/lib/x86_64-linux-gnu",
             .aarch64 => "/usr/lib/aarch64-linux-gnu",
@@ -555,6 +560,8 @@ pub fn build(b: *std.Build) void {
 
     // OpenSSL for Linux (WebSocket SHA1 hashing) - native builds only
     if (is_native_linux) {
+        unit_tests.addIncludePath(.{ .cwd_relative = "/usr/include" });
+
         const lib_dir = switch (target.result.cpu.arch) {
             .x86_64 => "/usr/lib/x86_64-linux-gnu",
             .aarch64 => "/usr/lib/aarch64-linux-gnu",
