@@ -257,12 +257,15 @@ pub fn build(b: *std.Build) void {
     });
 
     // Add CDP debugger C++ files
+    // On Linux, add OpenSSL include path for websocket_server.cpp
+    const cdp_flags = if (target.result.os.tag == .linux)
+        &[_][]const u8{ "-std=c++17", "-fno-sanitize=all", "-I/usr/include" }
+    else
+        &[_][]const u8{ "-std=c++17", "-fno-sanitize=all" };
+
     exe.addCSourceFile(.{
         .file = b.path("src/backends/debug/websocket_server.cpp"),
-        .flags = &[_][]const u8{
-            "-std=c++17",
-            "-fno-sanitize=all",
-        },
+        .flags = cdp_flags,
     });
 
     exe.addCSourceFile(.{
@@ -306,9 +309,6 @@ pub fn build(b: *std.Build) void {
         target.result.cpu.arch == b.graph.host.result.cpu.arch;
 
     if (is_native_linux) {
-        // Add OpenSSL include path for C++ compilation
-        exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
-
         // Add system library path for OpenSSL (required when using addLibraryPath)
         // Ubuntu/Debian: /usr/lib/x86_64-linux-gnu or /usr/lib/aarch64-linux-gnu
         const lib_dir = switch (target.result.cpu.arch) {
@@ -319,6 +319,9 @@ pub fn build(b: *std.Build) void {
         exe.addLibraryPath(.{ .cwd_relative = lib_dir });
         exe.linkSystemLibrary("ssl");
         exe.linkSystemLibrary("crypto");
+
+        // OpenSSL headers should be found automatically by the system compiler
+        // If not found, the error will be clear and we can add specific paths
     }
 
     b.installArtifact(exe);
@@ -409,10 +412,7 @@ pub fn build(b: *std.Build) void {
 
     bench.addCSourceFile(.{
         .file = b.path("src/backends/debug/websocket_server.cpp"),
-        .flags = &[_][]const u8{
-            "-std=c++17",
-            "-fno-sanitize=all",
-        },
+        .flags = cdp_flags,
     });
 
     bench.addCSourceFile(.{
@@ -440,8 +440,6 @@ pub fn build(b: *std.Build) void {
 
     // OpenSSL for Linux (WebSocket SHA1 hashing) - native builds only
     if (is_native_linux) {
-        bench.addIncludePath(.{ .cwd_relative = "/usr/include" });
-
         const lib_dir = switch (target.result.cpu.arch) {
             .x86_64 => "/usr/lib/x86_64-linux-gnu",
             .aarch64 => "/usr/lib/aarch64-linux-gnu",
@@ -528,10 +526,7 @@ pub fn build(b: *std.Build) void {
 
     unit_tests.addCSourceFile(.{
         .file = b.path("src/backends/debug/websocket_server.cpp"),
-        .flags = &[_][]const u8{
-            "-std=c++17",
-            "-fno-sanitize=all",
-        },
+        .flags = cdp_flags,
     });
 
     unit_tests.addCSourceFile(.{
@@ -560,8 +555,6 @@ pub fn build(b: *std.Build) void {
 
     // OpenSSL for Linux (WebSocket SHA1 hashing) - native builds only
     if (is_native_linux) {
-        unit_tests.addIncludePath(.{ .cwd_relative = "/usr/include" });
-
         const lib_dir = switch (target.result.cpu.arch) {
             .x86_64 => "/usr/lib/x86_64-linux-gnu",
             .aarch64 => "/usr/lib/aarch64-linux-gnu",
