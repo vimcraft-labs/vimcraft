@@ -183,6 +183,12 @@ pub fn build(b: *std.Build) void {
     exe.linkLibC();
     exe.linkLibCpp(); // Required for Hermes C++ runtime
 
+    // Link pthread and dl on Linux (required for shared libraries)
+    if (target.result.os.tag == .linux) {
+        exe.linkSystemLibrary("pthread");
+        exe.linkSystemLibrary("dl");
+    }
+
     // Ghostty components (referenced directly from submodule)
     exe.addIncludePath(b.path("vendor/ghostty/src"));
 
@@ -379,6 +385,12 @@ pub fn build(b: *std.Build) void {
     bench.linkLibC();
     bench.linkLibCpp();
 
+    // Link pthread and dl on Linux (required for shared libraries)
+    if (target.result.os.tag == .linux) {
+        bench.linkSystemLibrary("pthread");
+        bench.linkSystemLibrary("dl");
+    }
+
     // Ghostty components
     bench.addIncludePath(b.path("vendor/ghostty/src"));
 
@@ -482,6 +494,13 @@ pub fn build(b: *std.Build) void {
 
     unit_tests.linkLibC();
     unit_tests.linkLibCpp();
+
+    // Link pthread and dl on Linux (required for shared libraries)
+    if (target.result.os.tag == .linux) {
+        unit_tests.linkSystemLibrary("pthread");
+        unit_tests.linkSystemLibrary("dl");
+    }
+
     unit_tests.addIncludePath(b.path("vendor/ghostty/src"));
 
     // Hermes include paths for tests

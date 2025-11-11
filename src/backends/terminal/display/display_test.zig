@@ -309,7 +309,7 @@ test "Display: short lines work correctly with horizontal scroll" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
     try buffer.insertLine(0, "This is a very long line with lots of content that exceeds terminal width");
-    try buffer.insertLine(1, "Short");  // Very short line
+    try buffer.insertLine(1, "Short"); // Very short line
     try buffer.insertLine(2, "Another very long line that also has lots and lots of text here");
 
     buffer.cursor.row = 0;
