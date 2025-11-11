@@ -26,6 +26,9 @@
 #define SHA1_DIGEST_LENGTH CC_SHA1_DIGEST_LENGTH
 #else
 #include <openssl/sha.h>
+#ifndef SHA1_DIGEST_LENGTH
+#define SHA1_DIGEST_LENGTH 20
+#endif
 #endif
 
 // For base64 encoding

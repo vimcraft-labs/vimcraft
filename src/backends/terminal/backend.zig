@@ -11,6 +11,10 @@ pub const TerminalBackend = struct {
     display: *Display,
     highlight_config: *highlights.HighlightConfig,
 
+    // Bracketed paste state
+    in_paste: bool = false,
+    paste_buffer: std.ArrayList(u8),
+
     pub fn init(
         allocator: std.mem.Allocator,
         editor: *Editor,
@@ -22,7 +26,13 @@ pub const TerminalBackend = struct {
             .editor = editor,
             .display = display,
             .highlight_config = highlight_config,
+            .in_paste = false,
+            .paste_buffer = std.ArrayList(u8){},
         };
+    }
+
+    pub fn deinit(self: *TerminalBackend) void {
+        self.paste_buffer.deinit(self.allocator);
     }
 
     /// Handle input with timeout
@@ -67,6 +77,11 @@ pub const TerminalBackend = struct {
 
         // Handle terminal-specific features first
 
+        // 0. Bracketed paste mode (ESC[200~ ... ESC[201~)
+        if (try self.handleBracketedPaste(input, needs_render)) {
+            return true; // Still collecting paste or paste was processed
+        }
+
         // 1. Mouse clicks (terminal-specific, not in core editor)
         if (try self.handleMouseEvent(input)) {
             return true; // Mouse event handled
@@ -108,6 +123,138 @@ pub const TerminalBackend = struct {
         try self.editor.executeKeys(input);
 
         return true; // Continue running
+    }
+
+    /// Handle bracketed paste sequences (ESC[200~ ... ESC[201~)
+    /// Returns true if input was part of a paste sequence (handled or accumulating)
+    fn handleBracketedPaste(self: *TerminalBackend, input: []const u8, needs_render: *bool) !bool {
+        // Bracketed paste start: ESC[200~
+        const paste_start = "\x1b[200~";
+        // Bracketed paste end: ESC[201~
+        const paste_end = "\x1b[201~";
+
+        // Check if we're starting a paste
+        if (!self.in_paste and input.len >= paste_start.len) {
+            if (std.mem.startsWith(u8, input, paste_start)) {
+                self.in_paste = true;
+                self.paste_buffer.clearRetainingCapacity();
+
+                // Accumulate any remaining bytes after the start sequence
+                const remaining = input[paste_start.len..];
+                if (remaining.len > 0) {
+                    try self.paste_buffer.appendSlice(self.allocator, remaining);
+                }
+
+                return true; // Handled - started paste mode
+            }
+        }
+
+        // If we're in paste mode, accumulate bytes
+        if (self.in_paste) {
+            try self.paste_buffer.appendSlice(self.allocator, input);
+
+            // Check if paste ended
+            if (self.paste_buffer.items.len >= paste_end.len) {
+                // Look for paste end sequence
+                if (std.mem.endsWith(u8, self.paste_buffer.items, paste_end)) {
+                    // Remove the end sequence from buffer
+                    const content_len = self.paste_buffer.items.len - paste_end.len;
+                    const paste_content = self.paste_buffer.items[0..content_len];
+
+                    // Process the paste at current cursor position
+                    if (paste_content.len > 0) {
+                        const Change = @import("../../editor/buffer/buffer.zig").Change;
+
+                        // If in visual mode, delete the selection first (paste replaces selection)
+                        var deletion_undo: ?Change = null;
+                        if (self.editor.mode_manager.isVisual() and self.editor.visual_state.active) {
+                            const visual_ops = @import("../../editor/buffer/visual_ops.zig");
+                            const Position = @import("visual/visual.zig").Position;
+
+                            const cursor_pos = Position{
+                                .line = self.editor.buffer.cursor.row,
+                                .col = self.editor.buffer.cursor.col,
+                            };
+                            const reg = '"'; // Use default register for deleted text
+
+                            // Delete the visual selection (creates an undo entry)
+                            try visual_ops.deleteVisualSelection(
+                                &self.editor.buffer,
+                                self.editor.visual_state,
+                                cursor_pos,
+                                &self.editor.register_mgr,
+                                reg,
+                                self.allocator,
+                            );
+
+                            // Pop the undo entry - we'll create a combined one
+                            if (self.editor.buffer.undo_stack.items.len > 0) {
+                                deletion_undo = self.editor.buffer.undo_stack.pop();
+                            }
+
+                            // Deactivate visual mode
+                            self.editor.visual_state.deactivate();
+                            self.editor.mode_manager.enterNormal();
+                        }
+
+                        // Enter insert mode if not already in it (starts transaction)
+                        const was_insert = self.editor.mode_manager.isInsert();
+                        if (!was_insert) {
+                            self.editor.mode_manager.enterInsert();
+                            self.editor.buffer.beginTransaction();
+                        }
+
+                        // Insert each character at the current position
+                        for (paste_content) |char| {
+                            try self.editor.buffer.insertChar(char);
+                        }
+
+                        // If we had a visual deletion, create combined undo entry
+                        if (deletion_undo) |del_change| {
+                            // Don't commit the transaction normally - create combined entry
+                            if (self.editor.buffer.active_transaction) |trans| {
+                                // Create single undo entry for delete+paste operation
+                                const combined_change = Change{
+                                    .offset = del_change.offset,
+                                    .deleted_text = del_change.deleted_text, // What was deleted (keep ownership)
+                                    .inserted_text = try self.allocator.dupe(u8, trans.text_buffer.items), // What was pasted
+                                    .cursor_before = del_change.cursor_before,
+                                    .cursor_after = trans.cursor_end,
+                                };
+                                try self.editor.buffer.undo_stack.append(self.allocator, combined_change);
+
+                                // Free the empty inserted_text from deletion change
+                                self.allocator.free(del_change.inserted_text);
+
+                                // Clear redo stack (change was made)
+                                for (self.editor.buffer.redo_stack.items) |*c| {
+                                    c.deinit(self.allocator);
+                                }
+                                self.editor.buffer.redo_stack.clearRetainingCapacity();
+
+                                // Discard transaction without committing it
+                                self.editor.buffer.discardTransaction();
+                            }
+                        }
+                        // else: Normal paste (no visual deletion) - transaction will be committed on ESC
+
+                        // Stay in insert mode - user can press ESC to exit normally
+                        // (Matches Vim behavior: paste enters insert mode, replaces visual selection)
+                    }
+
+                    // Reset paste state
+                    self.in_paste = false;
+                    self.paste_buffer.clearRetainingCapacity();
+                    needs_render.* = true;
+
+                    return true; // Paste completed
+                }
+            }
+
+            return true; // Still accumulating paste
+        }
+
+        return false; // Not a paste sequence
     }
 
     /// Handle mouse events (terminal-specific feature)

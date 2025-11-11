@@ -25,6 +25,29 @@ pub const Change = struct {
     }
 };
 
+/// Transaction for grouping multiple changes into a single undo unit
+const Transaction = struct {
+    start_offset: usize,
+    text_buffer: std.ArrayList(u8),
+    cursor_start: Cursor,
+    cursor_end: Cursor,
+    allocator: std.mem.Allocator,
+
+    fn init(allocator: std.mem.Allocator, offset: usize, cursor: Cursor) Transaction {
+        return .{
+            .start_offset = offset,
+            .text_buffer = .empty,
+            .cursor_start = cursor,
+            .cursor_end = cursor,
+            .allocator = allocator,
+        };
+    }
+
+    fn deinit(self: *Transaction) void {
+        self.text_buffer.deinit(self.allocator);
+    }
+};
+
 /// Simple text buffer implementation using ArrayList
 /// This is a minimal implementation - will be replaced with rope later for performance
 pub const Buffer = struct {
@@ -38,6 +61,9 @@ pub const Buffer = struct {
     // Undo/redo
     undo_stack: std.ArrayList(Change),
     redo_stack: std.ArrayList(Change),
+
+    // Transaction grouping (for paste operations)
+    active_transaction: ?Transaction = null,
 
     pub fn init(allocator: std.mem.Allocator) Buffer {
         return .{
@@ -57,6 +83,11 @@ pub const Buffer = struct {
         self.line_starts.deinit(self.allocator);
         if (self.filepath) |path| {
             self.allocator.free(path);
+        }
+
+        // Clean up active transaction if any
+        if (self.active_transaction) |*trans| {
+            trans.deinit();
         }
 
         // Clean up undo/redo stacks
@@ -199,6 +230,49 @@ pub const Buffer = struct {
 
     // ===== Text Modification Functions =====
 
+    /// Start a transaction for grouping multiple changes
+    pub fn beginTransaction(self: *Buffer) void {
+        if (self.active_transaction == null) {
+            const offset = self.getCursorOffset();
+            self.active_transaction = Transaction.init(self.allocator, offset, self.cursor);
+        }
+    }
+
+    /// Commit the active transaction to undo stack
+    pub fn commitTransaction(self: *Buffer) !void {
+        if (self.active_transaction) |*trans| {
+            // Only create change if there's actual content
+            if (trans.text_buffer.items.len > 0) {
+                const change = Change{
+                    .offset = trans.start_offset,
+                    .deleted_text = try self.allocator.alloc(u8, 0),
+                    .inserted_text = try self.allocator.dupe(u8, trans.text_buffer.items),
+                    .cursor_before = trans.cursor_start,
+                    .cursor_after = trans.cursor_end,
+                };
+                try self.undo_stack.append(self.allocator, change);
+
+                // Clear redo stack
+                for (self.redo_stack.items) |*c| {
+                    c.deinit(self.allocator);
+                }
+                self.redo_stack.clearRetainingCapacity();
+            }
+
+            trans.deinit();
+            self.active_transaction = null;
+        }
+    }
+
+    /// Discard the active transaction without creating undo entry
+    /// Used when manually creating a combined undo entry
+    pub fn discardTransaction(self: *Buffer) void {
+        if (self.active_transaction) |*trans| {
+            trans.deinit();
+            self.active_transaction = null;
+        }
+    }
+
     /// Record a change for undo/redo
     pub fn recordChange(self: *Buffer, change: Change) !void {
         try self.undo_stack.append(self.allocator, change);
@@ -212,7 +286,6 @@ pub const Buffer = struct {
     /// Insert character at cursor position
     pub fn insertChar(self: *Buffer, char: u8) !void {
         const offset = self.getCursorOffset();
-        const cursor_before = self.cursor;
 
         // Insert character
         try self.content.insert(self.allocator, offset, char);
@@ -230,15 +303,27 @@ pub const Buffer = struct {
             self.cursor.col += 1;
         }
 
-        // Record change for undo
-        const change = Change{
-            .offset = offset,
-            .deleted_text = try self.allocator.alloc(u8, 0), // Empty - nothing deleted
-            .inserted_text = try self.allocator.dupe(u8, &[_]u8{char}),
-            .cursor_before = cursor_before,
-            .cursor_after = self.cursor,
-        };
-        try self.recordChange(change);
+        // If we're in a transaction, just add to the buffer
+        if (self.active_transaction) |*trans| {
+            try trans.text_buffer.append(self.allocator, char);
+            trans.cursor_end = self.cursor;
+        } else {
+            // No transaction - record individual change (normal typing)
+            const cursor_before = Cursor{
+                .row = if (char == '\n' and self.cursor.row > 0) self.cursor.row - 1 else self.cursor.row,
+                .col = if (char == '\n') 0 else if (self.cursor.col > 0) self.cursor.col - 1 else 0,
+                .goal_column = null,
+            };
+
+            const change = Change{
+                .offset = offset,
+                .deleted_text = try self.allocator.alloc(u8, 0),
+                .inserted_text = try self.allocator.dupe(u8, &[_]u8{char}),
+                .cursor_before = cursor_before,
+                .cursor_after = self.cursor,
+            };
+            try self.recordChange(change);
+        }
 
         self.modified = true;
     }

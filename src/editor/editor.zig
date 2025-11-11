@@ -9,6 +9,7 @@ const movement = @import("movement/movement.zig");
 const Position = @import("../backends/terminal/visual/visual.zig").Position;
 const yank = @import("buffer/yank.zig");
 const paste = @import("buffer/paste.zig");
+const visual_ops = @import("buffer/visual_ops.zig");
 const Logger = @import("log.zig").Logger;
 const text_objects = @import("movement/text_objects/text_objects.zig");
 const TextObjectModifier = text_objects.TextObjectModifier;
@@ -248,6 +249,12 @@ pub const Editor = struct {
         }
     }
 
+    /// Enter insert mode and start a transaction for undo grouping
+    fn enterInsertMode(self: *Editor) void {
+        self.mode_manager.enterInsert();
+        self.buffer.beginTransaction();
+    }
+
     /// Handle input in Normal mode
     fn handleNormalMode(self: *Editor, input: []const u8) !void {
         // Check for pending register selection first
@@ -286,7 +293,7 @@ pub const Editor = struct {
                                 const result = try self.edit_ops.deleteRange(&self.buffer, range, .char);
                                 defer self.allocator.free(result.deleted_text);
                                 // TODO: Store in register
-                                self.mode_manager.enterInsert();
+                                self.enterInsertMode();
                             },
                             'y' => { // Yank text object
                                 const text = range.getText(&self.buffer);
@@ -369,25 +376,25 @@ pub const Editor = struct {
                             const deleted_text = try self.edit_ops.changeRange(&self.buffer, range, .line);
                             defer self.allocator.free(deleted_text);
                             // TODO: Store in register
-                            self.mode_manager.enterInsert();
+                            self.enterInsertMode();
                         },
                         'w' => { // cw - change word
                             const result = try self.edit_ops.deleteWord(&self.buffer);
                             defer self.allocator.free(result.deleted_text);
                             // TODO: Store in register
-                            self.mode_manager.enterInsert();
+                            self.enterInsertMode();
                         },
                         '$' => { // c$ - change to end of line
                             const result = try self.edit_ops.deleteToEndOfLine(&self.buffer);
                             defer self.allocator.free(result.deleted_text);
                             // TODO: Store in register
-                            self.mode_manager.enterInsert();
+                            self.enterInsertMode();
                         },
                         '0' => { // c0 - change to start of line
                             const result = try self.edit_ops.deleteToStartOfLine(&self.buffer);
                             defer self.allocator.free(result.deleted_text);
                             // TODO: Store in register
-                            self.mode_manager.enterInsert();
+                            self.enterInsertMode();
                         },
                         else => {},
                     }
@@ -523,7 +530,7 @@ pub const Editor = struct {
                     const result = try self.edit_ops.deleteToEndOfLine(&self.buffer);
                     defer self.allocator.free(result.deleted_text);
                     // TODO: Store in register
-                    self.mode_manager.enterInsert();
+                    self.enterInsertMode();
                 },
 
                 // Register selection
@@ -585,19 +592,19 @@ pub const Editor = struct {
                 },
 
                 // Enter insert mode
-                'i' => self.mode_manager.enterInsert(),
+                'i' => self.enterInsertMode(),
                 'a' => {
                     movement.moveRight(&self.buffer);
-                    self.mode_manager.enterInsert();
+                    self.enterInsertMode();
                 },
                 'A' => {
                     movement.moveToLineEnd(&self.buffer);
                     movement.moveRight(&self.buffer);
-                    self.mode_manager.enterInsert();
+                    self.enterInsertMode();
                 },
                 'I' => {
                     movement.moveToFirstNonBlank(&self.buffer);
-                    self.mode_manager.enterInsert();
+                    self.enterInsertMode();
                 },
                 'o' => {
                     // Position cursor AFTER last character to insert newline at end of line
@@ -605,13 +612,13 @@ pub const Editor = struct {
                     self.buffer.cursor.col = visual_len;
                     self.buffer.cursor.goal_column = visual_len;
                     try self.buffer.insertChar('\n');
-                    self.mode_manager.enterInsert();
+                    self.enterInsertMode();
                 },
                 'O' => {
                     movement.moveToLineStart(&self.buffer);
                     try self.buffer.insertChar('\n');
                     movement.moveUp(&self.buffer);
-                    self.mode_manager.enterInsert();
+                    self.enterInsertMode();
                 },
 
                 // Ctrl+D, Ctrl+U (scrolling - viewport height passed by renderer)
@@ -637,6 +644,10 @@ pub const Editor = struct {
     /// Handle input in Insert mode
     fn handleInsertMode(self: *Editor, input: []const u8) !void {
         if (input.len == 1 and input[0] == 27) { // ESC
+            // Commit any active transaction before exiting insert mode
+            if (self.buffer.active_transaction != null) {
+                try self.buffer.commitTransaction();
+            }
             self.mode_manager.enterNormal();
             return;
         }
@@ -731,6 +742,36 @@ pub const Editor = struct {
 
                     self.visual_state.deactivate();
                     self.mode_manager.enterNormal();
+                    self.pending_register.clear();
+                },
+
+                // Delete selection
+                'd' => {
+                    const cursor_pos = Position{
+                        .line = self.buffer.cursor.row,
+                        .col = self.buffer.cursor.col,
+                    };
+
+                    const reg = self.pending_register.getSelected() orelse '"';
+                    try visual_ops.deleteVisualSelection(&self.buffer, self.visual_state, cursor_pos, &self.register_mgr, reg, self.allocator);
+
+                    self.visual_state.deactivate();
+                    self.mode_manager.enterNormal();
+                    self.pending_register.clear();
+                },
+
+                // Change selection (delete and enter insert mode)
+                'c' => {
+                    const cursor_pos = Position{
+                        .line = self.buffer.cursor.row,
+                        .col = self.buffer.cursor.col,
+                    };
+
+                    const reg = self.pending_register.getSelected() orelse '"';
+                    try visual_ops.changeVisualSelection(&self.buffer, self.visual_state, cursor_pos, &self.register_mgr, reg, self.allocator);
+
+                    self.visual_state.deactivate();
+                    self.enterInsertMode();
                     self.pending_register.clear();
                 },
 

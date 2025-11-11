@@ -257,9 +257,10 @@ pub fn build(b: *std.Build) void {
     });
 
     // Add CDP debugger C++ files
-    // On Linux, add OpenSSL include path for websocket_server.cpp
+    // On Linux, add OpenSSL headers via -isystem (lower priority than Zig's bundled headers)
+    // Need both /usr/include and architecture-specific directory for OpenSSL headers
     const cdp_flags = if (target.result.os.tag == .linux)
-        &[_][]const u8{ "-std=c++17", "-fno-sanitize=all", "-I/usr/include" }
+        &[_][]const u8{ "-std=c++17", "-fno-sanitize=all", "-isystem", "/usr/include", "-isystem", "/usr/include/x86_64-linux-gnu" }
     else
         &[_][]const u8{ "-std=c++17", "-fno-sanitize=all" };
 
@@ -319,9 +320,6 @@ pub fn build(b: *std.Build) void {
         exe.addLibraryPath(.{ .cwd_relative = lib_dir });
         exe.linkSystemLibrary("ssl");
         exe.linkSystemLibrary("crypto");
-
-        // OpenSSL headers should be found automatically by the system compiler
-        // If not found, the error will be clear and we can add specific paths
     }
 
     b.installArtifact(exe);

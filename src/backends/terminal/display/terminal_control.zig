@@ -44,6 +44,11 @@ pub fn enterRawMode(self: *Display) !void {
         // Button tracking (1000): Report button press/release events
         try write(self, "\x1b[?1006h"); // Enable SGR mouse mode
         try write(self, "\x1b[?1000h"); // Enable mouse button tracking
+
+        // Enable bracketed paste mode
+        // This wraps pasted content in ESC[200~ ... ESC[201~ sequences
+        // Allows us to distinguish between typed and pasted text
+        try write(self, "\x1b[?2004h"); // Enable bracketed paste mode
     }
 }
 
@@ -53,6 +58,9 @@ pub fn exitRawMode(self: *Display) void {
     const builtin = @import("builtin");
 
     if (builtin.os.tag == .linux or builtin.os.tag == .macos) {
+        // Disable bracketed paste mode
+        write(self, "\x1b[?2004l") catch {}; // Disable bracketed paste mode
+
         // Disable mouse tracking
         write(self, "\x1b[?1000l") catch {}; // Disable mouse button tracking
         write(self, "\x1b[?1006l") catch {}; // Disable SGR mouse mode
