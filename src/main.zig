@@ -375,6 +375,10 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     var highlight_config = highlights.HighlightConfig.init(allocator);
     defer highlight_config.deinit();
 
+    const OptionsManager = @import("editor/config/options.zig").OptionsManager;
+    var options_mgr = OptionsManager.init(allocator);
+    defer options_mgr.deinit();
+
     // Initialize JavaScript runtime for config loading
     const runtime_nullable = hermes_c.hermes_runtime_create();
     if (runtime_nullable == null) {
@@ -388,7 +392,7 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     debugger_state.runtime = runtime;
 
     // Register JSI host functions for EditorContext (headless mode)
-    jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &editor_ctx, &editor_ctx.display);
+    jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &options_mgr, &editor_ctx, &editor_ctx.display);
 
     // Load JavaScript config and plugins for headless debugging
     // NOTE: Display exists but won't render output (no terminal flush)
@@ -480,6 +484,10 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var highlight_config = highlights.HighlightConfig.init(allocator);
     defer highlight_config.deinit();
 
+    const OptionsManager = @import("editor/config/options.zig").OptionsManager;
+    var options_mgr = OptionsManager.init(allocator);
+    defer options_mgr.deinit();
+
     // Get config paths for hot reload
     var paths = try ConfigPaths.init(allocator);
     defer paths.deinit();
@@ -512,7 +520,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         debugger_state.runtime = runtime;
 
         // Register JSI host functions (pass editor for cursor hooks and display for trail rendering)
-        jsi_api.initJSI(allocator, @ptrCast(runtime.?), &highlight_config, &editor, &display);
+        jsi_api.initJSI(allocator, @ptrCast(runtime.?), &highlight_config, &options_mgr, &editor, &display);
 
         // Load configuration from init.js (but don't load plugins yet)
         try loadConfigFromJs(allocator, &highlight_config, &debugger_state);
@@ -741,6 +749,10 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     var highlight_config = highlights.HighlightConfig.init(allocator);
     defer highlight_config.deinit();
 
+    const OptionsManager = @import("editor/config/options.zig").OptionsManager;
+    var options_mgr = OptionsManager.init(allocator);
+    defer options_mgr.deinit();
+
     // Get config paths
     var paths = try ConfigPaths.init(allocator);
     defer paths.deinit();
@@ -770,7 +782,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     debugger_state.runtime = runtime;
 
     // Register JSI host functions (including cursor hooks for plugins and trail rendering)
-    jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &editor, &display);
+    jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &options_mgr, &editor, &display);
 
     // Create and start CDP debugger BEFORE loading config
     var debugger = try Debugger.init(runtime, 9229);

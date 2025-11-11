@@ -34,7 +34,7 @@ pub const Display = struct {
     terminal_rows: usize,
     terminal_cols: usize,
     viewport_top: usize, // First visible line number
-    viewport_left: usize, // Horizontal scroll offset for current line
+    viewport_left: usize, // Horizontal scroll offset (applies to all lines, Neovim-style)
 
     // Grid-based rendering (legacy - will be replaced by compositor output)
     grid: ScreenGrid,

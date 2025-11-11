@@ -251,14 +251,23 @@ pub fn moveWordForward(buffer: *Buffer) void {
 
 /// Move to previous word start (b)
 pub fn moveWordBackward(buffer: *Buffer) void {
-    const line = buffer.getLine(buffer.cursor.row) orelse return;
-
+    // If at start of line, wrap to end of previous line
     if (buffer.cursor.col == 0) {
-        // Move to previous line
         if (buffer.cursor.row > 0) {
             buffer.cursor.row -= 1;
-            moveToLineEnd(buffer); // This already sets goal_column
+            moveToLineEnd(buffer);
+            // Continue searching backward from end of previous line
+            // (don't return - fall through to word search logic)
+        } else {
+            // At start of buffer, can't move back
+            return;
         }
+    }
+
+    const line = buffer.getLine(buffer.cursor.row) orelse return;
+
+    // Handle case where we're already at column 0 after line wrap
+    if (buffer.cursor.col == 0) {
         return;
     }
 
@@ -277,8 +286,9 @@ pub fn moveWordBackward(buffer: *Buffer) void {
         col -= 1;
     }
 
-    // If we stopped on non-word char, move forward one
-    if (!isWordChar(line[col]) and col < line.len - 1) {
+    // If we stopped on non-word char (and not at start of line), move forward one
+    // Don't increment if col == 0, as that's the beginning of the line
+    if (col > 0 and !isWordChar(line[col]) and col < line.len - 1) {
         col += 1;
     }
 
@@ -458,4 +468,74 @@ test "Movement: word forward/backward" {
 
     moveWordBackward(&buffer);
     try std.testing.expectEqual(@as(usize, 0), buffer.cursor.col); // back to 'h'
+}
+
+test "Movement: 'b' wraps to previous line and finds word start" {
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_b_wrap.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll("hello world\ntest line\n");
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Start at row 1, col 0 (at 't' in "test")
+    buffer.cursor.row = 1;
+    buffer.cursor.col = 0;
+
+    // Press 'b' - should wrap to previous line and find start of "world"
+    moveWordBackward(&buffer);
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 6), buffer.cursor.col); // 'w' in "world"
+
+    // Press 'b' again - should find start of "hello"
+    moveWordBackward(&buffer);
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.col); // 'h' in "hello"
+
+    // Press 'b' again at start of buffer - should stay at (0, 0)
+    moveWordBackward(&buffer);
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.col);
+}
+
+test "Movement: 'b' handles line starting with non-word characters" {
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_b_punct.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll("  hello world\ntest\n");
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Start at row 1, col 0
+    buffer.cursor.row = 1;
+    buffer.cursor.col = 0;
+
+    // Press 'b' - should wrap to previous line and find "world"
+    moveWordBackward(&buffer);
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 8), buffer.cursor.col); // 'w' in "world"
+
+    // Press 'b' - should find "hello" (skip leading spaces)
+    moveWordBackward(&buffer);
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 2), buffer.cursor.col); // 'h' in "hello"
+
+    // Press 'b' - should go to start of line (col 0) even though it's a space
+    moveWordBackward(&buffer);
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.col); // Should be at col 0, not stuck at col 1
 }

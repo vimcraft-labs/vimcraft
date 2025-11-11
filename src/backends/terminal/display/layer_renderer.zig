@@ -66,8 +66,8 @@ fn updateBaseLayer(
             else
                 line;
 
-            // Apply horizontal scroll
-            const h_offset = if (line_num == buffer.cursor.row) self.viewport_left else 0;
+            // Apply horizontal scroll (Neovim behavior: all lines scroll together)
+            const h_offset = self.viewport_left;
             const start_col = if (h_offset > 0)
                 char_width.displayColumnToByte(line_without_newline, h_offset)
             else
@@ -201,7 +201,8 @@ fn updateSelectionLayer(
                 else
                     line;
 
-                const h_offset = if (line_num == buffer.cursor.row) self.viewport_left else 0;
+                // Apply horizontal scroll (Neovim behavior: all lines scroll together)
+                const h_offset = self.viewport_left;
                 const start_col = if (h_offset > 0)
                     char_width.displayColumnToByte(line_without_newline, h_offset)
                 else
@@ -273,7 +274,8 @@ fn updateYankLayer(
                 else
                     line;
 
-                const h_offset = if (line_num == buffer.cursor.row) self.viewport_left else 0;
+                // Apply horizontal scroll (Neovim behavior: all lines scroll together)
+                const h_offset = self.viewport_left;
                 const start_col = if (h_offset > 0)
                     char_width.displayColumnToByte(line_without_newline, h_offset)
                 else

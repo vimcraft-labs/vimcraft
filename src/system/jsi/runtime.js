@@ -115,10 +115,41 @@ globalThis.vim = {
     const fg = opts.fg || null;
     setHighlight(name, bg, fg);
   },
-  opt: {
-    set cursorLine(value) { setOption('cursorLine', value); },
-    get cursorLine() { return true; }
-  }
+  // Dynamic options proxy - handles ANY option via getOption/setOption
+  // Supports both camelCase (JavaScript style) and lowercase (Vim style)
+  opt: new Proxy({}, {
+    get(target, prop) {
+      if (typeof prop === 'symbol') return undefined;
+      // Call native getOption function
+      return getOption(prop);
+    },
+    set(target, prop, value) {
+      if (typeof prop === 'symbol') return false;
+      // Call native setOption function
+      setOption(prop, value);
+      return true;
+    },
+    // Support for 'in' operator (e.g., 'number' in vim.opt)
+    has(target, prop) {
+      if (typeof prop === 'symbol') return false;
+      return getOption(prop) !== undefined;
+    },
+    // Support for Object.keys(vim.opt) - though options are dynamically defined
+    ownKeys(target) {
+      // Return common options for inspection (non-exhaustive)
+      return ['number', 'relativenumber', 'cursorline', 'tabstop', 'shiftwidth', 'expandtab'];
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      return {
+        enumerable: true,
+        configurable: true
+      };
+    }
+  }),
+  // TODO: Buffer-local options (vim.opt_local)
+  // opt_local: new Proxy({}, { /* similar to opt */ }),
+  // TODO: Global options (vim.opt_global)
+  // opt_global: new Proxy({}, { /* similar to opt */ })
 };
 
 // Layer API - NO wrapper needed!

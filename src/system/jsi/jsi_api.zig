@@ -3,6 +3,7 @@
 /// This file has been refactored from 1824 lines into 8 focused modules
 const std = @import("std");
 const highlights = @import("../../editor/config/highlights.zig");
+const OptionsManager = @import("../../editor/config/options.zig").OptionsManager;
 const Display = @import("../../backends/terminal/display/display.zig").Display;
 const Editor = @import("../../editor/editor.zig").Editor;
 
@@ -32,11 +33,21 @@ pub fn initJSI(
     allocator: std.mem.Allocator,
     runtime: *c.OVHermesRuntime,
     config: *highlights.HighlightConfig,
+    options_mgr: *OptionsManager,
     editor_or_context: anytype,
     display: ?*Display,
 ) void {
-    // Register configuration API (setHighlight, setOption)
-    config_api.register(runtime, config);
+    // Create ConfigContext for config API (heap-allocated, lives as long as runtime)
+    const cfg_ctx = allocator.create(config_api.ConfigContext) catch @panic("Failed to allocate ConfigContext");
+    cfg_ctx.* = config_api.ConfigContext{
+        .highlight_config = config,
+        .options_manager = options_mgr,
+        .allocator = allocator,
+    };
+    // NOTE: We intentionally don't free cfg_ctx - it lives as long as the runtime
+
+    // Register configuration API (setHighlight, setOption, getOption)
+    config_api.register(runtime, cfg_ctx);
 
     // Register console API (consoleLog)
     console_api.register(runtime);

@@ -26,8 +26,9 @@
 #define SHA1_DIGEST_LENGTH CC_SHA1_DIGEST_LENGTH
 #else
 #include <openssl/sha.h>
+// OpenSSL 3.x uses SHA_DIGEST_LENGTH instead of SHA1_DIGEST_LENGTH
 #ifndef SHA1_DIGEST_LENGTH
-#define SHA1_DIGEST_LENGTH 20
+#define SHA1_DIGEST_LENGTH SHA_DIGEST_LENGTH
 #endif
 #endif
 
