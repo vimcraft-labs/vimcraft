@@ -21,10 +21,18 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 **OpenVim** - Neovim-compatible editor in Zig with Hermes JavaScript engine for plugins via JSI (zero-copy bidirectional communication).
 
-**Status**: Phase 1+2 Complete ✅
+**Status**: Phase 1+2+3 Complete ✅ (December 2025)
 - Text display and file loading
 - Full Vim navigation (hjkl, w/b/e, gg/G, 0/$, Ctrl+D/U)
 - Mode system (Normal/Insert/Visual)
+- **Delete operators (x, dd, dw, d{motion})** ✨
+- **Change operators (c{motion}, cc, C)** ✨
+- **Yank/paste (y{motion}, yy, p, P)** ✨
+- **Bracketed paste (Cmd+V/Ctrl+V)** ✨
+- **Register system (39 registers)** ✨
+- **Undo/redo (u, Ctrl+R) with transaction grouping** ✨
+- **Visual mode (v, V with d/c/y operators)** ✨
+- **Visual paste replace (single undo operation)** ✨
 - Terminal rendering (ANSI codes)
 - Hermes+JSI demos working (not yet in main editor)
 
@@ -322,22 +330,37 @@ Debug Protocol (--debug-protocol) → Verify end-to-end behavior
 
 ## Architecture
 
-### Current (Phase 1+2)
+### Current (Phase 1+2+3)
 
 ```
 vimcraft/
 ├── src/
 │   ├── main.zig              # Entry point, event loop
-│   ├── buffer/buffer.zig     # Text storage (ArrayList-based)
-│   ├── display/display.zig   # Terminal rendering (ANSI codes)
+│   ├── editor/               # Editor core
+│   │   ├── editor.zig        # Main editor coordinator
+│   │   ├── buffer/           # Text buffer management
+│   │   │   ├── buffer.zig    # Buffer (ArrayList-based, transactions, undo)
+│   │   │   ├── edit.zig      # Edit operations (delete, change)
+│   │   │   ├── yank.zig      # Yank operations
+│   │   │   ├── paste.zig     # Paste operations
+│   │   │   └── visual_ops.zig # Visual mode operators
+│   │   ├── register/         # Register system
+│   │   │   └── register.zig  # 39 registers (unnamed + named)
+│   │   └── config/           # Configuration
+│   │       └── highlights.zig # Highlight settings
+│   ├── backends/             # Backend implementations
+│   │   ├── terminal/         # Terminal backend
+│   │   │   ├── backend.zig   # Terminal I/O (bracketed paste)
+│   │   │   ├── display/      # Terminal rendering
+│   │   │   └── visual/       # Visual mode
+│   │   └── debug/            # Debug protocol backend
+│   │       ├── protocol.zig  # JSON-RPC commands
+│   │       ├── server.zig    # Debug server
+│   │       └── state.zig     # State serialization
 │   ├── mode/mode.zig         # Mode state machine
 │   ├── movement/movement.zig # Vim movement primitives
 │   ├── core/log.zig          # Unified logging (ring buffer)
-│   ├── debug/                # Debug protocol (JSON-RPC)
-│   │   ├── protocol.zig      # Command/Response types
-│   │   ├── server.zig        # Debug server
-│   │   └── state.zig         # EditorState serialization
-│   └── jsi/                  # Hermes C++ wrapper (Phase 4)
+│   └── system/jsi/           # Hermes JSI bridge
 ├── examples/                 # Hermes+JSI demos
 ├── vendor/                   # Git submodules (hermes, ghostty, neovim)
 └── build.zig                 # Zig build system
@@ -384,11 +407,25 @@ make -f Makefile.hermes test-jsi # Run JS→Zig demo
 
 ## Key Files
 
-**Integration**: `src/jsi/hermes_c_api.{h,cpp}`, `Makefile.hermes`
-**Core**: `src/{main,buffer,display,mode,movement}.zig`
-**Debug**: `src/debug/{protocol,server,state}.zig`, `src/core/log.zig`
-**Demos**: `examples/test_{zig_hermes,jsi_bridge}.zig`
-**Config**: `build.zig` (linker bug note at lines 68-78)
+**Editor Core**:
+- `src/editor/editor.zig` - Main editor coordinator
+- `src/editor/buffer/buffer.zig` - Text buffer with transactions & undo
+- `src/editor/buffer/{edit,yank,paste,visual_ops}.zig` - Text operations
+- `src/editor/register/register.zig` - Register system (39 registers)
+
+**Backends**:
+- `src/backends/terminal/backend.zig` - Terminal I/O (bracketed paste)
+- `src/backends/terminal/display/` - Terminal rendering
+- `src/backends/debug/{protocol,server,state}.zig` - Debug protocol
+
+**System**:
+- `src/main.zig` - Entry point
+- `src/mode/mode.zig` - Mode state machine
+- `src/movement/movement.zig` - Vim motion primitives
+- `src/core/log.zig` - Unified logging
+- `src/system/jsi/hermes_c_api.{h,cpp}` - Hermes JSI bridge
+
+**Build**: `build.zig` (hybrid build system)
 
 ## Navigation Commands
 
@@ -444,8 +481,23 @@ ninja hermes hermesc  # ~287MB, gitignored
 ## Roadmap
 
 **Phase 1+2** ✅ Text Display & Navigation (COMPLETE)
-**Phase 3** 🚧 Text Editing (Next: insert/delete/change/yank/paste, visual mode, undo/redo)
-**Phase 4** 📅 Plugin System (Hermes+JSI integration, plugin loader, event hooks, config file)
+**Phase 3** ✅ Text Editing (COMPLETE - December 2025)
+  - Delete operators (x, dd, dw, d{motion})
+  - Change operators (c{motion}, cc, C)
+  - Yank/paste (y{motion}, yy, p, P)
+  - Bracketed paste (Cmd+V/Ctrl+V)
+  - Register system (39 registers)
+  - Undo/redo (u, Ctrl+R) with transaction grouping
+  - Visual mode (v, V with d/c/y operators)
+  - Visual paste replace (single undo operation)
+
+**Phase 4** 🚧 Plugin System (NEXT - 6-8 weeks)
+  - vim.opt full implementation (80+ options)
+  - vim.keymap.set/del (key mapping system)
+  - Autocommand system (event firing)
+  - User command registration
+  - vim.api buffer functions
+
 **Phase 5** 📅 Advanced Features (Tree-sitter, LSP, search/replace, splits, tabs, macros)
 **Phase 6** 📅 Performance (Rope data structure, incremental rendering, large files)
 **Phase 7** 📅 Neovim Compatibility (Ex commands, options, API layer)

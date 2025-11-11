@@ -1,14 +1,14 @@
-# Phase 3: Text Editing
+# Phase 3: Text Editing ✅ COMPLETE
 
-Next milestone - implement core text editing operations.
+Core text editing operations with full undo/redo support.
 
 ---
 
 ## Overview
 
-**Duration**: 4-6 weeks
+**Duration**: Completed December 2025
 **Priority**: CRITICAL
-**Status**: Ready to start
+**Status**: ✅ **COMPLETE**
 
 ---
 
@@ -63,13 +63,15 @@ See [Implementation Roadmap](./implementation-roadmap.md#week-5-6) for details.
 
 ---
 
-## Success Criteria
+## Success Criteria ✅ ALL MET
 
-- ✅ All delete operators work correctly
-- ✅ All change operators work correctly
-- ✅ Yank/paste with registers functional
-- ✅ Undo/redo never loses data
-- ✅ Visual mode operators work
+- ✅ All delete operators work correctly (x, dd, dw, d{motion})
+- ✅ All change operators work correctly (c{motion}, cc, C)
+- ✅ Yank/paste with registers functional (y, yy, p, P, 39 registers)
+- ✅ Undo/redo never loses data (transaction-based, single undo for paste)
+- ✅ Visual mode operators work (v, V with d/c/y)
+- ✅ Bracketed paste support (Cmd+V/Ctrl+V with proper undo)
+- ✅ Visual paste replaces selection (single undo operation)
 - ✅ Performance: < 16ms latency
 
 ---

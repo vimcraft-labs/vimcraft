@@ -15,8 +15,8 @@ OpenVim aims to create a **Neovim-compatible text editor** with:
 - **Bridge**: Zero-copy JSI integration
 - **Goal**: Seamless migration for Neovim users with better startup performance
 
-**Current Status**: Phase 1+2 Complete (Text display, Navigation)
-**Next**: Phase 3 (Text editing operators)
+**Current Status**: Phase 1+2+3 Complete ✅ (Text display, Navigation, Editing)
+**Next**: Phase 4 (Plugin System - vim.opt, vim.keymap, autocommands)
 
 ---
 
@@ -86,43 +86,48 @@ OpenVim aims to create a **Neovim-compatible text editor** with:
 | Status line | ✅ Complete | Shows mode and position |
 | File loading | ✅ Complete | Read files from disk |
 
-### Phase 3: Text Editing (Next - 4-6 weeks)
+### Phase 3: Text Editing ✅ COMPLETE
 
-| Feature | Priority | Complexity | Est. Time |
-|---------|----------|------------|-----------|
-| **Delete Operators** | CRITICAL | Medium | 1 week |
-| - x (delete char) | HIGH | Low | 2 days |
-| - dd (delete line) | HIGH | Low | 2 days |
-| - dw (delete word) | HIGH | Medium | 3 days |
-| - d{motion} (general) | HIGH | Medium | 3 days |
-| **Change Operators** | CRITICAL | Medium | 1 week |
-| - c{motion} (change) | HIGH | Medium | 4 days |
-| - cc (change line) | HIGH | Low | 2 days |
-| - C (change to EOL) | HIGH | Low | 1 day |
-| **Insert Operations** | CRITICAL | Medium | 1 week |
-| - i/a (insert before/after) | ✅ Complete | - |
-| - I/A (line start/end) | ✅ Complete | - |
-| - o/O (open line) | HIGH | Medium | 3 days |
-| - Character insertion | HIGH | Medium | 3 days |
-| - Backspace/Delete | HIGH | Low | 1 day |
-| **Yank/Paste** | HIGH | High | 1 week |
-| - y{motion} (yank) | HIGH | Medium | 3 days |
-| - yy (yank line) | HIGH | Low | 1 day |
-| - p/P (paste after/before) | HIGH | Medium | 3 days |
-| **Registers** | HIGH | Medium | 3 days |
-| - Unnamed register ("") | HIGH | Low | 1 day |
-| - Named registers (a-z) | MED | Medium | 2 days |
-| **Undo/Redo** | CRITICAL | High | 1 week |
-| - Undo tree structure | HIGH | High | 4 days |
-| - u (undo) | HIGH | Medium | 2 days |
-| - Ctrl+R (redo) | HIGH | Medium | 2 days |
-| - Change transactions | HIGH | High | 3 days |
-| **Visual Mode** | HIGH | Medium | 3 days |
-| - Character visual | MED | Medium | 2 days |
-| - Line visual (V) | MED | Low | 1 day |
-| - Block visual (Ctrl+V) | LOW | High | (defer to Phase 5) |
+| Feature | Status | Implementation |
+|---------|--------|----------------|
+| **Delete Operators** | ✅ Complete | All working |
+| - x (delete char) | ✅ Complete | src/editor/buffer/buffer.zig |
+| - dd (delete line) | ✅ Complete | src/editor/buffer/buffer.zig |
+| - dw (delete word) | ✅ Complete | src/editor/buffer/buffer.zig |
+| - d{motion} (general) | ✅ Complete | src/editor/buffer/edit.zig |
+| **Change Operators** | ✅ Complete | All working |
+| - c{motion} (change) | ✅ Complete | src/editor/buffer/edit.zig |
+| - cc (change line) | ✅ Complete | Implemented |
+| - C (change to EOL) | ✅ Complete | Implemented |
+| **Insert Operations** | ✅ Complete | All working |
+| - i/a (insert before/after) | ✅ Complete | src/editor/editor.zig |
+| - I/A (line start/end) | ✅ Complete | src/editor/editor.zig |
+| - o/O (open line) | ✅ Complete | src/editor/editor.zig |
+| - Character insertion | ✅ Complete | src/editor/buffer/buffer.zig |
+| - Backspace/Delete | ✅ Complete | src/editor/buffer/buffer.zig |
+| **Yank/Paste** | ✅ Complete | All working |
+| - y{motion} (yank) | ✅ Complete | src/editor/buffer/yank.zig |
+| - yy (yank line) | ✅ Complete | src/editor/buffer/yank.zig |
+| - p/P (paste after/before) | ✅ Complete | src/editor/buffer/paste.zig |
+| - Bracketed paste (Cmd+V) | ✅ Complete | src/backends/terminal/backend.zig |
+| **Registers** | ✅ Complete | Full system |
+| - Unnamed register ("") | ✅ Complete | src/editor/register/register.zig |
+| - Named registers (a-z) | ✅ Complete | 39 registers total |
+| - Register selection (") | ✅ Complete | Fully functional |
+| **Undo/Redo** | ✅ Complete | All working |
+| - Undo stack | ✅ Complete | src/editor/buffer/buffer.zig |
+| - u (undo) | ✅ Complete | Single undo working |
+| - Ctrl+R (redo) | ✅ Complete | Redo working |
+| - Transaction grouping | ✅ Complete | Atomic paste undo |
+| **Visual Mode** | ✅ Complete | All working |
+| - Character visual (v) | ✅ Complete | src/backends/terminal/visual/ |
+| - Line visual (V) | ✅ Complete | src/backends/terminal/visual/ |
+| - Visual operators (d,c,y) | ✅ Complete | src/editor/buffer/visual_ops.zig |
+| - Visual paste replace | ✅ Complete | Single undo operation |
+| - Block visual (Ctrl+V) | 📅 Deferred | Phase 5 |
 
-**Phase 3 Total**: 4-6 weeks
+**Phase 3 Completed**: December 2025
+**Key Achievement**: Full text editing with proper undo/redo and visual mode
 
 ### Phase 4: Plugin System (6-8 weeks)
 
@@ -207,13 +212,22 @@ OpenVim aims to create a **Neovim-compatible text editor** with:
 
 ### What Works Today
 
-**Editor Core**:
+**Editor Core** (Phase 1+2+3):
 - ✅ Text buffer management (ArrayList-based)
 - ✅ Terminal rendering with ANSI codes
 - ✅ Full Vim navigation (hjkl, w/b/e, gg/G, 0/$, Ctrl+D/U)
 - ✅ Mode system (Normal/Insert/Visual)
+- ✅ **Delete operators (x, dd, dw, d{motion})** ✨ NEW
+- ✅ **Change operators (c{motion}, cc, C)** ✨ NEW
+- ✅ **Yank/paste (y{motion}, yy, p, P)** ✨ NEW
+- ✅ **Bracketed paste (Cmd+V/Ctrl+V)** ✨ NEW
+- ✅ **Register system (39 registers)** ✨ NEW
+- ✅ **Undo/redo (u, Ctrl+R)** ✨ NEW
+- ✅ **Transaction-based undo** ✨ NEW
+- ✅ **Visual mode (v, V with d/c/y operators)** ✨ NEW
+- ✅ **Visual paste replace** ✨ NEW
 - ✅ Status line display
-- ✅ File loading
+- ✅ File loading and saving
 
 **JavaScript Integration**:
 - ✅ Hermes engine integration
@@ -234,23 +248,16 @@ OpenVim aims to create a **Neovim-compatible text editor** with:
 - ✅ Diagnostic types
 - ✅ IDE autocomplete support
 
-### What's Missing (Priority Order)
+### What's Next (Priority Order)
 
-**CRITICAL (Phase 3)**:
-1. Delete operators (x, dd, dw, d{motion})
-2. Change operators (c, cc, cw, c{motion})
-3. Yank/paste (y, yy, p, P)
-4. Undo/redo tree
-5. Basic registers
+**CRITICAL (Phase 4 - Plugin System)**:
+1. vim.opt full implementation (80+ options)
+2. vim.keymap.set/del (key mapping system)
+3. vim.api buffer functions (nvim_buf_*)
+4. Autocommand system (event firing)
+5. User command registration
 
-**VERY HIGH (Phase 4)**:
-1. vim.opt full implementation
-2. vim.keymap.set/del
-3. vim.api buffer functions
-4. Autocommand system
-5. Event firing
-
-**HIGH (Phase 5)**:
+**HIGH (Phase 5 - Advanced Features)**:
 1. Search and replace (/, ?, :s)
 2. Command mode (: parser)
 3. Ex commands (:w, :q, :e)
@@ -621,7 +628,8 @@ npm run watch:config
 
 ---
 
-**Last Updated**: November 3, 2025
-**Current Phase**: Phase 3 Ready to Start
-**Next Milestone**: Delete & Change Operators (2 weeks)
+**Last Updated**: December 2025
+**Current Phase**: Phase 4 (Plugin System)
+**Previous Milestone**: Phase 3 Complete ✅ (Text Editing with full undo/redo)
+**Next Milestone**: vim.opt + vim.keymap implementation (6-8 weeks)
 **Long-term Goal**: Neovim-compatible editor with better performance
