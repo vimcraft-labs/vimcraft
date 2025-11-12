@@ -28,7 +28,7 @@ jobs:
       matrix:
         include:
           # macOS builds
-          - os: macos-15-large  # Intel x86_64 (macos-13 deprecated)
+          - os: macos-15-intel  # Intel x86_64 (official replacement for macos-13)
             platform: macos
             arch: x86_64
             zig_target: x86_64-macos
@@ -107,6 +107,7 @@ jobs:
                 -DHERMES_ENABLE_DEBUGGER=ON \
                 -DHERMES_ENABLE_INTL=OFF \
                 -DHERMES_ENABLE_TEST_SUITE=OFF \
+                -DHERMES_BUILD_SHARED_JSI=ON \
                 -DHERMES_BUILD_APPLE_DSYM=OFF \
                 -GNinja
             else
@@ -174,7 +175,7 @@ jobs:
           if [ "$RUNNER_OS" == "Linux" ]; then
             zig build -Doptimize=ReleaseFast
           else
-            zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseFast
+            zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseFast -Dstatic-hermes=true
           fi
 
           # Verify binary exists
