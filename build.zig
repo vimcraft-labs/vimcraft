@@ -301,12 +301,6 @@ pub fn build(b: *std.Build) void {
     exe.addLibraryPath(b.path("vendor/libuv/build"));
     exe.linkSystemLibrary("uv");
 
-    // Link pthread and dl AFTER uv (uv depends on them)
-    if (target.result.os.tag == .linux) {
-        exe.linkSystemLibrary("pthread");
-        exe.linkSystemLibrary("dl");
-    }
-
     // ============================================================================
     // OpenSSL (Linux only - for WebSocket SHA1 hashing)
     // ============================================================================
@@ -324,6 +318,11 @@ pub fn build(b: *std.Build) void {
             else => "/usr/lib",
         };
         exe.addLibraryPath(.{ .cwd_relative = lib_dir });
+
+        // Link pthread and dl BEFORE OpenSSL (both ssl/crypto and uv depend on them)
+        exe.linkSystemLibrary("pthread");
+        exe.linkSystemLibrary("dl");
+
         exe.linkSystemLibrary("ssl");
         exe.linkSystemLibrary("crypto");
     }
@@ -442,12 +441,6 @@ pub fn build(b: *std.Build) void {
     bench.addLibraryPath(b.path("vendor/libuv/build"));
     bench.linkSystemLibrary("uv");
 
-    // Link pthread and dl AFTER uv (uv depends on them)
-    if (target.result.os.tag == .linux) {
-        bench.linkSystemLibrary("pthread");
-        bench.linkSystemLibrary("dl");
-    }
-
     // OpenSSL for Linux (WebSocket SHA1 hashing) - native builds only
     if (is_native_linux) {
         const lib_dir = switch (target.result.cpu.arch) {
@@ -456,6 +449,11 @@ pub fn build(b: *std.Build) void {
             else => "/usr/lib",
         };
         bench.addLibraryPath(.{ .cwd_relative = lib_dir });
+
+        // Link pthread and dl BEFORE OpenSSL (both ssl/crypto and uv depend on them)
+        bench.linkSystemLibrary("pthread");
+        bench.linkSystemLibrary("dl");
+
         bench.linkSystemLibrary("ssl");
         bench.linkSystemLibrary("crypto");
     }
@@ -564,12 +562,6 @@ pub fn build(b: *std.Build) void {
     unit_tests.addLibraryPath(b.path("vendor/libuv/build"));
     unit_tests.linkSystemLibrary("uv");
 
-    // Link pthread and dl AFTER uv (uv depends on them)
-    if (target.result.os.tag == .linux) {
-        unit_tests.linkSystemLibrary("pthread");
-        unit_tests.linkSystemLibrary("dl");
-    }
-
     // OpenSSL for Linux (WebSocket SHA1 hashing) - native builds only
     if (is_native_linux) {
         const lib_dir = switch (target.result.cpu.arch) {
@@ -578,6 +570,11 @@ pub fn build(b: *std.Build) void {
             else => "/usr/lib",
         };
         unit_tests.addLibraryPath(.{ .cwd_relative = lib_dir });
+
+        // Link pthread and dl BEFORE OpenSSL (both ssl/crypto and uv depend on them)
+        unit_tests.linkSystemLibrary("pthread");
+        unit_tests.linkSystemLibrary("dl");
+
         unit_tests.linkSystemLibrary("ssl");
         unit_tests.linkSystemLibrary("crypto");
     }
