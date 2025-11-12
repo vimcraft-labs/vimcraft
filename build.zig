@@ -305,11 +305,10 @@ pub fn build(b: *std.Build) void {
     // OpenSSL (Linux only - for WebSocket SHA1 hashing)
     // ============================================================================
     // macOS uses CommonCrypto, Linux uses OpenSSL
-    // Note: Only link for native builds; cross-compilation requires target sysroot
-    const is_native_linux = target.result.os.tag == .linux and
-        target.result.cpu.arch == b.graph.host.result.cpu.arch;
+    // Link pthread/dl for ALL Linux builds (not just native - CI uses explicit targets)
+    const is_linux = target.result.os.tag == .linux;
 
-    if (is_native_linux) {
+    if (is_linux) {
         // Add system library path for OpenSSL (required when using addLibraryPath)
         // Ubuntu/Debian: /usr/lib/x86_64-linux-gnu or /usr/lib/aarch64-linux-gnu
         const lib_dir = switch (target.result.cpu.arch) {
@@ -319,12 +318,14 @@ pub fn build(b: *std.Build) void {
         };
         exe.addLibraryPath(.{ .cwd_relative = lib_dir });
 
-        // Link pthread and dl BEFORE OpenSSL (both ssl/crypto and uv depend on them)
-        exe.linkSystemLibrary("pthread");
-        exe.linkSystemLibrary("dl");
-
+        // Link OpenSSL first, then pthread/dl (ssl/crypto/uv all depend on pthread/dl)
+        // Unix linker order: libraries that USE symbols come BEFORE libraries that PROVIDE them
         exe.linkSystemLibrary("ssl");
         exe.linkSystemLibrary("crypto");
+
+        // pthread and dl must come LAST (after all libraries that depend on them)
+        exe.linkSystemLibrary("pthread");
+        exe.linkSystemLibrary("dl");
     }
 
     b.installArtifact(exe);
@@ -441,8 +442,8 @@ pub fn build(b: *std.Build) void {
     bench.addLibraryPath(b.path("vendor/libuv/build"));
     bench.linkSystemLibrary("uv");
 
-    // OpenSSL for Linux (WebSocket SHA1 hashing) - native builds only
-    if (is_native_linux) {
+    // OpenSSL for Linux (WebSocket SHA1 hashing) - all Linux builds
+    if (is_linux) {
         const lib_dir = switch (target.result.cpu.arch) {
             .x86_64 => "/usr/lib/x86_64-linux-gnu",
             .aarch64 => "/usr/lib/aarch64-linux-gnu",
@@ -450,12 +451,14 @@ pub fn build(b: *std.Build) void {
         };
         bench.addLibraryPath(.{ .cwd_relative = lib_dir });
 
-        // Link pthread and dl BEFORE OpenSSL (both ssl/crypto and uv depend on them)
-        bench.linkSystemLibrary("pthread");
-        bench.linkSystemLibrary("dl");
-
+        // Link OpenSSL first, then pthread/dl (ssl/crypto/uv all depend on pthread/dl)
+        // Unix linker order: libraries that USE symbols come BEFORE libraries that PROVIDE them
         bench.linkSystemLibrary("ssl");
         bench.linkSystemLibrary("crypto");
+
+        // pthread and dl must come LAST (after all libraries that depend on them)
+        bench.linkSystemLibrary("pthread");
+        bench.linkSystemLibrary("dl");
     }
 
     b.installArtifact(bench);
@@ -562,8 +565,8 @@ pub fn build(b: *std.Build) void {
     unit_tests.addLibraryPath(b.path("vendor/libuv/build"));
     unit_tests.linkSystemLibrary("uv");
 
-    // OpenSSL for Linux (WebSocket SHA1 hashing) - native builds only
-    if (is_native_linux) {
+    // OpenSSL for Linux (WebSocket SHA1 hashing) - all Linux builds
+    if (is_linux) {
         const lib_dir = switch (target.result.cpu.arch) {
             .x86_64 => "/usr/lib/x86_64-linux-gnu",
             .aarch64 => "/usr/lib/aarch64-linux-gnu",
@@ -571,12 +574,14 @@ pub fn build(b: *std.Build) void {
         };
         unit_tests.addLibraryPath(.{ .cwd_relative = lib_dir });
 
-        // Link pthread and dl BEFORE OpenSSL (both ssl/crypto and uv depend on them)
-        unit_tests.linkSystemLibrary("pthread");
-        unit_tests.linkSystemLibrary("dl");
-
+        // Link OpenSSL first, then pthread/dl (ssl/crypto/uv all depend on pthread/dl)
+        // Unix linker order: libraries that USE symbols come BEFORE libraries that PROVIDE them
         unit_tests.linkSystemLibrary("ssl");
         unit_tests.linkSystemLibrary("crypto");
+
+        // pthread and dl must come LAST (after all libraries that depend on them)
+        unit_tests.linkSystemLibrary("pthread");
+        unit_tests.linkSystemLibrary("dl");
     }
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
