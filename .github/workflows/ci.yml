@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, blacksmith-4vcpu-ubuntu-2404]
 
     steps:
       - name: Checkout code
@@ -142,7 +142,7 @@ jobs:
           - os: ubuntu-22.04
             platform: linux
             arch: x86_64
-            zig_target: x86_64-linux-gnu
+            zig_target: blacksmith-4vcpu-ubuntu-2404
 
           # TODO: ARM64 Linux requires cross-compilation sysroot for OpenSSL
           # - os: ubuntu-22.04
