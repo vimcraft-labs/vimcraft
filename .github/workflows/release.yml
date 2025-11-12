@@ -28,27 +28,27 @@ jobs:
       matrix:
         include:
           # macOS builds
-          - os: macos-13
+          - os: macos-15-large  # Intel x86_64 (macos-13 deprecated)
             platform: macos
             arch: x86_64
             zig_target: x86_64-macos
 
-          - os: macos-14
+          - os: macos-14  # Apple Silicon ARM64
             platform: macos
             arch: arm64
             zig_target: aarch64-macos
 
-          # Linux builds
+          # Linux builds (native - no cross-compilation)
           - os: ubuntu-22.04
             platform: linux
             arch: x86_64
-            zig_target: x86_64-linux-gnu
+            zig_target: x86_64-linux-gnu  # Not used (native build)
 
-          # TODO: ARM64 Linux requires cross-compilation sysroot for OpenSSL
-          # - os: ubuntu-22.04
-          #   platform: linux
-          #   arch: arm64
-          #   zig_target: aarch64-linux-gnu
+          # ARM64 Linux (native build with clang++ + libc++)
+          - os: ubuntu-22.04-arm64
+            platform: linux
+            arch: arm64
+            zig_target: aarch64-linux-gnu  # Not used (native build)
 
     steps:
       - name: Checkout code
@@ -72,7 +72,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build build-essential \
-            libicu-dev python3 git curl zip unzip libssl-dev
+            libicu-dev python3 git curl zip unzip libssl-dev clang libc++-dev libc++abi-dev
 
       - name: Cache Hermes build
         id: cache-hermes
@@ -95,14 +95,30 @@ jobs:
             mkdir -p build
             cd build
 
-            # Configure WITHOUT shared JSI to get static libraries by default
-            cmake .. \
-              -DCMAKE_BUILD_TYPE=MinSizeRel \
-              -DHERMES_ENABLE_DEBUGGER=ON \
-              -DHERMES_ENABLE_INTL=OFF \
-              -DHERMES_ENABLE_TEST_SUITE=OFF \
-              -DHERMES_BUILD_APPLE_DSYM=OFF \
-              -GNinja
+            if [ "$RUNNER_OS" == "Linux" ]; then
+              # Linux: Use clang++ with libc++ for Zig ABI compatibility
+              cmake .. \
+                -DCMAKE_C_COMPILER=clang \
+                -DCMAKE_CXX_COMPILER=clang++ \
+                -DCMAKE_CXX_FLAGS="-stdlib=libc++" \
+                -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++ -lc++ -lc++abi" \
+                -DCMAKE_SHARED_LINKER_FLAGS="-stdlib=libc++ -lc++ -lc++abi" \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DHERMES_ENABLE_DEBUGGER=ON \
+                -DHERMES_ENABLE_INTL=OFF \
+                -DHERMES_ENABLE_TEST_SUITE=OFF \
+                -DHERMES_BUILD_APPLE_DSYM=OFF \
+                -GNinja
+            else
+              # macOS: Default compiler (C++ stdlib compatibility is native)
+              cmake .. \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DHERMES_ENABLE_DEBUGGER=ON \
+                -DHERMES_ENABLE_INTL=OFF \
+                -DHERMES_ENABLE_TEST_SUITE=OFF \
+                -DHERMES_BUILD_APPLE_DSYM=OFF \
+                -GNinja
+            fi
 
             # Build required targets (hermesVMRuntime for VM, hermesc for compiler, jsi for JSI)
             ninja hermesVMRuntimeLean hermesc jsi
@@ -153,8 +169,13 @@ jobs:
           # Show versions
           zig version
 
-          # Build with optimizations and static Hermes linking
-          zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseFast -Dstatic-hermes=true
+          # Build with optimizations
+          # Note: Linux builds are native (no -Dtarget needed), macOS uses explicit target for cross-compile support
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            zig build -Doptimize=ReleaseFast
+          else
+            zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseFast
+          fi
 
           # Verify binary exists
           ls -lh zig-out/bin/
@@ -262,8 +283,7 @@ jobs:
             "vimcraft-${{ github.event.release.tag_name }}-macos-x86_64.tar.gz"
             "vimcraft-${{ github.event.release.tag_name }}-macos-arm64.tar.gz"
             "vimcraft-${{ github.event.release.tag_name }}-linux-x86_64.tar.gz"
-            # TODO: Add back when ARM64 Linux cross-compilation is supported
-            # "vimcraft-${{ github.event.release.tag_name }}-linux-arm64.tar.gz"
+            "vimcraft-${{ github.event.release.tag_name }}-linux-arm64.tar.gz"
             "checksums.txt"
           )
 
@@ -283,8 +303,8 @@ jobs:
               body: `🎉 **Release binaries built successfully!**
 
               Binaries are now available for:
-              - macOS (Intel & Apple Silicon)
-              - Linux (x86_64 only - ARM64 coming soon)
+              - macOS (Intel x86_64 & Apple Silicon ARM64)
+              - Linux (x86_64 & ARM64)
 
               **Quick Install:**
               \`\`\`bash

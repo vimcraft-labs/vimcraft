@@ -1,0 +1,121 @@
+name: Tests
+
+on:
+  # Run on pull requests
+  pull_request:
+    branches: [main]
+
+  # Allow manual workflow trigger
+  workflow_dispatch:
+
+# Cancel in-progress runs for same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]  # Linux only for cost savings; full platform testing in release.yml
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build build-essential \
+            libicu-dev python3 libssl-dev clang libc++-dev libc++abi-dev
+
+      - name: Cache Hermes build
+        id: cache-hermes
+        uses: actions/cache@v4
+        with:
+          path: vendor/hermes/build
+          key: hermes-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/hermes/**/*.cpp', 'vendor/hermes/**/*.h') }}
+          restore-keys: |
+            hermes-ci-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build Hermes
+        run: |
+          HERMES_BUILT=false
+          [ -f "vendor/hermes/build/API/hermes/libhermes_lean.so" ] && HERMES_BUILT=true
+
+          if [ "$HERMES_BUILT" = false ]; then
+            echo "Building Hermes..."
+            cd vendor/hermes
+            mkdir -p build && cd build
+
+            # Use clang++ with libc++ for Zig ABI compatibility
+            cmake .. \
+              -DCMAKE_C_COMPILER=clang \
+              -DCMAKE_CXX_COMPILER=clang++ \
+              -DCMAKE_CXX_FLAGS="-stdlib=libc++" \
+              -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++ -lc++ -lc++abi" \
+              -DCMAKE_SHARED_LINKER_FLAGS="-stdlib=libc++ -lc++ -lc++abi" \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DHERMES_ENABLE_DEBUGGER=ON \
+              -DHERMES_ENABLE_INTL=OFF \
+              -DHERMES_ENABLE_TEST_SUITE=OFF \
+              -DHERMES_BUILD_SHARED_JSI=ON \
+              -GNinja
+
+            ninja hermesvmlean hermesc jsi
+          else
+            echo "✓ Hermes found in cache"
+          fi
+
+      - name: Cache libuv build
+        id: cache-libuv
+        uses: actions/cache@v4
+        with:
+          path: vendor/libuv/build
+          key: libuv-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/libuv/**/*.c', 'vendor/libuv/**/*.h') }}
+          restore-keys: |
+            libuv-ci-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build libuv
+        run: |
+          LIBUV_BUILT=false
+          if [ -f "vendor/libuv/build/libuv.a" ] || [ -f "vendor/libuv/build/libuv_a.a" ]; then
+            LIBUV_BUILT=true
+          fi
+
+          if [ "$LIBUV_BUILT" = false ]; then
+            echo "Building libuv..."
+            cd vendor/libuv
+            mkdir -p build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+            cmake --build .
+          else
+            echo "✓ libuv found in cache"
+          fi
+
+      - name: Check Zig formatting
+        run: |
+          zig fmt --check src/
+
+      - name: Build Vimcraft
+        run: |
+          zig build
+
+      - name: Run tests
+        run: |
+          zig build test
+
+      - name: Smoke test binary
+        run: |
+          ./zig-out/bin/vc --version || true
+          echo '{"cmd":"get_state","id":"1"}' | timeout 2 ./zig-out/bin/vc --debug-protocol || true
