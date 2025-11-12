@@ -898,14 +898,18 @@ export interface Vim {
   opt: VimOptions;
 
   /**
-   * Buffer-local options
+   * Buffer-local options (Neovim equivalent: vim.opt_local)
+   * @example
+   * vim.optLocal.number = true;
    */
-  opt_local?: VimOptions;
+  optLocal?: VimOptions;
 
   /**
-   * Global options
+   * Global options (Neovim equivalent: vim.opt_global)
+   * @example
+   * vim.optGlobal.cursorLine = true;
    */
-  opt_global?: VimOptions;
+  optGlobal?: VimOptions;
 
   /**
    * Key mapping interface

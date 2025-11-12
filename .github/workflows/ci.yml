@@ -1,10 +1,16 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
+  # Allow manual workflow trigger
+  workflow_dispatch:
+
+  # Run on pull requests
   pull_request:
     branches: [main]
+
+  # Run when creating a new release
+  release:
+    types: [published]
 
 # Cancel in-progress runs for same ref
 concurrency:
@@ -41,7 +47,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build build-essential \
-            libicu-dev python3 libssl-dev
+            libicu-dev python3 libssl-dev clang libc++-dev libc++abi-dev
 
       - name: Cache Hermes build
         id: cache-hermes
@@ -65,13 +71,32 @@ jobs:
             echo "Building Hermes..."
             cd vendor/hermes
             mkdir -p build && cd build
-            cmake .. \
-              -DCMAKE_BUILD_TYPE=MinSizeRel \
-              -DHERMES_ENABLE_DEBUGGER=ON \
-              -DHERMES_ENABLE_INTL=OFF \
-              -DHERMES_ENABLE_TEST_SUITE=OFF \
-              -DHERMES_BUILD_SHARED_JSI=ON \
-              -GNinja
+
+            if [ "$RUNNER_OS" == "Linux" ]; then
+              # Linux: Use clang++ with libc++ for Zig ABI compatibility
+              cmake .. \
+                -DCMAKE_C_COMPILER=clang \
+                -DCMAKE_CXX_COMPILER=clang++ \
+                -DCMAKE_CXX_FLAGS="-stdlib=libc++" \
+                -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++ -lc++ -lc++abi" \
+                -DCMAKE_SHARED_LINKER_FLAGS="-stdlib=libc++ -lc++ -lc++abi" \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DHERMES_ENABLE_DEBUGGER=ON \
+                -DHERMES_ENABLE_INTL=OFF \
+                -DHERMES_ENABLE_TEST_SUITE=OFF \
+                -DHERMES_BUILD_SHARED_JSI=ON \
+                -GNinja
+            else
+              # macOS: Default compiler (C++ stdlib compatibility is native)
+              cmake .. \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DHERMES_ENABLE_DEBUGGER=ON \
+                -DHERMES_ENABLE_INTL=OFF \
+                -DHERMES_ENABLE_TEST_SUITE=OFF \
+                -DHERMES_BUILD_SHARED_JSI=ON \
+                -GNinja
+            fi
+
             ninja hermesvmlean hermesc jsi
           else
             echo "✓ Hermes found in cache"
@@ -124,7 +149,8 @@ jobs:
   build-matrix:
     name: Build ${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Run on: manual trigger, or when creating a release
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'release'
     strategy:
       fail-fast: false
       matrix:
@@ -144,11 +170,11 @@ jobs:
             arch: x86_64
             zig_target: x86_64-linux-gnu
 
-          # TODO: ARM64 Linux requires cross-compilation sysroot for OpenSSL
-          # - os: ubuntu-22.04
-          #   platform: linux
-          #   arch: arm64
-          #   zig_target: aarch64-linux-gnu
+          # ARM64 Linux (native build with clang++ + libc++)
+          - os: ubuntu-22.04-arm64
+            platform: linux
+            arch: arm64
+            zig_target: aarch64-linux-gnu
 
     steps:
       - name: Checkout code
@@ -171,7 +197,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build build-essential \
-            libicu-dev python3 libssl-dev
+            libicu-dev python3 libssl-dev clang libc++-dev libc++abi-dev
 
       - name: Cache Hermes
         uses: actions/cache@v4
@@ -192,12 +218,30 @@ jobs:
             echo "Building Hermes..."
             cd vendor/hermes
             mkdir -p build && cd build
-            cmake .. \
-              -DCMAKE_BUILD_TYPE=MinSizeRel \
-              -DHERMES_ENABLE_DEBUGGER=ON \
-              -DHERMES_ENABLE_INTL=OFF \
-              -DHERMES_BUILD_SHARED_JSI=ON \
-              -GNinja
+
+            if [ "$RUNNER_OS" == "Linux" ]; then
+              # Linux: Use clang++ with libc++ for Zig ABI compatibility
+              cmake .. \
+                -DCMAKE_C_COMPILER=clang \
+                -DCMAKE_CXX_COMPILER=clang++ \
+                -DCMAKE_CXX_FLAGS="-stdlib=libc++" \
+                -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++ -lc++ -lc++abi" \
+                -DCMAKE_SHARED_LINKER_FLAGS="-stdlib=libc++ -lc++ -lc++abi" \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DHERMES_ENABLE_DEBUGGER=ON \
+                -DHERMES_ENABLE_INTL=OFF \
+                -DHERMES_BUILD_SHARED_JSI=ON \
+                -GNinja
+            else
+              # macOS: Default compiler (C++ stdlib compatibility is native)
+              cmake .. \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DHERMES_ENABLE_DEBUGGER=ON \
+                -DHERMES_ENABLE_INTL=OFF \
+                -DHERMES_BUILD_SHARED_JSI=ON \
+                -GNinja
+            fi
+
             ninja hermesvmlean hermesc jsi
           else
             echo "✓ Hermes found in cache"

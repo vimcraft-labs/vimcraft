@@ -298,8 +298,9 @@ pub fn build(b: *std.Build) void {
     // libuv (Event Loop & Async I/O)
     // ============================================================================
     exe.addIncludePath(b.path("vendor/libuv/include"));
-    exe.addLibraryPath(b.path("vendor/libuv/build"));
-    exe.linkSystemLibrary("uv");
+    // Link directly to our vendored libuv to avoid Homebrew conflicts
+    // On macOS, we build universal binaries (arm64 + x86_64) for cross-compilation
+    exe.addObjectFile(b.path("vendor/libuv/build/libuv.a"));
 
     // ============================================================================
     // OpenSSL (Linux only - for WebSocket SHA1 hashing)
@@ -439,8 +440,8 @@ pub fn build(b: *std.Build) void {
     }
 
     bench.addIncludePath(b.path("vendor/libuv/include"));
-    bench.addLibraryPath(b.path("vendor/libuv/build"));
-    bench.linkSystemLibrary("uv");
+    // Link directly to our vendored libuv to avoid Homebrew conflicts
+    bench.addObjectFile(b.path("vendor/libuv/build/libuv.a"));
 
     // OpenSSL for Linux (WebSocket SHA1 hashing) - all Linux builds
     if (is_linux) {
@@ -562,8 +563,8 @@ pub fn build(b: *std.Build) void {
 
     // libuv for tests
     unit_tests.addIncludePath(b.path("vendor/libuv/include"));
-    unit_tests.addLibraryPath(b.path("vendor/libuv/build"));
-    unit_tests.linkSystemLibrary("uv");
+    // Link directly to our vendored libuv to avoid Homebrew conflicts
+    unit_tests.addObjectFile(b.path("vendor/libuv/build/libuv.a"));
 
     // OpenSSL for Linux (WebSocket SHA1 hashing) - all Linux builds
     if (is_linux) {
