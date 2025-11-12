@@ -319,12 +319,14 @@ pub fn build(b: *std.Build) void {
         };
         exe.addLibraryPath(.{ .cwd_relative = lib_dir });
 
-        // Link pthread and dl BEFORE OpenSSL (both ssl/crypto and uv depend on them)
-        exe.linkSystemLibrary("pthread");
-        exe.linkSystemLibrary("dl");
-
+        // Link OpenSSL first, then pthread/dl (ssl/crypto/uv all depend on pthread/dl)
+        // Unix linker order: libraries that USE symbols come BEFORE libraries that PROVIDE them
         exe.linkSystemLibrary("ssl");
         exe.linkSystemLibrary("crypto");
+
+        // pthread and dl must come LAST (after all libraries that depend on them)
+        exe.linkSystemLibrary("pthread");
+        exe.linkSystemLibrary("dl");
     }
 
     b.installArtifact(exe);
@@ -450,12 +452,14 @@ pub fn build(b: *std.Build) void {
         };
         bench.addLibraryPath(.{ .cwd_relative = lib_dir });
 
-        // Link pthread and dl BEFORE OpenSSL (both ssl/crypto and uv depend on them)
-        bench.linkSystemLibrary("pthread");
-        bench.linkSystemLibrary("dl");
-
+        // Link OpenSSL first, then pthread/dl (ssl/crypto/uv all depend on pthread/dl)
+        // Unix linker order: libraries that USE symbols come BEFORE libraries that PROVIDE them
         bench.linkSystemLibrary("ssl");
         bench.linkSystemLibrary("crypto");
+
+        // pthread and dl must come LAST (after all libraries that depend on them)
+        bench.linkSystemLibrary("pthread");
+        bench.linkSystemLibrary("dl");
     }
 
     b.installArtifact(bench);
@@ -571,12 +575,14 @@ pub fn build(b: *std.Build) void {
         };
         unit_tests.addLibraryPath(.{ .cwd_relative = lib_dir });
 
-        // Link pthread and dl BEFORE OpenSSL (both ssl/crypto and uv depend on them)
-        unit_tests.linkSystemLibrary("pthread");
-        unit_tests.linkSystemLibrary("dl");
-
+        // Link OpenSSL first, then pthread/dl (ssl/crypto/uv all depend on pthread/dl)
+        // Unix linker order: libraries that USE symbols come BEFORE libraries that PROVIDE them
         unit_tests.linkSystemLibrary("ssl");
         unit_tests.linkSystemLibrary("crypto");
+
+        // pthread and dl must come LAST (after all libraries that depend on them)
+        unit_tests.linkSystemLibrary("pthread");
+        unit_tests.linkSystemLibrary("dl");
     }
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
