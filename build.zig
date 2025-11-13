@@ -171,7 +171,7 @@ pub fn build(b: *std.Build) void {
     // Main Vimcraft executable
     // ============================================================================
     const exe = b.addExecutable(.{
-        .name = "vc",
+        .name = "vic",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -378,7 +378,7 @@ pub fn build(b: *std.Build) void {
     bench_root_module.addImport("vimcraft", vimcraft_module_for_bench);
 
     const bench = b.addExecutable(.{
-        .name = "vc-bench",
+        .name = "vic-bench",
         .root_module = bench_root_module,
     });
 
