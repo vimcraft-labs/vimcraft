@@ -1,7 +1,7 @@
 {
   "name": "@vimcraft/types",
   "version": "0.3.0",
-  "description": "TypeScript type definitions for OpenVim configuration API",
+  "description": "TypeScript type definitions for Vimcraft configuration API",
   "main": "src/index.d.ts",
   "types": "src/index.d.ts",
   "files": [
@@ -15,7 +15,7 @@
     "typescript",
     "text-editor"
   ],
-  "author": "OpenVim Contributors",
+  "author": "Vimcraft Contributors",
   "license": "MIT",
   "repository": {
     "type": "git",

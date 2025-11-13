@@ -1,4 +1,4 @@
-# Building OpenVim
+# Building Vimcraft
 
 Build system and development setup.
 
@@ -39,7 +39,7 @@ zig build test
 
 ## Hybrid Build System
 
-OpenVim uses a hybrid build due to Zig linker limitations with C++ code:
+Vimcraft uses a hybrid build due to Zig linker limitations with C++ code:
 
 1. Zig compiles to `.o` object files
 2. clang++ performs final linking

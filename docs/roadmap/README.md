@@ -1,12 +1,12 @@
 # Implementation Roadmap
 
-OpenVim's development plan from current state to full Neovim compatibility.
+Vimcraft's development plan from current state to full Neovim compatibility.
 
 ---
 
 ## 📖 Overview
 
-OpenVim follows a **phased implementation approach**, building from core text editing to advanced features:
+Vimcraft follows a **phased implementation approach**, building from core text editing to advanced features:
 
 **Current Status**: Phase 1+2+3 Complete ✅
 **Next Milestone**: Phase 4 - Plugin System (6-8 weeks)

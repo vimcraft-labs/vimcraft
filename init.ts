@@ -69,7 +69,7 @@ vim.opt.signColumn = "yes";
 vim.opt.cursorLine = true;
 
 setTimeout(() => {
-  console.log('✅ OpenVim ready!');
+  console.log('✅ Vimcraft ready!');
 }, 100);
 
 console.log('📝 Config loaded successfully!');

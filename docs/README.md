@@ -1,16 +1,16 @@
-# OpenVim Documentation
+# Vimcraft Documentation
 
 **Version**: 0.3.0
 **Last Updated**: November 3, 2025
 **Current Phase**: Phase 1+2 Complete, Phase 3 Ready
 
-Welcome to OpenVim documentation! This is your entry point to all project documentation, organized by purpose and audience.
+Welcome to Vimcraft documentation! This is your entry point to all project documentation, organized by purpose and audience.
 
 ---
 
 ## 📖 Quick Navigation
 
-### New to OpenVim?
+### New to Vimcraft?
 👉 Start here: [Getting Started Guide](./guides/getting-started.md)
 
 ### Want to understand the design?
@@ -34,12 +34,12 @@ Welcome to OpenVim documentation! This is your entry point to all project docume
 **Purpose**: Get started quickly, understand core concepts
 
 - [Getting Started](./guides/getting-started.md) - Installation and first steps
-- [Configuration Guide](./guides/configuration.md) - How to configure OpenVim
+- [Configuration Guide](./guides/configuration.md) - How to configure Vimcraft
 - [TypeScript Guide](./guides/typescript-setup.md) - Using TypeScript for config
 
 ### 🏗️ [Architecture](./architecture/)
 **For**: Developers wanting to understand the system design
-**Purpose**: Deep technical understanding of OpenVim's architecture
+**Purpose**: Deep technical understanding of Vimcraft's architecture
 
 - [Overview](./architecture/README.md) - Architecture summary
 - [Four-Layer Design](./architecture/four-layer-design.md) - Core architectural pattern
@@ -68,18 +68,18 @@ Welcome to OpenVim documentation! This is your entry point to all project docume
 
 ### 🔬 [Research](./research/)
 **For**: Understanding Neovim compatibility and design choices
-**Purpose**: Background research that informed OpenVim's design
+**Purpose**: Background research that informed Vimcraft's design
 
 - [Neovim Analysis Summary](./research/neovim-analysis-summary.md) - Executive summary
 - [Neovim Mimic Summary](./research/neovim-mimic-summary.md) - What we accomplished
 - [Research Index](./research/README.md) - All research documents
 
 ### 💻 [Development](./development/)
-**For**: Contributors working on OpenVim
+**For**: Contributors working on Vimcraft
 **Purpose**: Development workflow, testing, code organization
 
 - [Development Guide](./development/README.md) - Start here for contributing
-- [Building OpenVim](./development/building.md) - Build instructions
+- [Building Vimcraft](./development/building.md) - Build instructions
 - [Testing Guide](./development/testing.md) - How to test changes
 - [Code Organization](./development/code-organization.md) - Project structure
 - [Contributing Guidelines](./development/contributing.md) - How to contribute
@@ -88,13 +88,13 @@ Welcome to OpenVim documentation! This is your entry point to all project docume
 
 ## 🎯 Documentation by Use Case
 
-### "I want to use OpenVim"
+### "I want to use Vimcraft"
 
 1. [Getting Started Guide](./guides/getting-started.md) - Install and run
 2. [Configuration Guide](./guides/configuration.md) - Customize your setup
 3. [API Quick Reference](./api/quick-reference.md) - Available features
 
-### "I want to understand how OpenVim works"
+### "I want to understand how Vimcraft works"
 
 1. [Architecture Overview](./architecture/README.md) - Big picture
 2. [Four-Layer Design](./architecture/four-layer-design.md) - Core pattern
@@ -184,7 +184,7 @@ See [Implementation Roadmap](./roadmap/implementation-roadmap.md) for complete d
 |----------|----------|---------|
 | [API Quick Reference](./api/quick-reference.md) | API | Fast lookup while coding |
 | [Architecture Overview](./architecture/README.md) | Architecture | System design overview |
-| [Building OpenVim](./development/building.md) | Development | Build instructions |
+| [Building Vimcraft](./development/building.md) | Development | Build instructions |
 | [Code Organization](./development/code-organization.md) | Development | Project structure |
 | [Configuration Guide](./guides/configuration.md) | Guides | How to configure |
 | [Contributing Guidelines](./development/contributing.md) | Development | How to contribute |
@@ -215,7 +215,7 @@ See [Implementation Roadmap](./roadmap/implementation-roadmap.md) for complete d
 **Q: Where do I start?**
 A: See [Getting Started Guide](./guides/getting-started.md)
 
-**Q: How do I configure OpenVim?**
+**Q: How do I configure Vimcraft?**
 A: See [Configuration Guide](./guides/configuration.md)
 
 **Q: What features are available?**
@@ -224,7 +224,7 @@ A: See [Project Status](#-project-status) above or [API Quick Reference](./api/q
 **Q: How can I contribute?**
 A: See [Development Guide](./development/README.md) and [Contributing Guidelines](./development/contributing.md)
 
-**Q: How is OpenVim different from Neovim?**
+**Q: How is Vimcraft different from Neovim?**
 A: See [Neovim Mimic Summary](./research/neovim-mimic-summary.md)
 
 **Q: What's the implementation plan?**

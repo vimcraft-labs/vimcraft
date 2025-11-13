@@ -20,7 +20,7 @@ git clone git@github.com:vimcraft-labs/vimcraft.git
 cd vimcraft
 git submodule update --init
 zig build
-./zig-out/bin/vc myfile.txt
+./zig-out/bin/vic myfile.txt
 ```
 
 ## Configuration

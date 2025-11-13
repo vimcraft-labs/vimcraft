@@ -2,7 +2,7 @@
 
 ## Overview
 
-This directory contains a comprehensive analysis of Neovim's configuration interface and architecture, created to guide OpenVim's design and implementation.
+This directory contains a comprehensive analysis of Neovim's configuration interface and architecture, created to guide Vimcraft's design and implementation.
 
 **Analysis Date**: November 3, 2025  
 **Neovim Version**: 0.12.0 (latest master branch)  
@@ -21,7 +21,7 @@ This directory contains a comprehensive analysis of Neovim's configuration inter
 - Four-layer architecture overview
 - 13 major API categories
 - Design patterns that make Neovim work
-- Feature gap analysis (OpenVim vs Neovim)
+- Feature gap analysis (Vimcraft vs Neovim)
 - Implementation roadmap with effort estimates
 - Key insights and recommendations
 - Next steps
@@ -59,11 +59,11 @@ This directory contains a comprehensive analysis of Neovim's configuration inter
 - Design Patterns (metatables, namespaces, lazy loading, type metadata)
 
 **Section 3: Feature Gap Analysis**
-- Core Features (Phase 1-2): Status table showing what OpenVim has vs Neovim
+- Core Features (Phase 1-2): Status table showing what Vimcraft has vs Neovim
 - Plugin/Configuration Features: What's missing
 - Phase estimation (3-6: time and complexity)
 
-**Section 4: Design Recommendations for OpenVim**
+**Section 4: Design Recommendations for Vimcraft**
 - Configuration Architecture (~/.config/vimcraft/)
 - API Organization (matching Neovim's structure)
 - Options System Design (ov.opt.*)
@@ -207,7 +207,7 @@ This directory contains a comprehensive analysis of Neovim's configuration inter
    - Runtime type conversion
    - IDE type hints (TypeScript-style)
 
-### What OpenVim Can Do Better
+### What Vimcraft Can Do Better
 
 1. **Faster Startup** (Hermes bytecode vs Lua 5.1)
 2. **Better Hot Reload** (Already implemented!)
@@ -257,7 +257,7 @@ This directory contains a comprehensive analysis of Neovim's configuration inter
 
 ## Cross-References
 
-### Related Files in OpenVim
+### Related Files in Vimcraft
 
 - `/Users/le/projects/vimcraft/CLAUDE.md` - Project overview
 - `/Users/le/projects/vimcraft/src/main.zig` - Current architecture
@@ -288,7 +288,7 @@ This directory contains a comprehensive analysis of Neovim's configuration inter
 - Lua stdlib: 23.4K lines (vim.* modules)
 - User config: ~500 lines (init.lua)
 
-**OpenVim's Target**:
+**Vimcraft's Target**:
 - Zig core: 10K+ lines (buffer, rendering, input - smaller!)
 - API bridge: 150+ functions (ov.* naming, JS callable)
 - Hermes runtime: ~1.5MB (bytecode VM)
@@ -311,5 +311,5 @@ This directory contains a comprehensive analysis of Neovim's configuration inter
 ---
 
 **Last Updated**: November 3, 2025  
-**OpenVim Phase**: 1+2 Complete, Ready for Phase 3
+**Vimcraft Phase**: 1+2 Complete, Ready for Phase 3
 

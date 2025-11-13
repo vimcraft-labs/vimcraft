@@ -1,10 +1,10 @@
-# OpenVim Debug Protocol (ODP)
+# Vimcraft Debug Protocol (ODP)
 
 ## Architecture
 
 ```
 ┌─────────────────┐     stdin/stdout JSON    ┌───────────────┐
-│   OpenVim       │ ←─────────────────────→  │  LLM (Claude) │
+│   Vimcraft       │ ←─────────────────────→  │  LLM (Claude) │
 │   (--debug      │                           │               │
 │    -protocol)   │                           │               │
 │ • Editor core   │  Queries/Commands/Events │ • Parse JSON  │
@@ -14,7 +14,7 @@
 └─────────────────┘                           └───────────────┘
 ```
 
-**MCP-Style Communication**: Direct stdin/stdout JSON-RPC between OpenVim and LLM, no intermediate tools needed.
+**MCP-Style Communication**: Direct stdin/stdout JSON-RPC between Vimcraft and LLM, no intermediate tools needed.
 
 ## Design Principles
 
@@ -32,7 +32,7 @@
 
 **stdin/stdout (MCP-Style)**
 ```bash
-# Start OpenVim in debug protocol mode
+# Start Vimcraft in debug protocol mode
 ./vimcraft --debug-protocol
 
 # Send JSON commands via stdin
@@ -265,7 +265,7 @@ Response: {
 
 ## Event Stream
 
-OpenVim can emit events for debugging:
+Vimcraft can emit events for debugging:
 
 ```json
 {
@@ -306,7 +306,7 @@ OpenVim can emit events for debugging:
 ### Basic Debugging
 
 ```bash
-# Start OpenVim in debug mode (background process)
+# Start Vimcraft in debug mode (background process)
 $ ./vimcraft --debug-protocol &
 
 # Send commands via stdin
@@ -323,7 +323,7 @@ $ echo '{"cmd":"get_visual","id":"3"}'
 ### Testing Workflow
 
 ```bash
-# 1. Start OpenVim
+# 1. Start Vimcraft
 $ ./vimcraft --debug-protocol > /tmp/responses.jsonl &
 
 # 2. Send test sequence
@@ -358,7 +358,7 @@ src/
 
 ```bash
 # 1. Claude implements visual mode feature
-# 2. Start OpenVim in debug mode
+# 2. Start Vimcraft in debug mode
 $ ./vimcraft --debug-protocol &
 
 # 3. Send test sequence via stdin

@@ -19,7 +19,7 @@ This implementation is **sufficient for production use** and handles all real-wo
 - Zig master has breaking API changes
 - `uucode` build.zig uses deprecated APIs like `std.Io.Writer.Allocating`
 
-**Decision**: Keep our working implementation until OpenVim stabilizes on a specific Zig version (likely 0.15.2 or later).
+**Decision**: Keep our working implementation until Vimcraft stabilizes on a specific Zig version (likely 0.15.2 or later).
 
 Our current implementation is **already production-ready** and handles all important cases. Ghostty integration is an optimization, not a requirement.
 
@@ -28,7 +28,7 @@ Our current implementation is **already production-ready** and handles all impor
 ### When to Switch
 
 Only switch if:
-1. OpenVim stabilizes on Zig 0.15.2+
+1. Vimcraft stabilizes on Zig 0.15.2+
 2. We encounter edge cases our implementation doesn't handle
 3. We want 100% Unicode spec compliance (rare edge cases)
 
@@ -162,6 +162,6 @@ Compare rendering with Neovim/Ghostty to verify correctness.
 
 ## Conclusion
 
-**Current approach (standalone implementation) is correct for OpenVim's current needs.**
+**Current approach (standalone implementation) is correct for Vimcraft's current needs.**
 
 We can defer Ghostty integration until we have evidence it's needed. The integration path is well-defined and not complex.

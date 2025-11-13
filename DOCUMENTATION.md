@@ -7,7 +7,7 @@
 
 ## ✅ What Was Done
 
-All OpenVim documentation has been organized into a structured `docs/` folder with clear entry points and logical categorization.
+All Vimcraft documentation has been organized into a structured `docs/` folder with clear entry points and logical categorization.
 
 ---
 
@@ -151,10 +151,10 @@ Each category has its own README for navigation:
 
 ### By Task
 
-**"I want to use OpenVim"**:
+**"I want to use Vimcraft"**:
 → [Getting Started](docs/guides/getting-started.md)
 
-**"I want to configure OpenVim"**:
+**"I want to configure Vimcraft"**:
 → [Configuration Guide](docs/guides/configuration.md)
 
 **"I want to understand the design"**:

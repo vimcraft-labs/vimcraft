@@ -1,6 +1,6 @@
 # TypeScript Setup Guide
 
-Enable IDE autocomplete and type checking for OpenVim configuration.
+Enable IDE autocomplete and type checking for Vimcraft configuration.
 
 ---
 
@@ -78,7 +78,7 @@ npm run watch:config
 
 ### VS Code
 
-1. Open OpenVim folder in VS Code
+1. Open Vimcraft folder in VS Code
 2. Open init.ts
 3. Start typing `vim.` - see autocomplete!
 

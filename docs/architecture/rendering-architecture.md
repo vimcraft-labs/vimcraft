@@ -1,4 +1,4 @@
-# Rendering Architecture Analysis for OpenVim
+# Rendering Architecture Analysis for Vimcraft
 
 **Status**: Comprehensive Design Document  
 **Date**: November 5, 2025  
@@ -10,7 +10,7 @@
 ## Table of Contents
 
 1. [Executive Summary](#executive-summary)
-2. [Current OpenVim Rendering Implementation](#current-vimcraft-rendering-implementation)
+2. [Current Vimcraft Rendering Implementation](#current-vimcraft-rendering-implementation)
 3. [Reference Architecture Analysis](#reference-architecture-analysis)
 4. [React-like Concepts for Terminal Rendering](#react-like-concepts-for-terminal-rendering)
 5. [Plugin Requirements Analysis](#plugin-requirements-analysis)
@@ -25,7 +25,7 @@
 
 ### Current State
 
-OpenVim currently implements a **grid-based rendering architecture** inspired by Neovim with optimizations from Helix:
+Vimcraft currently implements a **grid-based rendering architecture** inspired by Neovim with optimizations from Helix:
 
 - **Dual-buffer system**: Current and previous frame comparison
 - **Damage tracking**: Line-level dirty bit tracking
@@ -52,7 +52,7 @@ A **hierarchical, component-based rendering system** that:
 
 ---
 
-## Current OpenVim Rendering Implementation
+## Current Vimcraft Rendering Implementation
 
 ### Architecture Overview
 
@@ -462,7 +462,7 @@ vim.render.float({
 
 **Benefits**:
 - Plugins don't think about grids
-- OpenVim handles layout and rendering
+- Vimcraft handles layout and rendering
 - Consistent UI across plugins
 - Easier to add features (syntax highlighting, etc.)
 
@@ -1160,7 +1160,7 @@ debug_log.log("Render took {d:.2}ms", .{bench.elapsed_ms()});
 
 ## Comparison with Neovim
 
-| Aspect | Neovim | OpenVim (Proposed) |
+| Aspect | Neovim | Vimcraft (Proposed) |
 |--------|--------|-------------------|
 | **Grid model** | Multiple grids (msgpack) | Single virtual grid with layers |
 | **Plugin rendering** | Limited (signs, decorations) | Declarative API, full floats |
@@ -1191,7 +1191,7 @@ docs/architecture/
 
 ## Conclusion
 
-OpenVim has a solid rendering foundation with grid-based rendering and incremental updates. The proposed multi-layer architecture builds on this strength by:
+Vimcraft has a solid rendering foundation with grid-based rendering and incremental updates. The proposed multi-layer architecture builds on this strength by:
 
 1. **Extending** damage tracking for complex layouts
 2. **Composing** windows with clear z-order
@@ -1208,5 +1208,5 @@ Key success metrics:
 - Type-safe plugin APIs
 - Zero data corruption from plugin rendering
 
-This architecture positions OpenVim to be a modern, maintainable alternative to Neovim while leveraging Zig's performance and JavaScript's accessibility for plugins.
+This architecture positions Vimcraft to be a modern, maintainable alternative to Neovim while leveraging Zig's performance and JavaScript's accessibility for plugins.
 

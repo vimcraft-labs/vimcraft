@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-OpenVim uses a **production-ready, battle-tested approach** to Unicode character width calculation and rendering. While not directly using Ghostty's `uucode` library, our implementation:
+Vimcraft uses a **production-ready, battle-tested approach** to Unicode character width calculation and rendering. While not directly using Ghostty's `uucode` library, our implementation:
 
 1. ✅ Handles all real-world Unicode scenarios
 2. ✅ Includes grapheme cluster support (variation selectors, combining marks)
@@ -94,7 +94,7 @@ These edge cases represent <5% of real-world text editing scenarios.
 
 ### Technical Reason
 Ghostty's `uucode` dependency requires Zig 0.15.2+, but:
-- OpenVim uses Zig 0.15.0-dev (master/nightly)
+- Vimcraft uses Zig 0.15.0-dev (master/nightly)
 - Zig master has breaking API changes
 - `uucode` build.zig uses deprecated APIs
 
@@ -107,7 +107,7 @@ Ghostty's `uucode` dependency requires Zig 0.15.2+, but:
 
 ## Migration Path (When Needed)
 
-When OpenVim stabilizes on Zig 0.15.2+, integration is straightforward:
+When Vimcraft stabilizes on Zig 0.15.2+, integration is straightforward:
 
 1. Add `build.zig.zon` with uucode dependency
 2. Replace `char_width.codepointWidth()` implementation
@@ -139,7 +139,7 @@ zig test src/display/char_width.zig
 
 ## Conclusion
 
-OpenVim's Unicode rendering is **production-ready** and handles all important real-world cases. The implementation is:
+Vimcraft's Unicode rendering is **production-ready** and handles all important real-world cases. The implementation is:
 - Based on Unicode standards
 - Tested and verified working
 - Simpler than full Ghostty integration

@@ -1,6 +1,6 @@
 # Design Decisions
 
-Why we made certain technical choices in OpenVim.
+Why we made certain technical choices in Vimcraft.
 
 ---
 

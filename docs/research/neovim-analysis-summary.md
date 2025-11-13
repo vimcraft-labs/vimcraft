@@ -64,7 +64,7 @@ Neovim uses a proven four-layer design:
 
 ### 4. Feature Gap Analysis
 
-**OpenVim vs Neovim**:
+**Vimcraft vs Neovim**:
 
 | Area | Status | Priority |
 |------|--------|----------|
@@ -102,7 +102,7 @@ Neovim uses a proven four-layer design:
 - Syntax highlighting
 - LSP integration
 
-## Design Recommendations for OpenVim
+## Design Recommendations for Vimcraft
 
 ### Configuration Architecture
 
@@ -157,7 +157,7 @@ ov.cmd           // Command execution
    - IDE type hints (not enforced)
    - Still feels dynamic
 
-### What OpenVim Can Do Better
+### What Vimcraft Can Do Better
 
 1. **Faster Startup**
    - Hermes bytecode vs Lua 5.1 interpreter
@@ -166,7 +166,7 @@ ov.cmd           // Command execution
 
 2. **Better Hot Reload**
    - Neovim has no native hot reload
-   - OpenVim already has this!
+   - Vimcraft already has this!
    - Clear timers/intervals on reload
 
 3. **JavaScript Familiarity**
@@ -203,5 +203,5 @@ Contains:
 
 **Analysis Date**: November 3, 2025  
 **Neovim Version**: 0.12.0  
-**OpenVim Phase**: 1+2 Complete, Phase 3 Ready
+**Vimcraft Phase**: 1+2 Complete, Phase 3 Ready
 

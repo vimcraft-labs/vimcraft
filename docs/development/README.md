@@ -1,12 +1,12 @@
 # Development Guide
 
-Contributing to OpenVim - setup, workflow, and guidelines.
+Contributing to Vimcraft - setup, workflow, and guidelines.
 
 ---
 
 ## 📖 Overview
 
-Welcome to OpenVim development! This guide will help you set up your development environment, understand the codebase, and contribute effectively.
+Welcome to Vimcraft development! This guide will help you set up your development environment, understand the codebase, and contribute effectively.
 
 **Tech Stack**:
 - **Core**: Zig 0.13+ (systems programming)
@@ -18,7 +18,7 @@ Welcome to OpenVim development! This guide will help you set up your development
 
 ## 📚 Documents in This Category
 
-### [Building OpenVim](./building.md)
+### [Building Vimcraft](./building.md)
 **Purpose**: Build system and development setup
 **Read if**: You're setting up for the first time
 **Key topics**:
@@ -50,7 +50,7 @@ Welcome to OpenVim development! This guide will help you set up your development
 - Adding new modules
 
 ### [Contributing Guidelines](./contributing.md)
-**Purpose**: How to contribute to OpenVim
+**Purpose**: How to contribute to Vimcraft
 **Read if**: You're ready to submit code
 **Key topics**:
 - Contribution workflow
@@ -74,13 +74,13 @@ cd vimcraft
 # Initialize submodules
 git submodule update --init
 
-# Build OpenVim
+# Build Vimcraft
 zig build
 
 # Run tests
 zig build test
 
-# Run OpenVim
+# Run Vimcraft
 ./zig-out/bin/vimcraft README.md
 ```
 
@@ -195,7 +195,7 @@ git push origin feature/my-feature
 # Terminal 1: Watch TypeScript config
 npm run watch:config
 
-# Terminal 2: Run OpenVim
+# Terminal 2: Run Vimcraft
 ./zig-out/bin/vimcraft init.ts
 
 # Edit init.ts

@@ -1,4 +1,4 @@
-// OpenVim TypeScript Type Definitions
+// Vimcraft TypeScript Type Definitions
 // Version: 0.3.0 - Neovim-Compatible API
 // Based on Neovim 0.12.0 API analysis
 
@@ -880,7 +880,7 @@ export interface TreeSitter {
 
 /**
  * Main vim global interface
- * Entry point for all OpenVim configuration and API access
+ * Entry point for all Vimcraft configuration and API access
  */
 export interface Vim {
   /**
@@ -1060,7 +1060,7 @@ export interface Console {
 
 declare global {
   /**
-   * Global vim object - main API for configuring OpenVim
+   * Global vim object - main API for configuring Vimcraft
    * Neovim-compatible interface
    */
   var vim: Vim;

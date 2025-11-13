@@ -1,6 +1,6 @@
 # Neovim Configuration Interface & Architecture Analysis
 
-**Document Purpose**: Comprehensive guide to Neovim's Lua API and configuration architecture for informing OpenVim's design.
+**Document Purpose**: Comprehensive guide to Neovim's Lua API and configuration architecture for informing Vimcraft's design.
 
 **Status**: Complete analysis of Neovim 0.12.0 (master branch as of Nov 2024)
 
@@ -11,7 +11,7 @@
 1. [Configuration Interface Reference](#configuration-interface-reference)
 2. [Architecture Overview](#architecture-overview)
 3. [Feature Gap Analysis](#feature-gap-analysis)
-4. [Design Recommendations for OpenVim](#design-recommendations-for-vimcraft)
+4. [Design Recommendations for Vimcraft](#design-recommendations-for-vimcraft)
 5. [Implementation Priority Roadmap](#implementation-priority-roadmap)
 6. [Code Examples & Patterns](#code-examples--patterns)
 
@@ -896,7 +896,7 @@ All complex APIs use named options instead of positional args.
 
 ### Core Features (Phase 1-2): Status
 
-| Feature | OpenVim | Neovim | Priority |
+| Feature | Vimcraft | Neovim | Priority |
 |---------|---------|--------|----------|
 | **Buffer Management** | | |
 | Text storage | ✅ ArrayList | ✅ Gap buffer | HIGH |
@@ -923,7 +923,7 @@ All complex APIs use named options instead of positional args.
 
 ### Plugin/Configuration Features: Status
 
-| Feature | OpenVim | Neovim | Priority |
+| Feature | Vimcraft | Neovim | Priority |
 |---------|---------|--------|----------|
 | **Configuration** | | |
 | vim.opt | ❌ No | ✅ Yes | VERY HIGH |
@@ -971,7 +971,7 @@ All complex APIs use named options instead of positional args.
 
 ---
 
-## Design Recommendations for OpenVim
+## Design Recommendations for Vimcraft
 
 ### 1. Configuration Architecture
 
@@ -1009,7 +1009,7 @@ All complex APIs use named options instead of positional args.
 
 3. **Hot Reload Support**
    - File watcher on config directory
-   - Reload on change (already in OpenVim!)
+   - Reload on change (already in Vimcraft!)
    - Clear timers/intervals before reload
 
 ### 2. API Organization
@@ -1168,7 +1168,7 @@ ov.keymap.set('n', 'x', 'dd');
 
 ## Implementation Priority Roadmap
 
-### Phase 3: Text Editing (OpenVim Enhancement)
+### Phase 3: Text Editing (Vimcraft Enhancement)
 **Estimated**: 4-6 weeks | **Difficulty**: HIGH
 
 **Critical Path**:
@@ -1617,7 +1617,7 @@ fn onFileChange(path: []const u8, context: *anyopaque) void {
 
 ---
 
-## Key Takeaways for OpenVim
+## Key Takeaways for Vimcraft
 
 ### Architectural Principles
 
@@ -1712,7 +1712,7 @@ Neovim's configuration interface represents 15 years of editor evolution. It bal
 - **Performance**: Lazy loading and efficient caching
 - **Compatibility**: Vimscript bridge alongside Lua
 
-For OpenVim, the goal should be to replicate this design in Zig+JavaScript, preserving what works while adapting to different constraints. The Hermes bytecode approach provides an opportunity for even faster startup times than Neovim's Lua 5.1 interpreter.
+For Vimcraft, the goal should be to replicate this design in Zig+JavaScript, preserving what works while adapting to different constraints. The Hermes bytecode approach provides an opportunity for even faster startup times than Neovim's Lua 5.1 interpreter.
 
 Key success metrics:
 1. Can existing Neovim configs run (with minimal changes)?

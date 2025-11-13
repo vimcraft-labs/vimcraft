@@ -1,7 +1,7 @@
 # Neovim Animation Plugins - Research & Analysis
 
 **Date**: 2025-01-08
-**Purpose**: Understand how existing Neovim plugins implement animations WITHOUT native animation API support, to inform OpenVim's animation system design.
+**Purpose**: Understand how existing Neovim plugins implement animations WITHOUT native animation API support, to inform Vimcraft's animation system design.
 
 ## Executive Summary
 
@@ -370,13 +370,13 @@ vim.api.nvim__redraw({ win = win, flush = true })  -- Private API!
 
 ---
 
-## What Neovim is Missing (OpenVim Opportunities)
+## What Neovim is Missing (Vimcraft Opportunities)
 
 ### 1. Native Animation Loop ⭐⭐⭐⭐⭐
 
 **Problem**: Every plugin implements its own timer-based loop
 
-**Solution OpenVim Should Provide**:
+**Solution Vimcraft Should Provide**:
 ```javascript
 // Plugin API
 const manager = vimcraft.animation.createManager();
@@ -397,7 +397,7 @@ manager.onFrame((deltaTime) => {
 
 **Problem**: Plugins copy complex spring code or skip springs entirely
 
-**Solution OpenVim Should Provide**:
+**Solution Vimcraft Should Provide**:
 ```javascript
 // Declarative spring animation
 Animated.spring(scrollY, {
@@ -418,7 +418,7 @@ Animated.spring(scrollY, {
 
 **Problem**: Plugins manually track position/velocity/target
 
-**Solution OpenVim Should Provide**:
+**Solution Vimcraft Should Provide**:
 ```javascript
 const scrollY = Animated.Value(0);
 const opacity = Animated.Value(1);
@@ -437,7 +437,7 @@ scrollY.addListener((value) => {
 
 **Problem**: Each plugin reimplements cubic/sine/back easings
 
-**Solution OpenVim Should Provide**:
+**Solution Vimcraft Should Provide**:
 ```javascript
 Animated.timing(opacity, {
     toValue: 0,
@@ -455,7 +455,7 @@ Animated.timing(opacity, {
 
 **Problem**: Parallel/sequence animations are manual callback hell
 
-**Solution OpenVim Should Provide**:
+**Solution Vimcraft Should Provide**:
 ```javascript
 Animated.parallel([
     Animated.spring(scrollY, { toValue: 1000 }),
@@ -483,7 +483,7 @@ Animated.stagger(50, [
 
 **Problem**: Plugins must disable syntax/treesitter to hit 60fps
 
-**Solution OpenVim Should Provide**:
+**Solution Vimcraft Should Provide**:
 ```javascript
 Animated.spring(scrollY, {
     toValue: 1000,
@@ -501,7 +501,7 @@ Animated.spring(scrollY, {
 
 **Problem**: Scroll gestures don't provide velocity to plugins
 
-**Solution OpenVim Should Provide**:
+**Solution Vimcraft Should Provide**:
 ```javascript
 vimcraft.on('scroll', (event) => {
     if (event.velocity) {
@@ -521,7 +521,7 @@ vimcraft.on('scroll', (event) => {
 
 **Problem**: No way to inspect running animations
 
-**Solution OpenVim Should Provide**:
+**Solution Vimcraft Should Provide**:
 ```javascript
 // Debug API
 vimcraft.animation.getActiveAnimations()  // List all running
@@ -537,9 +537,9 @@ vimcraft.animation.setSpeed(0.5)          // Slow-mo for debugging
 
 ---
 
-## Recommended OpenVim Animation API
+## Recommended Vimcraft Animation API
 
-Based on the research, here's what OpenVim should provide:
+Based on the research, here's what Vimcraft should provide:
 
 ### Layer 1: Zig Core (Native)
 
@@ -610,7 +610,7 @@ Based on pain point severity:
 
 ## Success Criteria
 
-OpenVim's animation system succeeds if:
+Vimcraft's animation system succeeds if:
 
 ✅ Plugin developers can create smooth 60fps animations in **<10 lines of code**
 ✅ No need to copy spring physics code

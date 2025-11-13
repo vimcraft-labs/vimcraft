@@ -1,6 +1,6 @@
-# Getting Started with OpenVim
+# Getting Started with Vimcraft
 
-Quick guide to installing and running OpenVim for the first time.
+Quick guide to installing and running Vimcraft for the first time.
 
 ---
 
@@ -30,7 +30,7 @@ git submodule update --init
 
 This downloads the Hermes JavaScript engine.
 
-### 3. Build OpenVim
+### 3. Build Vimcraft
 
 ```bash
 zig build
@@ -75,13 +75,13 @@ mkdir -p ~/.config/vimcraft
 
 ```bash
 cat > ~/.config/vimcraft/init.js << 'ENDJS'
-// Basic OpenVim configuration
+// Basic Vimcraft configuration
 vim.opt.cursorLine = true;
-console.log('✅ OpenVim ready!');
+console.log('✅ Vimcraft ready!');
 ENDJS
 ```
 
-### 3. Run OpenVim
+### 3. Run Vimcraft
 
 Config loads automatically:
 

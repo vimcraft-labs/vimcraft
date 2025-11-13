@@ -1,10 +1,10 @@
 // @ts-check
 /// <reference types="@vimcraft/types" />
 
-// OpenVim Configuration Example (JavaScript with type checking)
+// Vimcraft Configuration Example (JavaScript with type checking)
 // Add the @ts-check comment above to enable type checking in VS Code
 
-console.log('Loading OpenVim config...');
+console.log('Loading Vimcraft config...');
 
 // Highlight groups - you get autocomplete for 'bg', 'fg', etc.
 vim.highlight('CursorLine', { bg: '#2b2b2b' });

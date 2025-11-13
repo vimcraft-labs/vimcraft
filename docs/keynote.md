@@ -1,4 +1,4 @@
-# OpenVim Demo Script (Final)
+# Vimcraft Demo Script (Final)
 ## IDE for Agentic AI Development
 
 ---
@@ -15,7 +15,7 @@
 
 **"That philosophy should apply to agent development too."**
 
-**"We built OpenVim on that belief."**
+**"We built Vimcraft on that belief."**
 
 ---
 
@@ -48,12 +48,12 @@ vim.api.nvim_command("set number")
 -- You compose these into custom tools
 ```
 
-**"OpenVim does the same for agents."**
+**"Vimcraft does the same for agents."**
 
 **[Screen shows]**
 
 ```javascript
-// OpenVim primitives for agents
+// Vimcraft primitives for agents
 
 // Buffer API
 agent.buffer.read(fileId)
@@ -90,7 +90,7 @@ agent.navigate.openFile(path)
 
 ## PART 3: SHOW IT (4 minutes)
 
-**[Open OpenVim]**
+**[Open Vimcraft]**
 
 **"Watch what a developer does with primitives."**
 
@@ -219,7 +219,7 @@ export const testGen = {
 
 **"Like Neovim: buffer API, window API, command API → you build your editor."**
 
-**"Like OpenVim: buffer API, debugger API, context API → you build your agents."**
+**"Like Vimcraft: buffer API, debugger API, context API → you build your agents."**
 
 **"We give you primitives. You own the future."**
 
@@ -235,7 +235,7 @@ export const testGen = {
 - **Think in compositions** (combine pieces, like Unix)
 - **Iterate safely** (sandbox, not production risk)
 
-**"If you're this person, OpenVim is for you."**
+**"If you're this person, Vimcraft is for you."**
 
 **"If you prefer finished products, that's fine too. Use Claude Code or Cursor."**
 
@@ -243,7 +243,7 @@ export const testGen = {
 
 ## PART 6: OPEN SOURCE (1 minute)
 
-**"OpenVim is open source. MIT license."**
+**"Vimcraft is open source. MIT license."**
 
 **"You can:"**
 
@@ -264,7 +264,7 @@ export const testGen = {
 ```bash
 $ vimcraft
 
-# Open OpenVim, see Neovim as always
+# Open Vimcraft, see Neovim as always
 
 :RunAgent analyzer.analyze("src/main.js")
 # Results in context blocks
@@ -288,7 +288,7 @@ $ vimcraft
 
 ## PART 8: THE ASK (30 seconds)
 
-**"If you build agents, try OpenVim."**
+**"If you build agents, try Vimcraft."**
 
 **"Use primitives to build something custom for your workflow."**
 
@@ -313,12 +313,12 @@ Open source. Yours.
 
 ## CORE CONCEPT
 
-**OpenVim = Primitives for agent development**
+**Vimcraft = Primitives for agent development**
 
 Like:
 - **Unix:** `cat`, `grep`, `awk` (system automation)
 - **Neovim:** buffer API, window API (editor customization)
-- **OpenVim:** buffer API, debugger API, context API (agent development)
+- **Vimcraft:** buffer API, debugger API, context API (agent development)
 
 **Not products. Primitives.**
 
@@ -328,7 +328,7 @@ Like:
 
 ## POSITIONING
 
-> **"OpenVim: Primitives for agentic AI development. Open source. Yours to own."**
+> **"Vimcraft: Primitives for agentic AI development. Open source. Yours to own."**
 
 ---
 
@@ -352,7 +352,7 @@ Just what we believe in. That's it.
 
 ## REALISTIC SCOPE
 
-**OpenVim is:**
+**Vimcraft is:**
 - A sandbox environment
 - With primitive APIs for agents
 - Written in JavaScript
@@ -360,7 +360,7 @@ Just what we believe in. That's it.
 - Open source
 - For agent developers specifically
 
-**OpenVim is NOT:**
+**Vimcraft is NOT:**
 - The only way to build agents
 - Better than all alternatives
 - For everyone
@@ -377,10 +377,10 @@ We built something for a specific person:
 - Writes JavaScript
 - Values open source
 
-**If that's you, try OpenVim.**
+**If that's you, try Vimcraft.**
 
 **If not, that's fine. Use what works for you.**
 
 ---
 
-**That's OpenVim. Honest. Specific. Powerful for the right people.**
+**That's Vimcraft. Honest. Specific. Powerful for the right people.**

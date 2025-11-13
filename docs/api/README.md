@@ -1,12 +1,12 @@
 # API Documentation
 
-Complete reference for OpenVim's configuration and plugin API.
+Complete reference for Vimcraft's configuration and plugin API.
 
 ---
 
 ## 📖 Overview
 
-OpenVim provides a **Neovim-compatible API** for configuration and plugins:
+Vimcraft provides a **Neovim-compatible API** for configuration and plugins:
 
 - **vim.api.\*** - Core API functions (150+ nvim_* functions)
 - **vim.opt.\*** - Editor options (70+ options)
@@ -214,7 +214,7 @@ Future features:
 
 ## 🎓 Learning Path
 
-### Beginner (Just configuring OpenVim)
+### Beginner (Just configuring Vimcraft)
 
 1. Read [Quick Reference](./quick-reference.md) - Tier 1 section (15 min)
 2. Learn basic [vim.opt](./vim-opt.md) options

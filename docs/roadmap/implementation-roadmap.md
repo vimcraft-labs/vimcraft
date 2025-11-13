@@ -1,4 +1,4 @@
-# OpenVim Implementation Roadmap
+# Vimcraft Implementation Roadmap
 ## Neovim-Compatible Editor in Zig + JavaScript
 
 **Version**: 1.0
@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-OpenVim aims to create a **Neovim-compatible text editor** with:
+Vimcraft aims to create a **Neovim-compatible text editor** with:
 - **Core**: Written in Zig (fast, safe systems programming)
 - **Plugins**: JavaScript/TypeScript via Hermes engine
 - **Bridge**: Zero-copy JSI integration
@@ -61,7 +61,7 @@ OpenVim aims to create a **Neovim-compatible text editor** with:
 
 ### Key Design Principles
 
-1. **Neovim Compatibility First**: If it works in Neovim, it should work (or be easy to port) in OpenVim
+1. **Neovim Compatibility First**: If it works in Neovim, it should work (or be easy to port) in Vimcraft
 2. **Performance Matters**: Zig core + Hermes bytecode = faster than Neovim's Lua
 3. **Beautiful APIs**: Both ergonomic wrappers AND low-level API access
 4. **Hot Reload Built-in**: Already working! Neovim doesn't have this natively
@@ -570,7 +570,7 @@ src/
 ### Development Workflow
 
 ```bash
-# Build OpenVim
+# Build Vimcraft
 zig build
 
 # Run with config

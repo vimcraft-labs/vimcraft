@@ -1,9 +1,9 @@
 /// <reference types="@vimcraft/types" />
 
-// OpenVim Configuration Example (TypeScript)
-// This file demonstrates the typed OpenVim API
+// Vimcraft Configuration Example (TypeScript)
+// This file demonstrates the typed Vimcraft API
 
-console.log('🚀 Loading OpenVim config...');
+console.log('🚀 Loading Vimcraft config...');
 
 // ============================================================================
 // Highlight Groups

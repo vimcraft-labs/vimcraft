@@ -1,12 +1,12 @@
 # Four-Layer Design
 
-OpenVim's core architectural pattern.
+Vimcraft's core architectural pattern.
 
 ---
 
 ## Overview
 
-OpenVim uses a **four-layer architecture** that separates concerns and enables clean interfaces between components.
+Vimcraft uses a **four-layer architecture** that separates concerns and enables clean interfaces between components.
 
 ## The Four Layers
 

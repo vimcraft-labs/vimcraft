@@ -32,11 +32,11 @@ const hermes_c = @cImport({
 /// Phase 1+2+3+4: Text display, Vim navigation, text editing, and JavaScript config
 ///
 /// Modes:
-///   vc <file>           - Interactive editor
-///   vc --debug <file>   - Interactive editor with Chrome DevTools debugging
-///   vc --test <file>    - Run test script
-///   vc --repl           - Interactive debugging REPL
-///   vc --help           - Show help
+///   vic <file>           - Interactive editor
+///   vic --debug <file>   - Interactive editor with Chrome DevTools debugging
+///   vic --test <file>    - Run test script
+///   vic --repl           - Interactive debugging REPL
+///   vic --help           - Show help
 /// Pending command for multi-key sequences (like dd, dw)
 const PendingCommand = struct {
     char: ?u8 = null,
@@ -258,14 +258,14 @@ pub fn main() !void {
     } else if (std.mem.eql(u8, first_arg, "--debug")) {
         if (args.len < 3) {
             std.debug.print("Error: --debug requires a file\n", .{});
-            std.debug.print("Usage: vc --debug <file>\n", .{});
+            std.debug.print("Usage: vic --debug <file>\n", .{});
             return;
         }
         return try runEditorWithDebugger(allocator, args[2]);
     } else if (std.mem.eql(u8, first_arg, "--test")) {
         if (args.len < 3) {
             std.debug.print("Error: --test requires a test file\n", .{});
-            std.debug.print("Usage: vc --test <test_file>\n", .{});
+            std.debug.print("Usage: vic --test <test_file>\n", .{});
             return;
         }
         return try runTestMode(allocator, args[2]);
@@ -283,12 +283,12 @@ fn printHelp() void {
         \\Vimcraft - Neovim-compatible text editor
         \\
         \\Usage:
-        \\  vc <file>                 Open file in interactive editor
-        \\  vc --debug <file>         Open file with Chrome DevTools debugging
-        \\  vc --debug-protocol       Start debug protocol server (for ovdb)
-        \\  vc --test <test_file>     Run automated test script
-        \\  vc --repl                 Interactive debugging REPL
-        \\  vc --help                 Show this help message
+        \\  vic <file>                 Open file in interactive editor
+        \\  vic --debug <file>         Open file with Chrome DevTools debugging
+        \\  vic --debug-protocol       Start debug protocol server (for ovdb)
+        \\  vic --test <test_file>     Run automated test script
+        \\  vic --repl                 Interactive debugging REPL
+        \\  vic --help                 Show this help message
         \\
         \\Interactive Mode:
         \\  Normal Vim keybindings (hjkl, i/a/o, dd/dw, u, :w, :q, :debug, etc.)
@@ -309,10 +309,10 @@ fn printHelp() void {
         \\  Type 'help' for available commands, 'quit' to exit
         \\
         \\Examples:
-        \\  vc myfile.txt            # Edit a file
-        \\  vc --test bug.test       # Run test script
-        \\  vc --repl                # Start debugging REPL
-        \\  vc --debug-protocol      # Start debug server (used by ovdb)
+        \\  vic myfile.txt            # Edit a file
+        \\  vic --test bug.test       # Run test script
+        \\  vic --repl                # Start debugging REPL
+        \\  vic --debug-protocol      # Start debug server (used by ovdb)
         \\
     ;
     std.debug.print("{s}", .{help});

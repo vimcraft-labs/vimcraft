@@ -1,4 +1,4 @@
-# Neovim API Quick Reference for OpenVim Implementation
+# Neovim API Quick Reference for Vimcraft Implementation
 
 ## Most Important APIs to Implement First
 
@@ -110,7 +110,7 @@ ov.api.nvim_buf_set_lines(5, 0, -1, false, ['new', 'lines'])
 
 ## Option Type Handling
 
-Options have different metatypes. OpenVim must handle:
+Options have different metatypes. Vimcraft must handle:
 
 ```javascript
 // Boolean
@@ -266,13 +266,13 @@ ov.cmd.edit({ 'newfile.txt' })
 
 ## Backward Compatibility
 
-**Golden Rule**: If it works in Neovim, it should work (or be easy to port) in OpenVim.
+**Golden Rule**: If it works in Neovim, it should work (or be easy to port) in Vimcraft.
 
 ```javascript
 // Neovim style
 vim.keymap.set('n', 'x', function() end)
 
-// OpenVim equivalent
+// Vimcraft equivalent
 ov.keymap.set('n', 'x', function() {})
 
 // User conversion effort: zero (just rename vim → ov)
@@ -348,7 +348,7 @@ For implementation reference:
 
 2. `/runtime/lua/vim/keymap.lua` (133 lines)
    - Simple, clear implementation
-   - Good model for OpenVim API
+   - Good model for Vimcraft API
 
 3. `/runtime/lua/vim/_editor.lua` (1,300 lines)
    - Metatable accessor pattern

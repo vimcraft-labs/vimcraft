@@ -1,12 +1,12 @@
 # Architecture Documentation
 
-Understanding OpenVim's design, architecture, and technical decisions.
+Understanding Vimcraft's design, architecture, and technical decisions.
 
 ---
 
 ## 📖 Overview
 
-OpenVim follows a **four-layer architecture** inspired by Neovim but implemented with modern technologies:
+Vimcraft follows a **four-layer architecture** inspired by Neovim but implemented with modern technologies:
 
 ```
 ┌─────────────────────────────────────────┐
@@ -31,7 +31,7 @@ OpenVim follows a **four-layer architecture** inspired by Neovim but implemented
 ## 📚 Documents in This Category
 
 ### [Four-Layer Design](./four-layer-design.md)
-**Purpose**: Understand OpenVim's core architectural pattern
+**Purpose**: Understand Vimcraft's core architectural pattern
 **Read if**: You want to understand how the system is organized
 **Key topics**:
 - Layer responsibilities
@@ -104,7 +104,7 @@ See [Four-Layer Design](./four-layer-design.md#layer-2-jsi-bridge) for details.
 
 ### 3. Neovim-Compatible API
 
-OpenVim replicates Neovim's proven API design:
+Vimcraft replicates Neovim's proven API design:
 - `vim.api.*` - Core functions (150+ nvim_* functions)
 - `vim.opt.*` - Options interface
 - `vim.keymap.*` - Key mappings
@@ -114,7 +114,7 @@ See [Neovim Analysis](./neovim-analysis.md) for complete reference.
 
 ### 4. Hot Reload Built-in
 
-Unlike Neovim (requires plugins), OpenVim has native hot reload:
+Unlike Neovim (requires plugins), Vimcraft has native hot reload:
 - Automatic config file watching
 - Preserves editor state
 - Cleans up timers/intervals
@@ -126,7 +126,7 @@ See [Design Decisions](./design-decisions.md#hot-reload) for rationale.
 
 ## 📊 Architecture Comparison
 
-| Aspect | Neovim | OpenVim |
+| Aspect | Neovim | Vimcraft |
 |--------|--------|---------|
 | **Core Language** | C (~100K lines) | Zig (~10K lines target) |
 | **Plugin Language** | Lua 5.1 | JavaScript (Hermes) |

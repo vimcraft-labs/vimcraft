@@ -1,29 +1,29 @@
 # Guides & Tutorials
 
-Step-by-step guides to get started with OpenVim.
+Step-by-step guides to get started with Vimcraft.
 
 ---
 
 ## 📖 Overview
 
-This section contains practical guides for users and developers getting started with OpenVim. Whether you're configuring the editor for the first time or setting up a development environment, these guides will help you.
+This section contains practical guides for users and developers getting started with Vimcraft. Whether you're configuring the editor for the first time or setting up a development environment, these guides will help you.
 
 ---
 
 ## 📚 Documents in This Category
 
 ### [Getting Started](./getting-started.md) ⭐ START HERE
-**Purpose**: Install OpenVim and run your first session
-**Read if**: You're new to OpenVim
+**Purpose**: Install Vimcraft and run your first session
+**Read if**: You're new to Vimcraft
 **Key topics**:
 - Installation requirements
 - Building from source
-- Running OpenVim
+- Running Vimcraft
 - Basic usage
 - First configuration
 
 ### [Configuration Guide](./configuration.md)
-**Purpose**: Learn how to configure OpenVim
+**Purpose**: Learn how to configure Vimcraft
 **Read if**: You want to customize your setup
 **Key topics**:
 - init.js structure
@@ -58,7 +58,7 @@ cd vimcraft
 # Initialize Hermes submodule
 git submodule update --init
 
-# Build OpenVim
+# Build Vimcraft
 zig build
 
 # Run with a file
@@ -73,12 +73,12 @@ mkdir -p ~/.config/vimcraft
 
 # Create init.js
 cat > ~/.config/vimcraft/init.js << 'EOF'
-// Basic OpenVim configuration
+// Basic Vimcraft configuration
 vim.opt.cursorLine = true;
-console.log('OpenVim ready!');
+console.log('Vimcraft ready!');
 EOF
 
-# Run OpenVim (config loads automatically)
+# Run Vimcraft (config loads automatically)
 ./zig-out/bin/vimcraft README.md
 ```
 
@@ -90,7 +90,7 @@ See: [Getting Started Guide](./getting-started.md) for complete instructions.
 
 ### Level 1: Basic Usage (30 minutes)
 
-1. **Install OpenVim**
+1. **Install Vimcraft**
    - [Getting Started](./getting-started.md) - Installation
    - Build and run for the first time
    - Navigate a file
@@ -130,7 +130,7 @@ See: [Getting Started Guide](./getting-started.md) for complete instructions.
 ### Level 3: Development (2-4 hours)
 
 1. **Build System**
-   - [Building OpenVim](../development/building.md)
+   - [Building Vimcraft](../development/building.md)
    - Understand build process
    - Development workflow
    - Testing changes
@@ -154,7 +154,7 @@ See: [Getting Started Guide](./getting-started.md) for complete instructions.
 ### Installation
 - [Requirements](./getting-started.md#requirements)
 - [Building from Source](./getting-started.md#building)
-- [Running OpenVim](./getting-started.md#running)
+- [Running Vimcraft](./getting-started.md#running)
 - [First Steps](./getting-started.md#first-steps)
 
 ### Configuration
@@ -180,7 +180,7 @@ See: [Getting Started Guide](./getting-started.md) for complete instructions.
 
 ## 💡 Common Tasks
 
-### "I want to change how OpenVim looks"
+### "I want to change how Vimcraft looks"
 
 ```typescript
 // ~/.config/vimcraft/init.ts
@@ -227,7 +227,7 @@ See: [TypeScript Setup Guide](./typescript-setup.md)
 
 ### "I want to contribute"
 
-1. Read [Getting Started](./getting-started.md) - Build OpenVim
+1. Read [Getting Started](./getting-started.md) - Build Vimcraft
 2. Read [Development Guide](../development/README.md) - Setup
 3. Check [Roadmap](../roadmap/) - Pick a task
 4. Follow [Contributing Guidelines](../development/contributing.md)
@@ -241,7 +241,7 @@ Coming soon:
 - [ ] Basic configuration walkthrough
 - [ ] TypeScript setup guide
 - [ ] Creating your first plugin
-- [ ] Contributing to OpenVim
+- [ ] Contributing to Vimcraft
 
 ---
 

@@ -19,7 +19,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Project Overview
 
-**OpenVim** - Neovim-compatible editor in Zig with Hermes JavaScript engine for plugins via JSI (zero-copy bidirectional communication).
+**Vimcraft** - Neovim-compatible editor in Zig with Hermes JavaScript engine for plugins via JSI (zero-copy bidirectional communication).
 
 **Status**: Phase 1+2+3 Complete ✅ (December 2025)
 - Text display and file loading
@@ -40,7 +40,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Debug Protocol & Verification System
 
-**Critical**: OpenVim uses Zig-based debug protocol for LLM-driven development with structured JSON communication.
+**Critical**: Vimcraft uses Zig-based debug protocol for LLM-driven development with structured JSON communication.
 
 ### Background Mode (REQUIRED for Multi-Command Debugging)
 
@@ -52,10 +52,10 @@ echo '{"cmd":"get_state","id":"1"}' | ./zig-out/bin/vimcraft --debug-protocol  #
 **✅ CORRECT** (background mode - 10x faster):
 ```bash
 ./zig-out/bin/vimcraft --debug-protocol &
-OPENVIM_PID=$!
+VIMCRAFT_PID=$!
 echo '{"cmd":"get_state","id":"1"}'        # 65ms (no startup overhead)
 echo '{"cmd":"execute_keys","args":{"keys":"viw"},"id":"2"}'  # 65ms
-kill $OPENVIM_PID
+kill $VIMCRAFT_PID
 ```
 
 **Rule**: ALWAYS use background mode for 2+ commands. Startup cost amortized → 2.5x faster for 10 commands.
@@ -190,7 +190,7 @@ editor.logger.debug("BLEND: src={u} dst={u} result={u}", .{src.char, dst.char, r
 
 ## Test-Driven Development (TDD)
 
-**CRITICAL**: OpenVim strictly follows TDD methodology to ensure correctness and prevent regressions.
+**CRITICAL**: Vimcraft strictly follows TDD methodology to ensure correctness and prevent regressions.
 
 ### TDD Workflow (MANDATORY)
 
@@ -234,7 +234,7 @@ test "o command opens line AFTER current line" {
 }
 ```
 
-### TDD Rules for OpenVim
+### TDD Rules for Vimcraft
 
 1. **Write Test First**: NO exceptions. Test must fail before implementation.
 2. **Test Correct Behavior**: Specify what SHOULD happen, not what currently happens.

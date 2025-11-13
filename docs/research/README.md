@@ -1,12 +1,12 @@
 # Research Documentation
 
-Background research that informed OpenVim's design and implementation strategy.
+Background research that informed Vimcraft's design and implementation strategy.
 
 ---
 
 ## 📖 Overview
 
-This section contains comprehensive analysis of Neovim's architecture and API design, which serves as the foundation for OpenVim's Neovim-compatible interface. The research covers:
+This section contains comprehensive analysis of Neovim's architecture and API design, which serves as the foundation for Vimcraft's Neovim-compatible interface. The research covers:
 
 - Neovim's four-layer architecture
 - 150+ API functions across 13 categories
@@ -40,7 +40,7 @@ This section contains comprehensive analysis of Neovim's architecture and API de
 - Research deliverables (4 documents, 2,675 lines)
 - TypeScript types (v0.3.0, 1,091 lines)
 - Implementation roadmap (600+ lines)
-- Comparison: OpenVim vs Neovim
+- Comparison: Vimcraft vs Neovim
 - Design lessons learned
 - Next steps
 
@@ -70,7 +70,7 @@ API Bridge (~150 functions)
 C Core (performance-critical)
 ```
 
-OpenVim adopts this same pattern with modern technologies.
+Vimcraft adopts this same pattern with modern technologies.
 
 **2. Multiple Abstraction Levels**
 - Beginners: vim.opt, vim.keymap (ergonomic)
@@ -99,26 +99,26 @@ OpenVim adopts this same pattern with modern technologies.
 12. TreeSitter
 13. Async/System
 
-### What OpenVim Does Better
+### What Vimcraft Does Better
 
 **1. Faster Startup**
-- OpenVim: < 100ms (Hermes bytecode)
+- Vimcraft: < 100ms (Hermes bytecode)
 - Neovim: ~150ms (Lua 5.1)
 
 **2. Built-in Hot Reload**
-- OpenVim: Native, automatic
+- Vimcraft: Native, automatic
 - Neovim: Requires plugins
 
 **3. Modern Language Stack**
-- OpenVim: Zig + JavaScript/TypeScript
+- Vimcraft: Zig + JavaScript/TypeScript
 - Neovim: C + Lua
 
 **4. Zero-Copy Bridge**
-- OpenVim: JSI (direct calls)
+- Vimcraft: JSI (direct calls)
 - Neovim: Lua C API (overhead)
 
 **5. TypeScript from Day One**
-- OpenVim: Full IDE support built-in
+- Vimcraft: Full IDE support built-in
 - Neovim: Type hints as afterthought
 
 ---
@@ -168,7 +168,7 @@ OpenVim adopts this same pattern with modern technologies.
 ### For Understanding Compatibility
 
 1. Read: [Neovim Mimic Summary](./neovim-mimic-summary.md)
-2. Compare: [OpenVim vs Neovim](./neovim-mimic-summary.md#comparison)
+2. Compare: [Vimcraft vs Neovim](./neovim-mimic-summary.md#comparison)
 3. Check: [Design Lessons](./neovim-mimic-summary.md#design-lessons)
 
 ---
@@ -178,7 +178,7 @@ OpenVim adopts this same pattern with modern technologies.
 ### Architecture Patterns
 
 **Finding**: Four layers with clear separation
-**Impact**: OpenVim adopts same pattern
+**Impact**: Vimcraft adopts same pattern
 **Reference**: [Neovim Analysis Summary](./neovim-analysis-summary.md#four-layer-architecture)
 
 **Finding**: Metatable accessors for natural syntax
@@ -186,7 +186,7 @@ OpenVim adopts this same pattern with modern technologies.
 **Reference**: [Architecture Analysis](../architecture/neovim-analysis.md#design-patterns)
 
 **Finding**: Namespace isolation prevents conflicts
-**Impact**: Implement same in OpenVim (Phase 4)
+**Impact**: Implement same in Vimcraft (Phase 4)
 **Reference**: [Architecture Analysis](../architecture/neovim-analysis.md#namespace-isolation)
 
 ### API Design
@@ -266,7 +266,7 @@ OpenVim adopts this same pattern with modern technologies.
 1. **Top-Down**: Understand overall architecture first
 2. **Bottom-Up**: Study key implementation files
 3. **Pattern Recognition**: Identify recurring design patterns
-4. **Gap Analysis**: Compare OpenVim vs Neovim features
+4. **Gap Analysis**: Compare Vimcraft vs Neovim features
 5. **Priority Assignment**: Determine implementation order
 
 ### Validation
@@ -278,7 +278,7 @@ OpenVim adopts this same pattern with modern technologies.
 
 ---
 
-## 🎯 Research Impact on OpenVim
+## 🎯 Research Impact on Vimcraft
 
 ### Architecture Decisions
 - ✅ Adopted four-layer design

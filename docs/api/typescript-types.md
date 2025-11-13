@@ -1,10 +1,10 @@
-# OpenVim TypeScript Types Reference
+# Vimcraft TypeScript Types Reference
 
 Version: 0.2.0
 
 ## Overview
 
-OpenVim now has comprehensive TypeScript type definitions with full autocomplete and type checking support.
+Vimcraft now has comprehensive TypeScript type definitions with full autocomplete and type checking support.
 
 ## Key Features
 
@@ -112,7 +112,7 @@ vim.opt.updateTime = 250;
 
 ### Future APIs (Not Yet Implemented)
 
-These are typed but not yet implemented in OpenVim:
+These are typed but not yet implemented in Vimcraft:
 
 ```typescript
 // Key mappings
@@ -135,7 +135,7 @@ vim.clearHighlight('Comment');
 
 **All option names use camelCase:**
 
-| Vim Name | OpenVim TypeScript | Status |
+| Vim Name | Vimcraft TypeScript | Status |
 |----------|-------------------|--------|
 | `cursorline` | `cursorLine` | ✅ Implemented |
 | `relativenumber` | `relativeNumber` | 📋 Typed |

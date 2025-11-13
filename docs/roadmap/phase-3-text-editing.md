@@ -14,7 +14,7 @@ Core text editing operations with full undo/redo support.
 
 ## Goals
 
-Implement all basic text editing operations to make OpenVim usable for actual editing tasks.
+Implement all basic text editing operations to make Vimcraft usable for actual editing tasks.
 
 ### Delete Operators
 - x (delete char)

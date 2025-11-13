@@ -1,6 +1,6 @@
 # Contributing Guidelines
 
-How to contribute to OpenVim.
+How to contribute to Vimcraft.
 
 ---
 

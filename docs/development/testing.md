@@ -6,7 +6,7 @@ Testing strategy and workflow.
 
 ## Overview
 
-OpenVim uses multiple testing levels:
+Vimcraft uses multiple testing levels:
 - Unit tests (Zig)
 - Integration tests (JavaScript + Zig)
 - End-to-end tests (shell scripts)

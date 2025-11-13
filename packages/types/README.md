@@ -1,6 +1,6 @@
 # @vimcraft/types
 
-TypeScript type definitions for OpenVim configuration API.
+TypeScript type definitions for Vimcraft configuration API.
 
 ## Installation
 
@@ -79,7 +79,7 @@ vim.opt.cursorline = true;
 Debug logging to Chrome DevTools:
 
 ```typescript
-console.log('Hello from OpenVim!');
+console.log('Hello from Vimcraft!');
 console.log('Multiple', 'arguments', { foo: 'bar' });
 ```
 
