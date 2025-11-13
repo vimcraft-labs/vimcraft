@@ -117,6 +117,7 @@ jobs:
                 -DHERMES_ENABLE_DEBUGGER=ON \
                 -DHERMES_ENABLE_INTL=OFF \
                 -DHERMES_ENABLE_TEST_SUITE=OFF \
+                -DHERMES_BUILD_SHARED_JSI=ON \
                 -DHERMES_BUILD_APPLE_DSYM=OFF \
                 -GNinja
             fi
@@ -170,10 +171,10 @@ jobs:
           # Show versions
           zig version
 
-          # Build with optimizations
+          # Build with optimizations (all platforms use static linking for self-contained binaries)
           # Note: Linux builds are native (no -Dtarget needed), macOS uses explicit target for cross-compile support
           if [ "$RUNNER_OS" == "Linux" ]; then
-            zig build -Doptimize=ReleaseFast
+            zig build -Doptimize=ReleaseFast -Dstatic-hermes=true
           else
             zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseFast -Dstatic-hermes=true
           fi
