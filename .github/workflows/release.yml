@@ -45,7 +45,8 @@ jobs:
             zig_target: x86_64-linux-gnu  # Not used (native build)
 
           # ARM64 Linux (native build with clang++ + libc++)
-          - os: ubuntu-22.04-arm64
+          # Note: Free ARM64 runners for public repos use 'ubuntu-22.04-arm' label
+          - os: ubuntu-22.04-arm
             platform: linux
             arch: arm64
             zig_target: aarch64-linux-gnu  # Not used (native build)
