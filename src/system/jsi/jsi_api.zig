@@ -47,6 +47,7 @@ pub fn initJSI(
         .highlight_config = config,
         .options_manager = options_mgr,
         .allocator = allocator,
+        .display = display, // Pass display for options that control display (e.g., vim.opt.number)
     };
 
     // Store for cleanup in deinitJSI()

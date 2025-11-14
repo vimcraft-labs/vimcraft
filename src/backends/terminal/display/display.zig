@@ -246,6 +246,10 @@ pub const Display = struct {
                 try self.gutter_manager.registerColumn("line_numbers", renderer);
             }
         }
+
+        // CRITICAL: Mark gutter layer as dirty to trigger re-render
+        // This ensures changes to line numbers/sign column are immediately visible
+        self.gutter_layer.markDirty();
     }
 
     /// Update gutter width cache if line count changed (Neovim optimization)

@@ -6,6 +6,7 @@ const highlights = @import("../../editor/config/highlights.zig");
 const options_mod = @import("../../editor/config/options.zig");
 const option_defs = @import("../../editor/config/option_defs.zig");
 const helpers = @import("helpers.zig");
+const Display = @import("../../backends/terminal/display/display.zig").Display;
 
 const OptionsManager = options_mod.OptionsManager;
 const OptionValue = options_mod.OptionValue;
@@ -19,6 +20,7 @@ pub const ConfigContext = struct {
     highlight_config: *highlights.HighlightConfig,
     options_manager: *OptionsManager,
     allocator: std.mem.Allocator,
+    display: ?*Display, // Optional - may be null in headless mode
 };
 
 /// Zig host function: setHighlight(name, bg, fg)
@@ -543,7 +545,7 @@ export fn getAllOptionsWithScope(
 }
 
 /// Apply side effects when certain options are set
-/// For example, cursorline should update HighlightConfig
+/// For example, cursorline should update HighlightConfig, number should toggle line numbers
 fn applySideEffects(ctx: *ConfigContext, name: []const u8, value: OptionValue) void {
     if (std.mem.eql(u8, name, "cursorline")) {
         if (value == .boolean) {
@@ -552,6 +554,13 @@ fn applySideEffects(ctx: *ConfigContext, name: []const u8, value: OptionValue) v
     } else if (std.mem.eql(u8, name, "signcolumn")) {
         if (value == .string) {
             ctx.highlight_config.signcolumn_mode = value.string;
+        }
+    } else if (std.mem.eql(u8, name, "number")) {
+        if (value == .boolean) {
+            // Toggle line numbers display
+            if (ctx.display) |display| {
+                display.setLineNumbers(value.boolean) catch {};
+            }
         }
     }
 }
