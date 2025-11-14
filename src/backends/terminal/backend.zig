@@ -38,6 +38,18 @@ pub const TerminalBackend = struct {
     /// Handle input with timeout
     /// Returns false to quit, sets needs_render if state changed
     pub fn handleInput(self: *TerminalBackend, timeout_ms: ?i64, needs_render: *bool) !bool {
+        // CRITICAL: Check for pending viewport command (H, M, L) BEFORE polling for input
+        // Otherwise the pending command check is unreachable when there's no new input
+        if (self.editor.mode_manager.isNormal()) {
+            if (self.editor.hasPendingViewportCommand()) |cmd| {
+                const viewport_height = self.display.terminal_rows - 1;
+                const viewport_top = self.display.viewport_top;
+                self.editor.moveToViewportPosition(cmd, viewport_top, viewport_height);
+                needs_render.* = true; // Viewport command executed, need to render
+                return true;
+            }
+        }
+
         const stdin = std.fs.File.stdin();
         var buf: [16]u8 = undefined;
 

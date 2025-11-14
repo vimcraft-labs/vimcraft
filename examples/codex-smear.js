@@ -4,7 +4,7 @@
   /**
    * Codex Smear Cursor
    * ------------------
-   * JavaScript port of sphamba/smear-cursor.nvim tailored for OpenVim.
+   * JavaScript port of sphamba/smear-cursor.nvim tailored for Vimcraft.
    * This file follows the original plugin's architecture (config -> color -> math -> animation -> draw -> events)
    * while using the renderer APIs exposed by the Hermes runtime.
    *

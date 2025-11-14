@@ -19,6 +19,7 @@ pub const timer_api = @import("timer_api.zig");
 pub const animation_api = @import("animation_api.zig");
 pub const cursor_api = @import("cursor_api.zig");
 pub const layer_api = @import("layer_api.zig");
+pub const motion_api = @import("motion_api.zig");
 pub const loader = @import("loader.zig");
 
 /// Context struct for host functions
@@ -29,6 +30,7 @@ pub const JSIContext = struct {
 
 /// Global state for cleanup
 var global_config_ctx: ?*config_api.ConfigContext = null;
+var global_motion_ctx: ?*motion_api.MotionContext = null;
 var global_allocator: ?std.mem.Allocator = null;
 
 /// Initialize JSI runtime and register all host functions
@@ -43,11 +45,23 @@ pub fn initJSI(
 ) void {
     // Create ConfigContext for config API (heap-allocated, lives as long as runtime)
     const cfg_ctx = allocator.create(config_api.ConfigContext) catch @panic("Failed to allocate ConfigContext");
+
+    // Get js_state_dirty pointer based on editor type
+    const js_state_dirty_ptr: ?*bool = blk: {
+        const T = @TypeOf(editor_or_context);
+        if (T == *Editor) {
+            break :blk &editor_or_context.js_state_dirty;
+        } else {
+            break :blk null; // EditorContext doesn't have js_state_dirty
+        }
+    };
+
     cfg_ctx.* = config_api.ConfigContext{
         .highlight_config = config,
         .options_manager = options_mgr,
         .allocator = allocator,
         .display = display, // Pass display for options that control display (e.g., vim.opt.number)
+        .js_state_dirty = js_state_dirty_ptr,
     };
 
     // Store for cleanup in deinitJSI()
@@ -77,6 +91,31 @@ pub fn initJSI(
     // Register layer API (createLayer, renderVirtualText, setLayerOpacity, etc.)
     layer_api.register(runtime, display);
 
+    // Register motion API (vim.motion.* functions)
+    // Register for both Editor and EditorContext
+    if (T == *Editor) {
+        const motion_ctx = allocator.create(motion_api.MotionContext) catch @panic("Failed to allocate MotionContext");
+        motion_ctx.* = motion_api.MotionContext{
+            .buffer = &editor_or_context.buffer,
+            .viewport_top = &editor_or_context.viewport_top,
+            .viewport_height = if (display) |d| d.terminal_rows - 1 else 24,
+            .js_state_dirty = &editor_or_context.js_state_dirty,
+        };
+        global_motion_ctx = motion_ctx;
+        motion_api.register(runtime, motion_ctx);
+    } else {
+        // EditorContext - get viewport_top from display, no js_state_dirty (headless mode)
+        const motion_ctx = allocator.create(motion_api.MotionContext) catch @panic("Failed to allocate MotionContext");
+        motion_ctx.* = motion_api.MotionContext{
+            .buffer = &editor_or_context.buffer,
+            .viewport_top = &editor_or_context.display.viewport_top,
+            .viewport_height = if (display) |d| d.terminal_rows - 1 else 24,
+            .js_state_dirty = null, // EditorContext doesn't need dirty tracking
+        };
+        global_motion_ctx = motion_ctx;
+        motion_api.register(runtime, motion_ctx);
+    }
+
     // JSI functions registered (silent mode)
 }
 
@@ -93,8 +132,14 @@ pub fn deinitJSI() void {
             alloc.destroy(ctx);
         }
         global_config_ctx = null;
-        global_allocator = null;
     }
+    if (global_motion_ctx) |ctx| {
+        if (global_allocator) |alloc| {
+            alloc.destroy(ctx);
+        }
+        global_motion_ctx = null;
+    }
+    global_allocator = null;
 }
 
 // Re-export commonly used functions from modules for backwards compatibility

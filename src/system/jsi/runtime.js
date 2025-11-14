@@ -300,3 +300,39 @@ globalThis.vim = {
 // Layer API - NO wrapper needed!
 // The native functions (clearLayer, renderVirtualText) handle dirty tracking internally
 // via layer.markDirty() which is smart enough to only mark when actually modified
+
+// vim.motion API - Expose motion primitives to JavaScript plugins
+// Allows plugins to programmatically trigger cursor movement
+vim.motion = {
+  // Character motion (h/j/k/l)
+  left: function() { moveLeft(); },
+  right: function() { moveRight(); },
+  up: function() { moveUp(); },
+  down: function() { moveDown(); },
+
+  // Line motion (0/$^)
+  toLineStart: function() { moveToLineStart(); },
+  toLineEnd: function() { moveToLineEnd(); },
+  toFirstNonBlank: function() { moveToFirstNonBlank(); },
+
+  // Word motion (w/b/e)
+  wordForward: function() { moveWordForward(); },
+  wordBackward: function() { moveWordBackward(); },
+  wordEnd: function() { moveWordEnd(); },
+
+  // File motion (gg/G)
+  toFileStart: function() { moveToFileStart(); },
+  toFileEnd: function() { moveToFileEnd(); },
+
+  // Viewport motion (H/M/L)
+  toViewportTop: function() { moveToViewportTop(); },
+  toViewportMiddle: function() { moveToViewportMiddle(); },
+  toViewportBottom: function() { moveToViewportBottom(); },
+
+  // Scrolling (Ctrl+D/U)
+  scrollHalfPageDown: function() { scrollHalfPageDown(); },
+  scrollHalfPageUp: function() { scrollHalfPageUp(); },
+};
+
+// Freeze to prevent modifications
+Object.freeze(vim.motion);

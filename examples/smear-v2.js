@@ -1,4 +1,4 @@
-// smear.js - Complete Neovim smear-cursor.nvim port for OpenVim
+// smear.js - Complete Neovim smear-cursor.nvim port for Vimcraft
 // Full implementation with proper draw_quad() rendering
 
 console.log('[smear] Loading smear-cursor plugin...');

@@ -455,6 +455,8 @@ c.hermes_register_host_function(runtime, "myFunction", my_function, null);
 
 Test both directions: Zig→JS and JS→Zig. Use `make -f Makefile.hermes test-zig` as smoke test.
 
+**JavaScript API Pattern**: When JavaScript APIs modify editor state, set `js_state_dirty = true` to trigger re-render. See implementation details in [docs/api/vim-motion.md](docs/api/vim-motion.md) and existing examples in motion_api.zig, cursor_api.zig, config_api.zig.
+
 ### Building Hermes
 
 If `vendor/hermes/build/` missing:

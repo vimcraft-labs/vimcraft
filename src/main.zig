@@ -111,6 +111,14 @@ pub const RenderSource = enum {
     timer,
 };
 
+/// Check if JavaScript modified editor state and mark for re-render
+/// Used in both normal and debug mode event loops
+inline fn checkJavaScriptStateChanges(editor: anytype, needs_render: *bool) void {
+    if (editor.js_state_dirty) {
+        needs_render.* = true;
+    }
+}
+
 /// Render statistics for debugging and profiling
 pub const RenderStats = struct {
     total_renders: usize = 0,
@@ -640,6 +648,9 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
             needs_render = true;
         }
 
+        // Check if JavaScript modified editor state (via vim.motion, etc.)
+        checkJavaScriptStateChanges(&editor, &needs_render);
+
         // Handle input via TerminalBackend (all vim logic in Editor core!)
         running = try backend.handleInput(10, &needs_render);
 
@@ -655,6 +666,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
             try backend.render();
             needs_render = false;
+            editor.js_state_dirty = false; // Reset flag after render completes
         }
     }
 
@@ -971,6 +983,9 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
             needs_render = true;
         }
 
+        // Check if JavaScript modified editor state (via vim.motion, etc.)
+        checkJavaScriptStateChanges(&editor, &needs_render);
+
         // Handle input via TerminalBackend
         running = try backend.handleInput(10, &needs_render);
 
@@ -986,6 +1001,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
             try backend.render();
             needs_render = false;
+            editor.js_state_dirty = false; // Reset flag after render completes
         }
     }
 
@@ -1220,6 +1236,7 @@ test "main: imports" {
 comptime {
     _ = @import("backends/terminal/display/cursorline_test.zig");
     _ = @import("editor/config/highlights_test.zig");
+    _ = @import("editor/editor_test.zig");
 }
 
 // ============================================================================

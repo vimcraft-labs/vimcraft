@@ -1,4 +1,4 @@
-// smear.js - Smooth cursor animation plugin for OpenVim
+// smear.js - Smooth cursor animation plugin for Vimcraft
 // Port of smear-cursor.nvim with 1:1 architecture replication
 
 console.log('[smear] Loading smear-cursor plugin...');

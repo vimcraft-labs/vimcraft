@@ -169,6 +169,10 @@ pub const Editor = struct {
     // Cursor rendering override (for animated cursor plugins)
     cursor_render_override: CursorRenderOverride = .{},
 
+    // JavaScript state change flag (for plugins that modify state via timers/callbacks)
+    // Set this to true when JavaScript APIs modify editor state to trigger re-render
+    js_state_dirty: bool = false,
+
     // Internal state
     pending_cmd: PendingCommand,
     pending_register: PendingRegister,
@@ -551,6 +555,12 @@ pub const Editor = struct {
                     movement.moveToFileEnd(&self.buffer);
                 },
 
+                // Viewport-relative movement (H, M, L)
+                // Note: These require viewport info from backend, handled specially
+                'H', 'M', 'L' => {
+                    self.pending_cmd.set(char);
+                },
+
                 // Paste operations
                 'p' => {
                     const reg = self.pending_register.getSelected() orelse '"';
@@ -845,6 +855,28 @@ pub const Editor = struct {
             .down => movement.scrollHalfPageDown(&self.buffer, viewport_height),
             .up => movement.scrollHalfPageUp(&self.buffer, viewport_height),
         }
+    }
+
+    /// Handle viewport-relative movement (H, M, L)
+    /// Terminal backend calls this with actual viewport position/height
+    pub fn moveToViewportPosition(self: *Editor, command: u8, viewport_top: usize, viewport_height: usize) void {
+        switch (command) {
+            'H' => movement.moveToViewportTop(&self.buffer, viewport_top),
+            'M' => movement.moveToViewportMiddle(&self.buffer, viewport_top, viewport_height),
+            'L' => movement.moveToViewportBottom(&self.buffer, viewport_top, viewport_height),
+            else => {},
+        }
+        self.pending_cmd.clear();
+    }
+
+    /// Check if there's a pending viewport command (H, M, L)
+    pub fn hasPendingViewportCommand(self: *const Editor) ?u8 {
+        if (self.pending_cmd.get()) |cmd| {
+            if (cmd == 'H' or cmd == 'M' or cmd == 'L') {
+                return cmd;
+            }
+        }
+        return null;
     }
 
     /// Convert byte offset to (line, col) position

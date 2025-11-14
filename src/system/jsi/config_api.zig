@@ -21,6 +21,7 @@ pub const ConfigContext = struct {
     options_manager: *OptionsManager,
     allocator: std.mem.Allocator,
     display: ?*Display, // Optional - may be null in headless mode
+    js_state_dirty: ?*bool = null, // Pointer to editor's dirty flag (null for EditorContext)
 };
 
 /// Zig host function: setHighlight(name, bg, fg)
@@ -83,6 +84,11 @@ export fn setHighlight(
 
     // Apply highlight to config
     config.setHighlight(name, hl);
+
+    // Mark editor state as dirty to trigger render
+    if (ctx.js_state_dirty) |dirty| {
+        dirty.* = true;
+    }
 
     // Debug messages sent to Chrome console instead of terminal
 
@@ -244,6 +250,11 @@ export fn setOption(
 
     // Apply side effects for specific options
     applySideEffects(ctx, lower_name, opt_value);
+
+    // Mark editor state as dirty to trigger render
+    if (ctx.js_state_dirty) |dirty| {
+        dirty.* = true;
+    }
 
     return c.hermes_value_create_undefined(runtime);
 }
@@ -433,6 +444,11 @@ export fn setOptionWithScope(
     // Apply side effects (only for global scope changes for now)
     if (scope == .global) {
         applySideEffects(ctx, lower_name, opt_value);
+    }
+
+    // Mark editor state as dirty to trigger render
+    if (ctx.js_state_dirty) |dirty| {
+        dirty.* = true;
     }
 
     return c.hermes_value_create_undefined(runtime);

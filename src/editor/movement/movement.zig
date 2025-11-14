@@ -379,6 +379,27 @@ pub fn scrollHalfPageUp(buffer: *Buffer, viewport_height: usize) void {
     }
 }
 
+/// Move to top of viewport (H - High)
+pub fn moveToViewportTop(buffer: *Buffer, viewport_top: usize) void {
+    buffer.cursor.row = viewport_top;
+    moveToFirstNonBlank(buffer); // Move to first non-blank char (Vim behavior)
+}
+
+/// Move to middle of viewport (M - Middle)
+pub fn moveToViewportMiddle(buffer: *Buffer, viewport_top: usize, viewport_height: usize) void {
+    const middle = viewport_top + (viewport_height / 2);
+    buffer.cursor.row = @min(middle, buffer.lineCount() -| 1);
+    moveToFirstNonBlank(buffer); // Move to first non-blank char (Vim behavior)
+}
+
+/// Move to bottom of viewport (L - Low)
+pub fn moveToViewportBottom(buffer: *Buffer, viewport_top: usize, viewport_height: usize) void {
+    // Calculate bottom line (viewport_top + height - 1, clamped to buffer end)
+    const bottom = viewport_top + viewport_height -| 1;
+    buffer.cursor.row = @min(bottom, buffer.lineCount() -| 1);
+    moveToFirstNonBlank(buffer); // Move to first non-blank char (Vim behavior)
+}
+
 // Tests
 test "Movement: basic hjkl" {
     const allocator = std.testing.allocator;

@@ -80,6 +80,9 @@ export fn setCursorRenderPosition(
     // Store override position in editor
     editor.cursor_render_override.set(row, col);
 
+    // Mark editor state as dirty to trigger render
+    editor.js_state_dirty = true;
+
     return null; // Return undefined
 }
 
@@ -99,6 +102,9 @@ export fn clearCursorRenderPosition(
 
     // Clear override
     editor.cursor_render_override.clear();
+
+    // Mark editor state as dirty to trigger render
+    editor.js_state_dirty = true;
 
     return null; // Return undefined
 }
