@@ -395,7 +395,8 @@ pub fn moveToViewportMiddle(buffer: *Buffer, viewport_top: usize, viewport_heigh
 /// Move to bottom of viewport (L - Low)
 pub fn moveToViewportBottom(buffer: *Buffer, viewport_top: usize, viewport_height: usize) void {
     // Calculate bottom line (viewport_top + height - 1, clamped to buffer end)
-    const bottom = viewport_top + viewport_height -| 1;
+    // CRITICAL: Use saturating addition to prevent overflow when viewport_top is huge
+    const bottom = (viewport_top +| viewport_height) -| 1;
     buffer.cursor.row = @min(bottom, buffer.lineCount() -| 1);
     moveToFirstNonBlank(buffer); // Move to first non-blank char (Vim behavior)
 }

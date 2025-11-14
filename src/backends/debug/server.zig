@@ -221,10 +221,81 @@ pub const Server = struct {
                 return .{ .none = {} };
             },
 
-            // State queries - these need to be hooked up to actual editor state
+            // State queries - get full editor state snapshot
             .get_state => {
-                // TODO: Get actual editor state from editor core
-                return error.NotImplemented;
+                const mode_str = try self.allocator.dupe(u8, self.editor.mode_manager.getModeString());
+
+                // Get buffer lines
+                var buffer_lines = std.ArrayList([]const u8).empty;
+                defer buffer_lines.deinit(self.allocator);
+
+                for (0..self.editor.buffer.lineCount()) |i| {
+                    if (self.editor.buffer.getLine(i)) |line| {
+                        const owned = try self.allocator.dupe(u8, line);
+                        try buffer_lines.append(self.allocator, owned);
+                    }
+                }
+
+                // Get viewport state from display
+                const viewport = protocol.ViewportState{
+                    .top = self.editor.display.viewport_top,
+                    .left = self.editor.display.viewport_left,
+                    .height = if (self.editor.display.terminal_rows > 1)
+                        self.editor.display.terminal_rows - 1
+                    else
+                        1,
+                    .width = self.editor.display.terminal_cols,
+                };
+
+                // Get visual state (if active)
+                var visual: ?protocol.VisualState = null;
+                if (self.editor.visual_state.active) {
+                    const cursor = self.editor.buffer.cursor;
+                    const range = self.editor.visual_state.getRange(.{ .line = cursor.row, .col = cursor.col });
+
+                    var text_lines = std.ArrayList([]const u8).empty;
+                    defer text_lines.deinit(self.allocator);
+
+                    for (range.start.line..range.end.line + 1) |line_idx| {
+                        const line = self.editor.buffer.getLine(line_idx) orelse continue;
+                        const owned = try self.allocator.dupe(u8, line);
+                        try text_lines.append(self.allocator, owned);
+                    }
+
+                    const mode_str_vis = switch (self.editor.visual_state.mode) {
+                        .char => "char",
+                        .line => "line",
+                        .block => "block",
+                    };
+
+                    visual = protocol.VisualState{
+                        .active = true,
+                        .mode = try self.allocator.dupe(u8, mode_str_vis),
+                        .anchor = .{ .line = self.editor.visual_state.anchor.line, .col = self.editor.visual_state.anchor.col },
+                        .head = .{ .line = cursor.row, .col = cursor.col },
+                        .text = try text_lines.toOwnedSlice(self.allocator),
+                    };
+                }
+
+                return .{ .state = protocol.EditorState{
+                    .mode = mode_str,
+                    .cursor = .{
+                        .line = self.editor.buffer.cursor.row,
+                        .col = self.editor.buffer.cursor.col,
+                    },
+                    .buffer = protocol.BufferState{
+                        .path = if (self.editor.buffer.filepath) |p| try self.allocator.dupe(u8, p) else null,
+                        .lines = try buffer_lines.toOwnedSlice(self.allocator),
+                        .modified = false, // TODO: track modifications
+                        .line_count = self.editor.buffer.lineCount(),
+                    },
+                    .visual = visual,
+                    .registers = protocol.RegistersState{
+                        .registers = &[_]protocol.RegisterState{},
+                        .count = 0,
+                    },
+                    .viewport = viewport,
+                } };
             },
 
             .get_cursor => {

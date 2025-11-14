@@ -169,6 +169,33 @@ pub const Response = struct {
         // Free result fields that are heap-allocated
         if (self.result) |result| {
             switch (result) {
+                .state => |s| {
+                    // Free mode string
+                    allocator.free(s.mode);
+                    // Free buffer fields
+                    if (s.buffer.path) |p| allocator.free(p);
+                    for (s.buffer.lines) |line| {
+                        allocator.free(line);
+                    }
+                    allocator.free(s.buffer.lines);
+                    // Free visual state if present
+                    if (s.visual) |v| {
+                        allocator.free(v.mode);
+                        for (v.text) |line| {
+                            allocator.free(line);
+                        }
+                        allocator.free(v.text);
+                    }
+                    // Free registers (CRITICAL: PE found this was leaked!)
+                    for (s.registers.registers) |reg| {
+                        allocator.free(reg.type);
+                        for (reg.lines) |line| {
+                            allocator.free(line);
+                        }
+                        allocator.free(reg.lines);
+                    }
+                    allocator.free(s.registers.registers);
+                },
                 .mode => |m| allocator.free(m.mode),
                 .pong => |p| {
                     // Only free if it's not a string literal
@@ -253,6 +280,15 @@ pub const EditorState = struct {
     buffer: BufferState,
     visual: ?VisualState,
     registers: RegistersState,
+    viewport: ?ViewportState, // NEW: Viewport information for debugging H/M/L
+};
+
+/// Viewport state (for debugging display and scrolling)
+pub const ViewportState = struct {
+    top: usize, // First visible line (viewport_top)
+    left: usize, // First visible column (viewport_left)
+    height: usize, // Visible lines (terminal_rows - 1)
+    width: usize, // Visible columns (terminal_cols)
 };
 
 /// Visual selection state

@@ -30,6 +30,15 @@ pub fn serializeEditorState(state: protocol.EditorState, writer: anytype) !void 
     // Registers
     try writer.writeAll("\"registers\":");
     try serializeRegistersState(state.registers, writer);
+    try writer.writeAll(",");
+
+    // Viewport (optional)
+    try writer.writeAll("\"viewport\":");
+    if (state.viewport) |vp| {
+        try serializeViewportState(vp, writer);
+    } else {
+        try writer.writeAll("null");
+    }
 
     try writer.writeAll("}");
 }
@@ -37,6 +46,16 @@ pub fn serializeEditorState(state: protocol.EditorState, writer: anytype) !void 
 /// Serialize cursor position
 pub fn serializeCursor(pos: protocol.Position, writer: anytype) !void {
     try writer.print("{{\"line\":{d},\"col\":{d}}}", .{ pos.line, pos.col });
+}
+
+/// Serialize viewport state
+pub fn serializeViewportState(viewport: protocol.ViewportState, writer: anytype) !void {
+    try writer.print("{{\"top\":{d},\"left\":{d},\"height\":{d},\"width\":{d}}}", .{
+        viewport.top,
+        viewport.left,
+        viewport.height,
+        viewport.width,
+    });
 }
 
 /// Serialize visual selection state

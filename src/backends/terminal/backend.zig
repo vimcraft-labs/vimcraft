@@ -38,18 +38,6 @@ pub const TerminalBackend = struct {
     /// Handle input with timeout
     /// Returns false to quit, sets needs_render if state changed
     pub fn handleInput(self: *TerminalBackend, timeout_ms: ?i64, needs_render: *bool) !bool {
-        // CRITICAL: Check for pending viewport command (H, M, L) BEFORE polling for input
-        // Otherwise the pending command check is unreachable when there's no new input
-        if (self.editor.mode_manager.isNormal()) {
-            if (self.editor.hasPendingViewportCommand()) |cmd| {
-                const viewport_height = self.display.terminal_rows - 1;
-                const viewport_top = self.display.viewport_top;
-                self.editor.moveToViewportPosition(cmd, viewport_top, viewport_height);
-                needs_render.* = true; // Viewport command executed, need to render
-                return true;
-            }
-        }
-
         const stdin = std.fs.File.stdin();
         var buf: [16]u8 = undefined;
 
@@ -133,6 +121,36 @@ pub const TerminalBackend = struct {
 
         // 5. All other input: delegate to Editor core
         try self.editor.executeKeys(input);
+
+        // 6. CRITICAL: If a viewport command (H/M/L) is pending, we need to execute it with up-to-date viewport info
+        // The challenge: display.viewport_top is updated during render(), but we haven't rendered yet
+        // Solution: Do a quick "dry run" render to update viewport_top, then execute the command
+        if (self.editor.mode_manager.isNormal()) {
+            if (self.editor.hasPendingViewportCommand()) |cmd| {
+                // Force viewport_top calculation by calling the internal viewport adjustment logic
+                // This mirrors what display.render() does at lines 478-483 (keep cursor visible)
+                // CRITICAL: Protect against integer underflow when terminal_rows = 0 or 1
+                const text_rows = if (self.display.terminal_rows > 1)
+                    self.display.terminal_rows - 1
+                else
+                    1;
+
+                // Ensure cursor is in viewport (same logic as display.render())
+                if (self.editor.buffer.cursor.row < self.display.viewport_top) {
+                    self.display.viewport_top = self.editor.buffer.cursor.row;
+                } else if (self.editor.buffer.cursor.row >= self.display.viewport_top + text_rows) {
+                    // CRITICAL: Use saturating arithmetic to prevent underflow
+                    // If cursor.row < text_rows, non-saturating would wrap to MAX_USIZE
+                    self.display.viewport_top = self.editor.buffer.cursor.row -| text_rows +| 1;
+                }
+
+                // NOW execute with fresh viewport_top
+                const viewport_height = text_rows;
+                const viewport_top = self.display.viewport_top;
+                self.editor.moveToViewportPosition(cmd, viewport_top, viewport_height);
+                // needs_render already true from line 74, no need to set again
+            }
+        }
 
         return true; // Continue running
     }

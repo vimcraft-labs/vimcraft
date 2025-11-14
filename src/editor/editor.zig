@@ -579,12 +579,21 @@ pub const Editor = struct {
 
                 // Enter command mode
                 ':' => {
+                    // CRITICAL: Clear pending commands when entering command mode
+                    // Prevents H/M/L or other pending ops from executing after command
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
                     self.cmd_buffer.clear();
                     self.mode_manager.enterCommand();
                 },
 
                 // Enter visual mode
                 'v' => {
+                    // CRITICAL: Clear pending commands when entering visual mode
+                    // Prevents H/M/L or other pending ops from executing unexpectedly
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
+
                     const cursor_pos = Position{
                         .line = self.buffer.cursor.row,
                         .col = self.buffer.cursor.col,
@@ -593,6 +602,11 @@ pub const Editor = struct {
                     self.mode_manager.enterVisual();
                 },
                 'V' => {
+                    // CRITICAL: Clear pending commands when entering visual mode
+                    // Prevents H/M/L or other pending ops from executing unexpectedly
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
+
                     const cursor_pos = Position{
                         .line = self.buffer.cursor.row,
                         .col = self.buffer.cursor.col,
@@ -602,21 +616,35 @@ pub const Editor = struct {
                 },
 
                 // Enter insert mode
-                'i' => self.enterInsertMode(),
+                'i' => {
+                    // CRITICAL: Clear pending commands when entering insert mode
+                    // Prevents H/M/L or other pending ops from executing after ESC
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
+                    self.enterInsertMode();
+                },
                 'a' => {
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
                     movement.moveRight(&self.buffer);
                     self.enterInsertMode();
                 },
                 'A' => {
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
                     movement.moveToLineEnd(&self.buffer);
                     movement.moveRight(&self.buffer);
                     self.enterInsertMode();
                 },
                 'I' => {
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
                     movement.moveToFirstNonBlank(&self.buffer);
                     self.enterInsertMode();
                 },
                 'o' => {
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
                     // Position cursor AFTER last character to insert newline at end of line
                     const visual_len = self.buffer.getLineLengthVisual(self.buffer.cursor.row);
                     self.buffer.cursor.col = visual_len;
@@ -625,6 +653,8 @@ pub const Editor = struct {
                     self.enterInsertMode();
                 },
                 'O' => {
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
                     movement.moveToLineStart(&self.buffer);
                     try self.buffer.insertChar('\n');
                     movement.moveUp(&self.buffer);
@@ -860,13 +890,16 @@ pub const Editor = struct {
     /// Handle viewport-relative movement (H, M, L)
     /// Terminal backend calls this with actual viewport position/height
     pub fn moveToViewportPosition(self: *Editor, command: u8, viewport_top: usize, viewport_height: usize) void {
+        // CRITICAL: Clear pending command FIRST using defer to ensure it's cleared even on error
+        // This prevents infinite error loops if movement functions panic
+        defer self.pending_cmd.clear();
+
         switch (command) {
             'H' => movement.moveToViewportTop(&self.buffer, viewport_top),
             'M' => movement.moveToViewportMiddle(&self.buffer, viewport_top, viewport_height),
             'L' => movement.moveToViewportBottom(&self.buffer, viewport_top, viewport_height),
             else => {},
         }
-        self.pending_cmd.clear();
     }
 
     /// Check if there's a pending viewport command (H, M, L)

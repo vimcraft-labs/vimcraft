@@ -475,7 +475,9 @@ pub const Display = struct {
 
         // Scroll down if cursor is below viewport
         if (buffer.cursor.row >= self.viewport_top + text_rows) {
-            self.viewport_top = buffer.cursor.row - text_rows + 1;
+            // CRITICAL: Use saturating arithmetic to prevent underflow
+            // If cursor.row < text_rows, non-saturating would wrap to MAX_USIZE
+            self.viewport_top = buffer.cursor.row -| text_rows +| 1;
         }
 
         // Scroll up if cursor is above viewport

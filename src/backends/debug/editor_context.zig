@@ -149,12 +149,59 @@ pub const EditorContext = struct {
         self.logger.deinit();
     }
 
+    /// Execute pending viewport command (H/M/L) if one exists
+    /// Returns true if a viewport command was executed
+    fn executeViewportCommand(self: *EditorContext) bool {
+        if (!self.mode_manager.isNormal()) return false;
+
+        if (self.pending_cmd.get()) |pending| {
+            if (pending == 'H' or pending == 'M' or pending == 'L') {
+                const text_rows = if (self.display.terminal_rows > 1)
+                    self.display.terminal_rows - 1
+                else
+                    1;
+
+                // CRITICAL FIX: Update viewport_top BEFORE using it (same as terminal backend)
+                // This prevents race condition where we use stale viewport_top from previous frame
+                // Mirrors display.render() logic at display.zig:478-483
+                if (self.buffer.cursor.row < self.display.viewport_top) {
+                    self.display.viewport_top = self.buffer.cursor.row;
+                } else if (self.buffer.cursor.row >= self.display.viewport_top + text_rows) {
+                    // CRITICAL: Use saturating arithmetic to prevent underflow (matches terminal backend)
+                    // If cursor.row < text_rows, non-saturating would wrap to MAX_USIZE
+                    self.display.viewport_top = self.buffer.cursor.row -| text_rows +| 1;
+                }
+
+                // NOW execute with fresh viewport_top
+                const viewport_height = text_rows;
+                const viewport_top = self.display.viewport_top;
+
+                switch (pending) {
+                    'H' => movement.moveToViewportTop(&self.buffer, viewport_top),
+                    'M' => movement.moveToViewportMiddle(&self.buffer, viewport_top, viewport_height),
+                    'L' => movement.moveToViewportBottom(&self.buffer, viewport_top, viewport_height),
+                    else => {},
+                }
+
+                self.pending_cmd.clear();
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// Execute a string of keys through the editor
     /// This is the main function for debug protocol testing
     pub fn executeKeys(self: *EditorContext, keys: []const u8) !void {
         // Process each character/sequence
         var i: usize = 0;
         while (i < keys.len) {
+            // CRITICAL: Check for pending viewport command BEFORE processing next input
+            // This allows H/M/L to execute on the next iteration (same pattern as terminal backend)
+            if (self.executeViewportCommand()) {
+                continue; // Don't process input this iteration
+            }
+
             // Check for special escape sequences
             if (i + 2 < keys.len and keys[i] == 27 and keys[i + 1] == '[') {
                 // Arrow keys: ESC[A/B/C/D
@@ -168,6 +215,10 @@ pub const EditorContext = struct {
                 i += 1;
             }
         }
+
+        // CRITICAL: After processing all input, check one more time for pending viewport command
+        // This handles the case where H/M/L was the LAST key pressed
+        _ = self.executeViewportCommand();
     }
 
     /// Process a single input sequence
@@ -198,10 +249,19 @@ pub const EditorContext = struct {
             return;
         }
 
-        // Check for pending command (dd, dw, yy, etc.)
+        // Check for pending command (dd, dw, yy, gg, etc.)
         if (self.pending_cmd.get()) |pending| {
             if (input.len == 1) {
                 const char = input[0];
+
+                // Handle pending 'g' commands (goto)
+                if (pending == 'g') {
+                    if (char == 'g') { // gg - go to file start
+                        movement.moveToFileStart(&self.buffer);
+                    }
+                    self.pending_cmd.clear();
+                    return;
+                }
 
                 // Handle pending 'd' commands
                 if (pending == 'd') {
@@ -295,6 +355,20 @@ pub const EditorContext = struct {
                     self.pending_cmd.set('y');
                 },
 
+                // Viewport-relative movement (H, M, L)
+                // Note: Execution happens on NEXT processInput() call when pending command is detected
+                'H', 'M', 'L' => {
+                    self.pending_cmd.set(char);
+                },
+
+                // Goto operations (gg, G)
+                'g' => {
+                    self.pending_cmd.set('g');
+                },
+                'G' => {
+                    movement.moveToFileEnd(&self.buffer);
+                },
+
                 // Paste operations
                 'p' => {
                     const reg = self.pending_register.getSelected() orelse '"';
@@ -313,12 +387,19 @@ pub const EditorContext = struct {
 
                 // Enter command mode
                 ':' => {
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
                     self.cmd_buffer.clear();
                     self.mode_manager.enterCommand();
                 },
 
                 // Enter visual mode
                 'v' => {
+                    // CRITICAL: Clear pending commands when entering visual mode
+                    // Prevents H/M/L or other pending ops from executing unexpectedly
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
+
                     const cursor_pos = Position{
                         .line = self.buffer.cursor.row,
                         .col = self.buffer.cursor.col,
@@ -327,6 +408,11 @@ pub const EditorContext = struct {
                     self.mode_manager.enterVisual();
                 },
                 'V' => {
+                    // CRITICAL: Clear pending commands when entering visual mode
+                    // Prevents H/M/L or other pending ops from executing unexpectedly
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
+
                     const cursor_pos = Position{
                         .line = self.buffer.cursor.row,
                         .col = self.buffer.cursor.col,
@@ -336,26 +422,40 @@ pub const EditorContext = struct {
                 },
 
                 // Enter insert mode
-                'i' => self.mode_manager.enterInsert(),
+                'i' => {
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
+                    self.mode_manager.enterInsert();
+                },
                 'a' => {
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
                     movement.moveRight(&self.buffer);
                     self.mode_manager.enterInsert();
                 },
                 'A' => {
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
                     movement.moveToLineEnd(&self.buffer);
                     movement.moveRight(&self.buffer);
                     self.mode_manager.enterInsert();
                 },
                 'I' => {
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
                     movement.moveToFirstNonBlank(&self.buffer);
                     self.mode_manager.enterInsert();
                 },
                 'o' => {
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
                     movement.moveToLineEnd(&self.buffer);
                     try self.buffer.insertChar('\n');
                     self.mode_manager.enterInsert();
                 },
                 'O' => {
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
                     movement.moveToLineStart(&self.buffer);
                     try self.buffer.insertChar('\n');
                     movement.moveUp(&self.buffer);
