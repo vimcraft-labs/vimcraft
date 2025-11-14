@@ -73,7 +73,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build build-essential \
-            libicu-dev python3 git curl zip unzip libssl-dev clang libc++-dev libc++abi-dev
+            libicu-dev python3 git curl zip unzip libssl-dev clang libc++-dev libc++abi-dev patchelf
 
       - name: Cache Hermes build
         id: cache-hermes
@@ -182,7 +182,7 @@ jobs:
           # Show versions
           zig version
 
-          # Build with optimizations (using dynamic Hermes linking for simpler builds)
+          # Build with optimizations
           # Note: Linux builds are native (no -Dtarget needed), macOS uses explicit target for cross-compile support
           if [ "$RUNNER_OS" == "Linux" ]; then
             zig build -Doptimize=ReleaseFast
@@ -190,11 +190,29 @@ jobs:
             zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseFast
           fi
 
-          # Verify binary exists
-          ls -lh zig-out/bin/
+          # Replace RPATH with release-appropriate paths
+          # Binary will find libraries at ../lib relative to executable
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            # macOS: Delete build-time RPATHs and add release RPATH
+            install_name_tool -delete_rpath "$(pwd)/vendor/hermes/build/API/hermes" zig-out/bin/vimc || true
+            install_name_tool -delete_rpath "$(pwd)/vendor/hermes/build/jsi" zig-out/bin/vimc || true
+            install_name_tool -add_rpath "@executable_path/../lib" zig-out/bin/vimc
+          else
+            # Linux: Replace all RPATHs with release RPATH
+            patchelf --set-rpath '$ORIGIN/../lib' zig-out/bin/vimc
+          fi
+
+          # Verify RPATH is set correctly
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            echo "macOS RPATH:"
+            otool -l zig-out/bin/vimc | grep -A2 "LC_RPATH"
+          else
+            echo "Linux RPATH:"
+            readelf -d zig-out/bin/vimc | grep RPATH
+          fi
 
           # Test binary (basic smoke test)
-          ./zig-out/bin/vic --version || echo "Warning: version check failed"
+          ./zig-out/bin/vimc --version || echo "Warning: version check failed"
 
       - name: Package binary
         id: package
@@ -208,23 +226,24 @@ jobs:
 
           echo "Building package for version: $VERSION"
 
-          # Create package directory
-          mkdir -p vimcraft-package
+          # Create package directory with proper structure (bin/ and lib/)
+          mkdir -p vimcraft-package/bin
+          mkdir -p vimcraft-package/lib
 
-          # Copy binary
-          cp zig-out/bin/vic vimcraft-package/
+          # Copy binary to bin/
+          cp zig-out/bin/vimc vimcraft-package/bin/
 
-          # Bundle Hermes shared libraries (required at runtime)
+          # Bundle Hermes shared libraries to lib/ (required at runtime)
           if [ "$RUNNER_OS" == "Linux" ]; then
-            cp vendor/hermes/build/API/hermes/libhermes_lean.so vimcraft-package/
-            cp vendor/hermes/build/jsi/libjsi.so vimcraft-package/
+            cp vendor/hermes/build/API/hermes/libhermes_lean.so vimcraft-package/lib/
+            cp vendor/hermes/build/jsi/libjsi.so vimcraft-package/lib/
           else
             # macOS: Copy .dylib files
-            cp vendor/hermes/build/API/hermes/libhermes_lean.dylib vimcraft-package/ || echo "Warning: libhermes_lean.dylib not found"
-            cp vendor/hermes/build/jsi/libjsi.dylib vimcraft-package/ || echo "Warning: libjsi.dylib not found"
+            cp vendor/hermes/build/API/hermes/libhermes_lean.dylib vimcraft-package/lib/ || echo "Warning: libhermes_lean.dylib not found"
+            cp vendor/hermes/build/jsi/libjsi.dylib vimcraft-package/lib/ || echo "Warning: libjsi.dylib not found"
           fi
 
-          # Create tarball
+          # Create tarball (with bin/ and lib/ directories)
           FILENAME="vimcraft-${VERSION}-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz"
           tar -czf "$FILENAME" -C vimcraft-package .
 
@@ -242,6 +261,11 @@ jobs:
           # Show results
           ls -lh "$FILENAME"
           cat "${FILENAME}.sha256"
+
+          # Verify tarball structure
+          echo ""
+          echo "Tarball contents:"
+          tar -tzf "$FILENAME" | head -20
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
@@ -318,28 +342,42 @@ jobs:
 
           echo "✓ Release verification complete"
 
-      - name: Comment on Release
+      - name: Update Release Description
         uses: actions/github-script@v7
         with:
           script: |
-            github.rest.repos.createReleaseComment({
+            // Get current release
+            const release = await github.rest.repos.getRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
               release_id: context.payload.release.id,
-              body: `🎉 **Release binaries built successfully!**
+            });
 
-              Binaries are now available for:
-              - macOS (Intel x86_64 & Apple Silicon ARM64)
-              - Linux (x86_64 & ARM64)
+            // Append build status to release body
+            const buildStatus = `
 
-              **Quick Install:**
-              \`\`\`bash
-              curl -fsSL https://vimcraft.com/install.sh | sh
-              \`\`\`
+---
 
-              **Verify checksums:**
-              \`\`\`bash
-              shasum -a 256 -c checksums.txt
-              \`\`\`
-              `
+## 🎉 Release binaries built successfully!
+
+Binaries are now available for:
+- macOS (Intel x86_64 & Apple Silicon ARM64)
+- Linux (x86_64 & ARM64)
+
+**Quick Install:**
+\`\`\`bash
+curl -fsSL https://vimcraft.com/install.sh | sh
+\`\`\`
+
+**Verify checksums:**
+\`\`\`bash
+shasum -a 256 -c checksums.txt
+\`\`\``;
+
+            // Update release with appended body
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: context.payload.release.id,
+              body: (release.data.body || '') + buildStatus
             });

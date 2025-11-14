@@ -4,9 +4,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Option to use static Hermes linking (for release builds)
-    const use_static_hermes = b.option(bool, "static-hermes", "Link Hermes statically for portable binaries") orelse false;
-
     // ============================================================================
     // Unicode Support: Ghostty's uucode library + grapheme module
     // ============================================================================
@@ -171,7 +168,7 @@ pub fn build(b: *std.Build) void {
     // Main Vimcraft executable
     // ============================================================================
     const exe = b.addExecutable(.{
-        .name = "vic",
+        .name = "vimc",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -277,22 +274,17 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    // Link Hermes (conditional: static for releases, dynamic for local dev)
-    if (use_static_hermes) {
-        // Static linking for portable release binaries (no dylib dependencies)
-        // Note: Hermes produces static libraries in lib/VM/ subdirectory
-        exe.addObjectFile(b.path("vendor/hermes/build/lib/VM/libhermesVMRuntimeLean.a"));
-        // JSI can be either static .a or shared .dylib depending on CMake flags
-        // Try static first, fall back to shared if needed
-        const jsi_static = b.path("vendor/hermes/build/jsi/libjsi.a");
-        exe.addObjectFile(jsi_static);
-    } else {
-        // Dynamic linking for local development
-        exe.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
-        exe.addLibraryPath(b.path("vendor/hermes/build/jsi"));
-        exe.linkSystemLibrary("hermes_lean");
-        exe.linkSystemLibrary("jsi");
-    }
+    // Link Hermes dynamically (for both development and releases)
+    // Release workflow replaces RPATHs with @executable_path/../lib (macOS) or $ORIGIN/../lib (Linux)
+    exe.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
+    exe.addLibraryPath(b.path("vendor/hermes/build/jsi"));
+    exe.linkSystemLibrary("hermes_lean");
+    exe.linkSystemLibrary("jsi");
+
+    // Set RPATH to build directories for local development
+    // Release workflow will replace these with @executable_path/../lib (macOS) or $ORIGIN/../lib (Linux)
+    exe.addRPath(b.path("vendor/hermes/build/API/hermes"));
+    exe.addRPath(b.path("vendor/hermes/build/jsi"));
 
     // ============================================================================
     // libuv (Event Loop & Async I/O)
@@ -378,7 +370,7 @@ pub fn build(b: *std.Build) void {
     bench_root_module.addImport("vimcraft", vimcraft_module_for_bench);
 
     const bench = b.addExecutable(.{
-        .name = "vic-bench",
+        .name = "vimc-bench",
         .root_module = bench_root_module,
     });
 
@@ -428,16 +420,11 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    // Link Hermes (conditional: static for releases, dynamic for local dev)
-    if (use_static_hermes) {
-        bench.addObjectFile(b.path("vendor/hermes/build/lib/VM/libhermesVMRuntimeLean.a"));
-        bench.addObjectFile(b.path("vendor/hermes/build/jsi/libjsi.a"));
-    } else {
-        bench.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
-        bench.addLibraryPath(b.path("vendor/hermes/build/jsi"));
-        bench.linkSystemLibrary("hermes_lean");
-        bench.linkSystemLibrary("jsi");
-    }
+    // Link Hermes dynamically
+    bench.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
+    bench.addLibraryPath(b.path("vendor/hermes/build/jsi"));
+    bench.linkSystemLibrary("hermes_lean");
+    bench.linkSystemLibrary("jsi");
 
     bench.addIncludePath(b.path("vendor/libuv/include"));
     // Link directly to our vendored libuv to avoid Homebrew conflicts
@@ -550,16 +537,11 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    // Link Hermes for tests (conditional: static for releases, dynamic for local dev)
-    if (use_static_hermes) {
-        unit_tests.addObjectFile(b.path("vendor/hermes/build/lib/VM/libhermesVMRuntimeLean.a"));
-        unit_tests.addObjectFile(b.path("vendor/hermes/build/jsi/libjsi.a"));
-    } else {
-        unit_tests.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
-        unit_tests.addLibraryPath(b.path("vendor/hermes/build/jsi"));
-        unit_tests.linkSystemLibrary("hermes_lean");
-        unit_tests.linkSystemLibrary("jsi");
-    }
+    // Link Hermes dynamically for tests
+    unit_tests.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
+    unit_tests.addLibraryPath(b.path("vendor/hermes/build/jsi"));
+    unit_tests.linkSystemLibrary("hermes_lean");
+    unit_tests.linkSystemLibrary("jsi");
 
     // libuv for tests
     unit_tests.addIncludePath(b.path("vendor/libuv/include"));

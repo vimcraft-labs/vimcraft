@@ -117,5 +117,5 @@ jobs:
 
       - name: Smoke test binary
         run: |
-          ./zig-out/bin/vic --version || true
-          echo '{"cmd":"get_state","id":"1"}' | timeout 2 ./zig-out/bin/vic --debug-protocol || true
+          ./zig-out/bin/vimc --version || true
+          echo '{"cmd":"get_state","id":"1"}' | timeout 2 ./zig-out/bin/vimc --debug-protocol || true
