@@ -123,8 +123,24 @@ export fn getOption(
     @memcpy(name_buf[0..name_len], name_ptr[0..name_len]);
     const name = name_buf[0..name_len];
 
-    // Get option value from OptionsManager
-    const opt_value = ctx.options_manager.get(name) orelse {
+    // Convert name to lowercase for metadata lookup
+    var lower_name_buf: [256]u8 = undefined;
+    if (name_len >= lower_name_buf.len) return c.hermes_value_create_undefined(runtime);
+    for (name, 0..) |char, i| {
+        lower_name_buf[i] = std.ascii.toLower(char);
+    }
+    const lower_name = lower_name_buf[0..name_len];
+
+    // Try to get set value, fall back to default from metadata
+    const opt_value = blk: {
+        if (ctx.options_manager.get(lower_name)) |value| {
+            break :blk value;
+        }
+        // Not set - check if it's a defined option and return default
+        if (option_defs.getOptionMeta(lower_name)) |meta| {
+            break :blk meta.default;
+        }
+        // Unknown option
         return c.hermes_value_create_undefined(runtime);
     };
 
@@ -263,6 +279,14 @@ export fn getOptionWithScope(
     @memcpy(name_buf[0..name_len], name_ptr[0..name_len]);
     const name = name_buf[0..name_len];
 
+    // Convert name to lowercase for metadata lookup
+    var lower_name_buf: [256]u8 = undefined;
+    if (name_len >= lower_name_buf.len) return c.hermes_value_create_undefined(runtime);
+    for (name, 0..) |char, i| {
+        lower_name_buf[i] = std.ascii.toLower(char);
+    }
+    const lower_name = lower_name_buf[0..name_len];
+
     // Arg 1: scope (string: 'global', 'local', 'force_local')
     if (args[1] == null or !c.hermes_value_is_string(args[1])) {
         return c.hermes_value_create_undefined(runtime);
@@ -282,8 +306,16 @@ export fn getOptionWithScope(
     else
         .local; // Default to local
 
-    // Get option value with scope
-    const opt_value = ctx.options_manager.getWithScope(name, scope) orelse {
+    // Try to get set value with scope, fall back to default from metadata
+    const opt_value = blk: {
+        if (ctx.options_manager.getWithScope(lower_name, scope)) |value| {
+            break :blk value;
+        }
+        // Not set - check if it's a defined option and return default
+        if (option_defs.getOptionMeta(lower_name)) |meta| {
+            break :blk meta.default;
+        }
+        // Unknown option
         return c.hermes_value_create_undefined(runtime);
     };
 
@@ -406,7 +438,7 @@ export fn setOptionWithScope(
 
 /// Zig host function: getAllOptions()
 /// Called from JavaScript: getAllOptions()
-/// Returns a plain JavaScript object with all set global options
+/// Returns a plain JavaScript object with ALL defined options (set values + defaults)
 /// Single JSI call replaces multiple getOption() calls for Chrome DevTools inspection
 export fn getAllOptions(
     runtime_nullable: ?*c.OVHermesRuntime,
@@ -423,11 +455,10 @@ export fn getAllOptions(
     // Create JavaScript object
     const obj = c.hermes_value_create_object(runtime);
 
-    // Iterate through all global options
-    var iter = ctx.options_manager.global_options.iterator();
-    while (iter.next()) |entry| {
-        const name = entry.key_ptr.*;
-        const value = entry.value_ptr.*;
+    // Iterate through ALL defined options (from option_defs)
+    for (option_defs.OPTIONS) |meta| {
+        // Try to get the set value, fall back to default
+        const value = ctx.options_manager.get(meta.name) orelse meta.default;
 
         // Convert OptionValue to Hermes value
         const js_value = switch (value) {
@@ -438,9 +469,9 @@ export fn getAllOptions(
 
         // Create null-terminated property name
         var name_buf: [256]u8 = undefined;
-        if (name.len >= name_buf.len - 1) continue; // Skip if name too long
-        @memcpy(name_buf[0..name.len], name);
-        name_buf[name.len] = 0; // Null terminator
+        if (meta.name.len >= name_buf.len - 1) continue; // Skip if name too long
+        @memcpy(name_buf[0..meta.name.len], meta.name);
+        name_buf[meta.name.len] = 0; // Null terminator
 
         c.hermes_value_set_property(runtime, obj, &name_buf, js_value);
     }
@@ -487,75 +518,25 @@ export fn getAllOptionsWithScope(
     // Create JavaScript object
     const obj = c.hermes_value_create_object(runtime);
 
-    // For local scope, we need to merge buffer-local and global
-    if (scope == .local) {
-        // First add all global options
-        var global_iter = ctx.options_manager.global_options.iterator();
-        while (global_iter.next()) |entry| {
-            const name = entry.key_ptr.*;
-            const value = entry.value_ptr.*;
+    // Iterate through ALL defined options (from option_defs)
+    for (option_defs.OPTIONS) |meta| {
+        // Get value with the requested scope (handles fallback automatically)
+        const value = ctx.options_manager.getWithScope(meta.name, scope) orelse meta.default;
 
-            const js_value = switch (value) {
-                .boolean => |v| c.hermes_value_create_boolean(runtime, v),
-                .number => |v| c.hermes_value_create_number(runtime, @floatFromInt(v)),
-                .string => |s| c.hermes_value_create_string(runtime, s.ptr, s.len),
-            };
+        // Convert OptionValue to Hermes value
+        const js_value = switch (value) {
+            .boolean => |v| c.hermes_value_create_boolean(runtime, v),
+            .number => |v| c.hermes_value_create_number(runtime, @floatFromInt(v)),
+            .string => |s| c.hermes_value_create_string(runtime, s.ptr, s.len),
+        };
 
-            // Create null-terminated property name
-            var name_buf: [256]u8 = undefined;
-            if (name.len >= name_buf.len - 1) continue;
-            @memcpy(name_buf[0..name.len], name);
-            name_buf[name.len] = 0;
+        // Create null-terminated property name
+        var name_buf: [256]u8 = undefined;
+        if (meta.name.len >= name_buf.len - 1) continue;
+        @memcpy(name_buf[0..meta.name.len], meta.name);
+        name_buf[meta.name.len] = 0;
 
-            c.hermes_value_set_property(runtime, obj, &name_buf, js_value);
-        }
-
-        // Then override with buffer-local options (they take precedence)
-        var local_iter = ctx.options_manager.buffer_local_options.iterator();
-        while (local_iter.next()) |entry| {
-            const name = entry.key_ptr.*;
-            const value = entry.value_ptr.*;
-
-            const js_value = switch (value) {
-                .boolean => |v| c.hermes_value_create_boolean(runtime, v),
-                .number => |v| c.hermes_value_create_number(runtime, @floatFromInt(v)),
-                .string => |s| c.hermes_value_create_string(runtime, s.ptr, s.len),
-            };
-
-            // Create null-terminated property name
-            var name_buf: [256]u8 = undefined;
-            if (name.len >= name_buf.len - 1) continue;
-            @memcpy(name_buf[0..name.len], name);
-            name_buf[name.len] = 0;
-
-            c.hermes_value_set_property(runtime, obj, &name_buf, js_value);
-        }
-    } else {
-        // For global or force_local, iterate just that scope
-        const storage = if (scope == .global)
-            &ctx.options_manager.global_options
-        else
-            &ctx.options_manager.buffer_local_options;
-
-        var iter = storage.iterator();
-        while (iter.next()) |entry| {
-            const name = entry.key_ptr.*;
-            const value = entry.value_ptr.*;
-
-            const js_value = switch (value) {
-                .boolean => |v| c.hermes_value_create_boolean(runtime, v),
-                .number => |v| c.hermes_value_create_number(runtime, @floatFromInt(v)),
-                .string => |s| c.hermes_value_create_string(runtime, s.ptr, s.len),
-            };
-
-            // Create null-terminated property name
-            var name_buf: [256]u8 = undefined;
-            if (name.len >= name_buf.len - 1) continue;
-            @memcpy(name_buf[0..name.len], name);
-            name_buf[name.len] = 0;
-
-            c.hermes_value_set_property(runtime, obj, &name_buf, js_value);
-        }
+        c.hermes_value_set_property(runtime, obj, &name_buf, js_value);
     }
 
     return obj;

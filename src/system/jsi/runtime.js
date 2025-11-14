@@ -125,9 +125,19 @@ globalThis.vim = {
   },
   // Dynamic options proxy - handles ANY option via getOption/setOption
   // Supports both camelCase (JavaScript style) and lowercase (Vim style)
-  opt: new Proxy({
-    get [Symbol.toStringTag]() { return 'vim.opt'; }
-  }, {
+  opt: new Proxy(
+    // Pre-populate target with all options for Chrome DevTools
+    // This ensures Chrome DevTools can enumerate properties without calling ownKeys
+    (() => {
+      const target = {
+        get [Symbol.toStringTag]() { return 'vim.opt'; }
+      };
+      // Populate with all options from Zig
+      const allOptions = getAllOptions();
+      Object.assign(target, allOptions);
+      return target;
+    })(),
+    {
     get(target, prop) {
       if (prop === Symbol.toStringTag) return 'vim.opt';
       if (typeof prop === 'symbol') return undefined;
@@ -138,6 +148,9 @@ globalThis.vim = {
       if (typeof prop === 'symbol') return false;
       // Write to Zig (source of truth)
       setOption(prop, value);
+      // Note: DO NOT update target here - it creates stale cache
+      // Target is refreshed via ownKeys trap when Chrome DevTools enumerates
+      // Zig is the single source of truth, accessed via get trap
       return true;
     },
     has(target, prop) {
@@ -146,7 +159,7 @@ globalThis.vim = {
     },
     // Fetch fresh snapshot when Chrome DevTools enumerates
     ownKeys(target) {
-      // Clear stale cache
+      // Clear stale cache (except Symbol.toStringTag getter)
       for (const key of Object.keys(target)) {
         delete target[key];
       }
@@ -173,9 +186,17 @@ globalThis.vim = {
   // Buffer-local options (vim.optLocal)
   // Neovim equivalent: vim.opt_local
   // Gets buffer-local value first, falls back to global
-  optLocal: new Proxy({
-    get [Symbol.toStringTag]() { return 'vim.optLocal'; }
-  }, {
+  optLocal: new Proxy(
+    // Pre-populate target with all options for Chrome DevTools
+    (() => {
+      const target = {
+        get [Symbol.toStringTag]() { return 'vim.optLocal'; }
+      };
+      const allOptions = getAllOptionsWithScope('local');
+      Object.assign(target, allOptions);
+      return target;
+    })(),
+    {
     get(target, prop) {
       if (prop === Symbol.toStringTag) return 'vim.optLocal';
       if (typeof prop === 'symbol') return undefined;
@@ -194,7 +215,7 @@ globalThis.vim = {
     },
     // Fetch fresh snapshot when Chrome DevTools enumerates
     ownKeys(target) {
-      // Clear stale cache
+      // Clear stale cache (except Symbol.toStringTag getter)
       for (const key of Object.keys(target)) {
         delete target[key];
       }
@@ -221,9 +242,17 @@ globalThis.vim = {
   // Global options (vim.optGlobal)
   // Neovim equivalent: vim.opt_global
   // Always gets/sets global value (no buffer-local fallback)
-  optGlobal: new Proxy({
-    get [Symbol.toStringTag]() { return 'vim.optGlobal'; }
-  }, {
+  optGlobal: new Proxy(
+    // Pre-populate target with all options for Chrome DevTools
+    (() => {
+      const target = {
+        get [Symbol.toStringTag]() { return 'vim.optGlobal'; }
+      };
+      const allOptions = getAllOptionsWithScope('global');
+      Object.assign(target, allOptions);
+      return target;
+    })(),
+    {
     get(target, prop) {
       if (prop === Symbol.toStringTag) return 'vim.optGlobal';
       if (typeof prop === 'symbol') return undefined;
@@ -242,7 +271,7 @@ globalThis.vim = {
     },
     // Fetch fresh snapshot when Chrome DevTools enumerates
     ownKeys(target) {
-      // Clear stale cache
+      // Clear stale cache (except Symbol.toStringTag getter)
       for (const key of Object.keys(target)) {
         delete target[key];
       }

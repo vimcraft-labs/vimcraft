@@ -84,7 +84,7 @@ pub const Logger = struct {
 
     pub fn init(allocator: std.mem.Allocator) Logger {
         return .{
-            .buffer = LogBuffer.init(allocator, 1000), // Keep last 1000 log entries
+            .buffer = LogBuffer.init(allocator, 10000), // Keep last 10000 log entries
         };
     }
 

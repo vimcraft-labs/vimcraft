@@ -14,6 +14,10 @@ const cdp_c = @cImport({
     @cInclude("backends/debug/cdp_debugger.h");
 });
 
+/// Configuration for object serialization
+const MAX_DEPTH: usize = 3; // Maximum nesting depth for objects
+const MAX_PROPS_PER_LEVEL: usize = 20; // Max properties to show per object
+
 /// Global editor pointer for console.log forwarding to logger
 /// Can be either *Editor or *EditorContext - both have a logger field
 /// Set during initialization - enables Core→Backend logging architecture
@@ -30,6 +34,130 @@ pub fn setEditor(editor: anytype) void {
         global_editor_context = editor;
         global_editor_with_logger = null;
     }
+}
+
+/// Format a JavaScript value recursively with depth limiting
+/// Returns true if successful, false if should fallback to "[object]"
+fn formatJSValue(
+    writer: anytype,
+    runtime: *c.OVHermesRuntime,
+    value: *c.OVHermesValue,
+    current_depth: usize,
+) bool {
+    if (c.hermes_value_is_string(value)) {
+        var str_len: usize = 0;
+        const str_ptr = c.hermes_value_get_string(runtime, value, &str_len);
+        if (str_ptr != null) {
+            writer.writeAll("\"") catch return false;
+            writer.writeAll(str_ptr[0..str_len]) catch return false;
+            writer.writeAll("\"") catch return false;
+            return true;
+        }
+    } else if (c.hermes_value_is_number(value)) {
+        const num = c.hermes_value_get_number(value);
+        std.fmt.format(writer, "{d}", .{num}) catch return false;
+        return true;
+    } else if (c.hermes_value_is_boolean(value)) {
+        const bool_val = c.hermes_value_get_boolean(value);
+        writer.writeAll(if (bool_val) "true" else "false") catch return false;
+        return true;
+    } else if (c.hermes_value_is_null(value)) {
+        writer.writeAll("null") catch return false;
+        return true;
+    } else if (c.hermes_value_is_undefined(value)) {
+        writer.writeAll("undefined") catch return false;
+        return true;
+    } else if (c.hermes_value_is_object(value)) {
+        // Check depth limit
+        if (current_depth >= MAX_DEPTH) {
+            writer.writeAll("[max depth]") catch return false;
+            return true;
+        }
+
+        // Enumerate object properties
+        return formatObject(writer, runtime, value, current_depth);
+    }
+
+    return false; // Unknown type
+}
+
+/// Format an object by enumerating its properties
+fn formatObject(
+    writer: anytype,
+    runtime: *c.OVHermesRuntime,
+    obj: *c.OVHermesValue,
+    current_depth: usize,
+) bool {
+    const global_obj = c.hermes_get_global_object(runtime);
+    defer c.hermes_object_destroy(global_obj);
+
+    const obj_ctor = c.hermes_object_get_property(runtime, global_obj, "Object");
+    if (obj_ctor == null) return false;
+    defer c.hermes_value_destroy(obj_ctor);
+
+    const keys_func = c.hermes_value_get_property(runtime, obj_ctor, "keys");
+    if (keys_func == null or !c.hermes_value_is_function(runtime, keys_func)) return false;
+    defer c.hermes_value_destroy(keys_func);
+
+    var keys_args = [_]?*c.OVHermesValue{obj};
+    const keys_array = c.hermes_call_function(runtime, keys_func, &keys_args, 1);
+
+    // Check for exception after calling Object.keys()
+    if (c.hermes_has_exception(runtime)) return false;
+    if (keys_array == null or !c.hermes_value_is_object(keys_array)) return false;
+    defer c.hermes_value_destroy(keys_array);
+
+    const length_prop = c.hermes_value_get_property(runtime, keys_array, "length");
+    if (length_prop == null or !c.hermes_value_is_number(length_prop)) return false;
+    defer c.hermes_value_destroy(length_prop);
+
+    const length = @as(usize, @intFromFloat(c.hermes_value_get_number(length_prop)));
+    writer.writeAll("{") catch return false;
+
+    const props_to_show = if (length > MAX_PROPS_PER_LEVEL) MAX_PROPS_PER_LEVEL else length;
+
+    for (0..props_to_show) |idx| {
+        if (idx > 0) writer.writeAll(", ") catch return false;
+
+        // Get key name
+        var idx_buf: [32]u8 = undefined;
+        const idx_str_null = std.fmt.bufPrintZ(&idx_buf, "{d}", .{idx}) catch return false;
+        const key_val = c.hermes_value_get_property(runtime, keys_array, idx_str_null.ptr);
+        if (key_val == null or !c.hermes_value_is_string(key_val)) continue;
+        defer c.hermes_value_destroy(key_val);
+
+        var key_len: usize = 0;
+        const key_ptr = c.hermes_value_get_string(runtime, key_val, &key_len);
+        if (key_ptr == null) continue;
+
+        const key = key_ptr[0..key_len];
+        writer.writeAll(key) catch return false;
+        writer.writeAll(": ") catch return false;
+
+        // Get property value
+        var key_buf: [256]u8 = undefined;
+        if (key_len >= key_buf.len) continue;
+        @memcpy(key_buf[0..key_len], key);
+        key_buf[key_len] = 0;
+
+        const val = c.hermes_value_get_property(runtime, obj, &key_buf);
+        if (val) |value| {
+            defer c.hermes_value_destroy(value);
+            // Recursively format the value (depth + 1)
+            if (!formatJSValue(writer, runtime, value, current_depth + 1)) {
+                writer.writeAll("[error]") catch return false;
+            }
+        } else {
+            writer.writeAll("null") catch return false;
+        }
+    }
+
+    if (length > MAX_PROPS_PER_LEVEL) {
+        std.fmt.format(writer, ", ...+{d} more", .{length - MAX_PROPS_PER_LEVEL}) catch return false;
+    }
+
+    writer.writeAll("}") catch return false;
+    return true;
 }
 
 /// Zig host function: consoleLog(...args)
@@ -76,29 +204,19 @@ export fn consoleLog(
 
         const arg = args[i] orelse continue;
 
-        // Convert JavaScript value to string
+        // Convert JavaScript value to string (with recursive depth support)
         if (c.hermes_value_is_string(arg)) {
+            // Strings are printed without quotes in console.log
             var str_len: usize = 0;
             const str_ptr = c.hermes_value_get_string(runtime, arg, &str_len);
             if (str_ptr != null) {
                 writer.writeAll(str_ptr[0..str_len]) catch break;
             }
-        } else if (c.hermes_value_is_number(arg)) {
-            const num = c.hermes_value_get_number(arg);
-            std.fmt.format(writer, "{d}", .{num}) catch break;
-        } else if (c.hermes_value_is_boolean(arg)) {
-            const bool_val = c.hermes_value_get_boolean(arg);
-            writer.writeAll(if (bool_val) "true" else "false") catch break;
-        } else if (c.hermes_value_is_null(arg)) {
-            writer.writeAll("null") catch break;
-        } else if (c.hermes_value_is_undefined(arg)) {
-            writer.writeAll("undefined") catch break;
-        } else if (c.hermes_value_is_object(arg)) {
-            // Object/Array - for text logs just show [object]
-            writer.writeAll("[object]") catch break;
         } else {
-            // Unknown type
-            writer.writeAll("[unknown]") catch break;
+            // All other types use the recursive formatter
+            if (!formatJSValue(writer, runtime, arg, 0)) {
+                writer.writeAll("[unknown]") catch break;
+            }
         }
     }
 

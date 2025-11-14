@@ -27,6 +27,10 @@ pub const JSIContext = struct {
     display: *Display,
 };
 
+/// Global state for cleanup
+var global_config_ctx: ?*config_api.ConfigContext = null;
+var global_allocator: ?std.mem.Allocator = null;
+
 /// Initialize JSI runtime and register all host functions
 /// editor_or_context can be either *Editor or *EditorContext - both have logger field
 pub fn initJSI(
@@ -44,7 +48,10 @@ pub fn initJSI(
         .options_manager = options_mgr,
         .allocator = allocator,
     };
-    // NOTE: We intentionally don't free cfg_ctx - it lives as long as the runtime
+
+    // Store for cleanup in deinitJSI()
+    global_config_ctx = cfg_ctx;
+    global_allocator = allocator;
 
     // Register configuration API (setHighlight, setOption, getOption)
     config_api.register(runtime, cfg_ctx);
@@ -76,6 +83,17 @@ pub fn initJSI(
 /// This should be called after debugger is created to enable Chrome Console output
 pub fn registerConsoleWithDebugger(runtime: *c.OVHermesRuntime, debugger_ptr: *anyopaque) void {
     console_api.registerWithDebugger(runtime, debugger_ptr);
+}
+
+/// Clean up JSI resources (called before runtime destruction)
+pub fn deinitJSI() void {
+    if (global_config_ctx) |ctx| {
+        if (global_allocator) |alloc| {
+            alloc.destroy(ctx);
+        }
+        global_config_ctx = null;
+        global_allocator = null;
+    }
 }
 
 // Re-export commonly used functions from modules for backwards compatibility

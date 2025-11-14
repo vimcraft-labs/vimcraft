@@ -393,6 +393,7 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
 
     // Register JSI host functions for EditorContext (headless mode)
     jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &options_mgr, &editor_ctx, &editor_ctx.display);
+    defer jsi_api.deinitJSI(); // Clean up ConfigContext BEFORE runtime destruction
 
     // Load JavaScript config and plugins for headless debugging
     // NOTE: Display exists but won't render output (no terminal flush)
@@ -521,6 +522,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
         // Register JSI host functions (pass editor for cursor hooks and display for trail rendering)
         jsi_api.initJSI(allocator, @ptrCast(runtime.?), &highlight_config, &options_mgr, &editor, &display);
+        defer jsi_api.deinitJSI(); // Clean up ConfigContext BEFORE runtime destruction
 
         // Load configuration from init.js (but don't load plugins yet)
         try loadConfigFromJs(allocator, &highlight_config, &debugger_state);
@@ -783,6 +785,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
     // Register JSI host functions (including cursor hooks for plugins and trail rendering)
     jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &options_mgr, &editor, &display);
+    defer jsi_api.deinitJSI(); // Clean up ConfigContext BEFORE runtime destruction
 
     // Create and start CDP debugger BEFORE loading config
     var debugger = try Debugger.init(runtime, 9229);
