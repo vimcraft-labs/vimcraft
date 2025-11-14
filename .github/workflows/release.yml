@@ -205,10 +205,18 @@ jobs:
           # Verify RPATH is set correctly
           if [ "$RUNNER_OS" == "macOS" ]; then
             echo "macOS RPATH:"
-            otool -l zig-out/bin/vimc | grep -A2 "LC_RPATH" || echo "No RPATH found"
+            if ! otool -l zig-out/bin/vimc | grep -q "LC_RPATH"; then
+              echo "ERROR: No RPATH found in macOS binary"
+              exit 1
+            fi
+            otool -l zig-out/bin/vimc | grep -A2 "LC_RPATH"
           else
             echo "Linux RPATH/RUNPATH:"
-            readelf -d zig-out/bin/vimc | grep -E "(RPATH|RUNPATH)" || echo "No RPATH/RUNPATH found"
+            if ! readelf -d zig-out/bin/vimc | grep -qE "(RPATH|RUNPATH)"; then
+              echo "ERROR: No RPATH/RUNPATH found in Linux binary"
+              exit 1
+            fi
+            readelf -d zig-out/bin/vimc | grep -E "(RPATH|RUNPATH)"
           fi
 
           # Test binary (basic smoke test)
@@ -354,25 +362,27 @@ jobs:
             });
 
             // Append build status to release body
-            const buildStatus = `
-
----
-
-## 🎉 Release binaries built successfully!
-
-Binaries are now available for:
-- macOS (Intel x86_64 & Apple Silicon ARM64)
-- Linux (x86_64 & ARM64)
-
-**Quick Install:**
-\`\`\`bash
-curl -fsSL https://vimcraft.com/install.sh | sh
-\`\`\`
-
-**Verify checksums:**
-\`\`\`bash
-shasum -a 256 -c checksums.txt
-\`\`\``;
+            const buildStatus = [
+              '',
+              '',
+              '---',
+              '',
+              '## 🎉 Release binaries built successfully!',
+              '',
+              'Binaries are now available for:',
+              '- macOS (Intel x86_64 & Apple Silicon ARM64)',
+              '- Linux (x86_64 & ARM64)',
+              '',
+              '**Quick Install:**',
+              '```bash',
+              'curl -fsSL https://vimcraft.com/install.sh | sh',
+              '```',
+              '',
+              '**Verify checksums:**',
+              '```bash',
+              'shasum -a 256 -c checksums.txt',
+              '```'
+            ].join('\n');
 
             // Update release with appended body
             await github.rest.repos.updateRelease({
@@ -381,3 +391,4 @@ shasum -a 256 -c checksums.txt
               release_id: context.payload.release.id,
               body: (release.data.body || '') + buildStatus
             });
+
