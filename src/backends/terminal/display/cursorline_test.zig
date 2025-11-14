@@ -16,7 +16,7 @@ test "Cursorline: renders background to cursor layer via debug protocol" {
 
     // Spawn Vimcraft in debug protocol mode
     var child = std.process.Child.init(&[_][]const u8{
-        "./zig-out/bin/vc",
+        "./zig-out/bin/vimc",
         "--debug-protocol",
     }, allocator);
     child.stdin_behavior = .Pipe;

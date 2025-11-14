@@ -61,39 +61,83 @@ pub const OptionMeta = struct {
     };
 };
 
-/// Options Manager - stores and manages editor options
+/// Option scope for get/set operations
+pub const OptionScope = enum {
+    global, // Global options only
+    local, // Buffer/window local (with fallback to global)
+    force_local, // Force buffer/window local (no fallback)
+};
+
+/// Options Manager - stores and manages editor options with scope support
 pub const OptionsManager = struct {
     allocator: std.mem.Allocator,
-    options: std.StringHashMap(OptionValue),
+    global_options: std.StringHashMap(OptionValue), // Global options
+    buffer_local_options: std.StringHashMap(OptionValue), // Buffer-local options
+    window_local_options: std.StringHashMap(OptionValue), // Window-local options (future)
 
     pub fn init(allocator: std.mem.Allocator) OptionsManager {
         return .{
             .allocator = allocator,
-            .options = std.StringHashMap(OptionValue).init(allocator),
+            .global_options = std.StringHashMap(OptionValue).init(allocator),
+            .buffer_local_options = std.StringHashMap(OptionValue).init(allocator),
+            .window_local_options = std.StringHashMap(OptionValue).init(allocator),
         };
     }
 
     pub fn deinit(self: *OptionsManager) void {
-        // Free all keys and string values
-        var iter = self.options.iterator();
-        while (iter.next()) |entry| {
-            // Free the key (we own it)
-            self.allocator.free(entry.key_ptr.*);
-            // Free the value (strings only)
-            var value = entry.value_ptr.*;
-            value.deinit(self.allocator);
+        // Free global options
+        {
+            var iter = self.global_options.iterator();
+            while (iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                var value = entry.value_ptr.*;
+                value.deinit(self.allocator);
+            }
+            self.global_options.deinit();
         }
-        self.options.deinit();
+
+        // Free buffer-local options
+        {
+            var iter = self.buffer_local_options.iterator();
+            while (iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                var value = entry.value_ptr.*;
+                value.deinit(self.allocator);
+            }
+            self.buffer_local_options.deinit();
+        }
+
+        // Free window-local options
+        {
+            var iter = self.window_local_options.iterator();
+            while (iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                var value = entry.value_ptr.*;
+                value.deinit(self.allocator);
+            }
+            self.window_local_options.deinit();
+        }
     }
 
-    /// Set an option value
+    /// Set an option value (defaults to global scope for backward compatibility)
     pub fn set(self: *OptionsManager, name: []const u8, value: OptionValue) !void {
+        try self.setWithScope(name, value, .global);
+    }
+
+    /// Set an option value with explicit scope
+    pub fn setWithScope(self: *OptionsManager, name: []const u8, value: OptionValue, scope: OptionScope) !void {
         // Clone the value first (deep copy strings)
         var cloned = try value.clone(self.allocator);
         errdefer cloned.deinit(self.allocator);
 
+        // Select the appropriate storage based on scope
+        const storage = switch (scope) {
+            .global => &self.global_options,
+            .local, .force_local => &self.buffer_local_options, // For now, local = buffer-local
+        };
+
         // Check if option already exists - if so, just update the value
-        if (self.options.getPtr(name)) |existing_value_ptr| {
+        if (storage.getPtr(name)) |existing_value_ptr| {
             // Free the old value
             existing_value_ptr.deinit(self.allocator);
             // Update with new value
@@ -102,23 +146,57 @@ pub const OptionsManager = struct {
             // New option - duplicate the key and insert
             const owned_key = try self.allocator.dupe(u8, name);
             errdefer self.allocator.free(owned_key);
-            try self.options.put(owned_key, cloned);
+            try storage.put(owned_key, cloned);
         }
     }
 
-    /// Get an option value
+    /// Get an option value (defaults to local scope with global fallback)
     pub fn get(self: *const OptionsManager, name: []const u8) ?OptionValue {
-        return self.options.get(name);
+        return self.getWithScope(name, .local);
     }
 
-    /// Check if an option exists
+    /// Get an option value with explicit scope
+    pub fn getWithScope(self: *const OptionsManager, name: []const u8, scope: OptionScope) ?OptionValue {
+        return switch (scope) {
+            .global => self.global_options.get(name),
+            .local => {
+                // Try buffer-local first, then fallback to global
+                if (self.buffer_local_options.get(name)) |value| {
+                    return value;
+                }
+                return self.global_options.get(name);
+            },
+            .force_local => self.buffer_local_options.get(name), // No fallback
+        };
+    }
+
+    /// Check if an option exists (checks all scopes)
     pub fn has(self: *const OptionsManager, name: []const u8) bool {
-        return self.options.contains(name);
+        return self.buffer_local_options.contains(name) or self.global_options.contains(name);
     }
 
-    /// Remove an option (reset to default)
+    /// Check if an option exists in a specific scope
+    pub fn hasWithScope(self: *const OptionsManager, name: []const u8, scope: OptionScope) bool {
+        return switch (scope) {
+            .global => self.global_options.contains(name),
+            .local => self.buffer_local_options.contains(name) or self.global_options.contains(name),
+            .force_local => self.buffer_local_options.contains(name),
+        };
+    }
+
+    /// Remove an option (from global scope by default)
     pub fn remove(self: *OptionsManager, name: []const u8) void {
-        if (self.options.fetchRemove(name)) |entry| {
+        self.removeWithScope(name, .global);
+    }
+
+    /// Remove an option from a specific scope
+    pub fn removeWithScope(self: *OptionsManager, name: []const u8, scope: OptionScope) void {
+        const storage = switch (scope) {
+            .global => &self.global_options,
+            .local, .force_local => &self.buffer_local_options,
+        };
+
+        if (storage.fetchRemove(name)) |entry| {
             // Free both key and value
             self.allocator.free(entry.key);
             var value = entry.value;
@@ -153,20 +231,35 @@ pub const OptionsManager = struct {
         };
     }
 
-    /// Set boolean option (type-safe)
+    /// Set boolean option (type-safe, defaults to global scope)
     pub fn setBoolean(self: *OptionsManager, name: []const u8, value: bool) !void {
         try self.set(name, .{ .boolean = value });
     }
 
-    /// Set number option (type-safe)
+    /// Set boolean option with explicit scope (type-safe)
+    pub fn setBooleanWithScope(self: *OptionsManager, name: []const u8, value: bool, scope: OptionScope) !void {
+        try self.setWithScope(name, .{ .boolean = value }, scope);
+    }
+
+    /// Set number option (type-safe, defaults to global scope)
     pub fn setNumber(self: *OptionsManager, name: []const u8, value: i64) !void {
         try self.set(name, .{ .number = value });
     }
 
-    /// Set string option (type-safe, makes a copy)
+    /// Set number option with explicit scope (type-safe)
+    pub fn setNumberWithScope(self: *OptionsManager, name: []const u8, value: i64, scope: OptionScope) !void {
+        try self.setWithScope(name, .{ .number = value }, scope);
+    }
+
+    /// Set string option (type-safe, makes a copy, defaults to global scope)
     pub fn setString(self: *OptionsManager, name: []const u8, value: []const u8) !void {
         // Pass the slice to set(), which will duplicate it via clone()
         try self.set(name, .{ .string = value });
+    }
+
+    /// Set string option with explicit scope (type-safe, makes a copy)
+    pub fn setStringWithScope(self: *OptionsManager, name: []const u8, value: []const u8, scope: OptionScope) !void {
+        try self.setWithScope(name, .{ .string = value }, scope);
     }
 };
 
@@ -263,4 +356,71 @@ test "OptionsManager: string memory management" {
 
     const value = mgr.getString("clipboard");
     try std.testing.expectEqualStrings("autoselect", value.?);
+}
+
+test "OptionsManager: buffer-local option overrides global" {
+    const allocator = std.testing.allocator;
+    var mgr = OptionsManager.init(allocator);
+    defer mgr.deinit();
+
+    // Set global option
+    try mgr.setBooleanWithScope("number", false, .global);
+
+    // Set buffer-local option
+    try mgr.setBooleanWithScope("number", true, .local);
+
+    // Getting with local scope should return buffer-local value
+    const local_value = mgr.getWithScope("number", .local);
+    try std.testing.expect(local_value != null);
+    try std.testing.expect(local_value.?.boolean == true);
+
+    // Getting with global scope should return global value
+    const global_value = mgr.getWithScope("number", .global);
+    try std.testing.expect(global_value != null);
+    try std.testing.expect(global_value.?.boolean == false);
+}
+
+test "OptionsManager: local fallback to global" {
+    const allocator = std.testing.allocator;
+    var mgr = OptionsManager.init(allocator);
+    defer mgr.deinit();
+
+    // Set only global option (no buffer-local)
+    try mgr.setBooleanWithScope("cursorLine", true, .global);
+
+    // Getting with local scope should fallback to global
+    const value = mgr.getWithScope("cursorLine", .local);
+    try std.testing.expect(value != null);
+    try std.testing.expect(value.?.boolean == true);
+}
+
+test "OptionsManager: force_local does not fallback" {
+    const allocator = std.testing.allocator;
+    var mgr = OptionsManager.init(allocator);
+    defer mgr.deinit();
+
+    // Set only global option
+    try mgr.setBooleanWithScope("tabStop", true, .global);
+
+    // Getting with force_local should NOT fallback to global
+    const value = mgr.getWithScope("tabStop", .force_local);
+    try std.testing.expect(value == null);
+}
+
+test "OptionsManager: remove buffer-local preserves global" {
+    const allocator = std.testing.allocator;
+    var mgr = OptionsManager.init(allocator);
+    defer mgr.deinit();
+
+    // Set both global and buffer-local
+    try mgr.setBooleanWithScope("number", false, .global);
+    try mgr.setBooleanWithScope("number", true, .local);
+
+    // Remove buffer-local
+    mgr.removeWithScope("number", .local);
+
+    // Should now get global value
+    const value = mgr.getWithScope("number", .local);
+    try std.testing.expect(value != null);
+    try std.testing.expect(value.?.boolean == false);
 }

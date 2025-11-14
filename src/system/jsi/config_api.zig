@@ -230,6 +230,337 @@ export fn setOption(
     return c.hermes_value_create_undefined(runtime);
 }
 
+/// Zig host function: getOptionWithScope(name, scope)
+/// Called from JavaScript: getOptionWithScope('number', 'local')
+/// scope: 'global', 'local', or 'force_local'
+/// Returns the option value or undefined if not found/set
+export fn getOptionWithScope(
+    runtime_nullable: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const runtime = runtime_nullable orelse return null;
+    const ctx = @as(*ConfigContext, @ptrCast(@alignCast(context.?)));
+
+    if (arg_count < 2) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 0: option name (string)
+    if (args[0] == null or !c.hermes_value_is_string(args[0])) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    var name_len: usize = 0;
+    const name_ptr = c.hermes_value_get_string(runtime, args[0], &name_len);
+    if (name_ptr == null) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    var name_buf: [256]u8 = undefined;
+    if (name_len >= name_buf.len) return c.hermes_value_create_undefined(runtime);
+    @memcpy(name_buf[0..name_len], name_ptr[0..name_len]);
+    const name = name_buf[0..name_len];
+
+    // Arg 1: scope (string: 'global', 'local', 'force_local')
+    if (args[1] == null or !c.hermes_value_is_string(args[1])) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    var scope_len: usize = 0;
+    const scope_ptr = c.hermes_value_get_string(runtime, args[1], &scope_len);
+    if (scope_ptr == null) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    const scope_str = scope_ptr[0..scope_len];
+    const scope: options_mod.OptionScope = if (std.mem.eql(u8, scope_str, "global"))
+        .global
+    else if (std.mem.eql(u8, scope_str, "force_local"))
+        .force_local
+    else
+        .local; // Default to local
+
+    // Get option value with scope
+    const opt_value = ctx.options_manager.getWithScope(name, scope) orelse {
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    // Convert OptionValue to Hermes value
+    return switch (opt_value) {
+        .boolean => |v| c.hermes_value_create_boolean(runtime, v),
+        .number => |v| c.hermes_value_create_number(runtime, @floatFromInt(v)),
+        .string => |s| c.hermes_value_create_string(runtime, s.ptr, s.len),
+    };
+}
+
+/// Zig host function: setOptionWithScope(name, value, scope)
+/// Called from JavaScript: setOptionWithScope('number', true, 'local')
+/// scope: 'global', 'local', or 'force_local'
+export fn setOptionWithScope(
+    runtime_nullable: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const runtime = runtime_nullable orelse return null;
+    const ctx = @as(*ConfigContext, @ptrCast(@alignCast(context.?)));
+
+    if (arg_count < 3) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 0: option name (string)
+    if (args[0] == null or !c.hermes_value_is_string(args[0])) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    var name_len: usize = 0;
+    const name_ptr = c.hermes_value_get_string(runtime, args[0], &name_len);
+    if (name_ptr == null) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    var name_buf: [256]u8 = undefined;
+    if (name_len >= name_buf.len) return c.hermes_value_create_undefined(runtime);
+    @memcpy(name_buf[0..name_len], name_ptr[0..name_len]);
+    const name = name_buf[0..name_len];
+
+    // Convert name to lowercase
+    var lower_name_buf: [256]u8 = undefined;
+    if (name_len >= lower_name_buf.len) return c.hermes_value_create_undefined(runtime);
+    for (name, 0..) |char, i| {
+        lower_name_buf[i] = std.ascii.toLower(char);
+    }
+    const lower_name = lower_name_buf[0..name_len];
+
+    // Look up option metadata
+    const meta = option_defs.getOptionMeta(lower_name) orelse {
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    // Arg 1: value
+    const opt_value: OptionValue = switch (meta.type) {
+        .boolean => blk: {
+            if (!c.hermes_value_is_boolean(args[1])) {
+                return c.hermes_value_create_undefined(runtime);
+            }
+            break :blk .{ .boolean = c.hermes_value_get_boolean(args[1]) };
+        },
+        .number => blk: {
+            if (!c.hermes_value_is_number(args[1])) {
+                return c.hermes_value_create_undefined(runtime);
+            }
+            break :blk .{ .number = @intFromFloat(c.hermes_value_get_number(args[1])) };
+        },
+        .string => blk: {
+            if (!c.hermes_value_is_string(args[1])) {
+                return c.hermes_value_create_undefined(runtime);
+            }
+            var value_len: usize = 0;
+            const value_ptr = c.hermes_value_get_string(runtime, args[1], &value_len);
+            if (value_ptr == null) {
+                return c.hermes_value_create_undefined(runtime);
+            }
+            break :blk .{ .string = value_ptr[0..value_len] };
+        },
+    };
+
+    // Validate
+    if (!option_defs.validateOption(meta, opt_value)) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 2: scope (string: 'global', 'local', 'force_local')
+    if (args[2] == null or !c.hermes_value_is_string(args[2])) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    var scope_len: usize = 0;
+    const scope_ptr = c.hermes_value_get_string(runtime, args[2], &scope_len);
+    if (scope_ptr == null) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    const scope_str = scope_ptr[0..scope_len];
+    const scope: options_mod.OptionScope = if (std.mem.eql(u8, scope_str, "global"))
+        .global
+    else if (std.mem.eql(u8, scope_str, "force_local"))
+        .force_local
+    else
+        .local;
+
+    // Store with scope
+    ctx.options_manager.setWithScope(lower_name, opt_value, scope) catch {
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    // Apply side effects (only for global scope changes for now)
+    if (scope == .global) {
+        applySideEffects(ctx, lower_name, opt_value);
+    }
+
+    return c.hermes_value_create_undefined(runtime);
+}
+
+/// Zig host function: getAllOptions()
+/// Called from JavaScript: getAllOptions()
+/// Returns a plain JavaScript object with all set global options
+/// Single JSI call replaces multiple getOption() calls for Chrome DevTools inspection
+export fn getAllOptions(
+    runtime_nullable: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = args;
+    _ = arg_count;
+
+    const runtime = runtime_nullable orelse return null;
+    const ctx = @as(*ConfigContext, @ptrCast(@alignCast(context.?)));
+
+    // Create JavaScript object
+    const obj = c.hermes_value_create_object(runtime);
+
+    // Iterate through all global options
+    var iter = ctx.options_manager.global_options.iterator();
+    while (iter.next()) |entry| {
+        const name = entry.key_ptr.*;
+        const value = entry.value_ptr.*;
+
+        // Convert OptionValue to Hermes value
+        const js_value = switch (value) {
+            .boolean => |v| c.hermes_value_create_boolean(runtime, v),
+            .number => |v| c.hermes_value_create_number(runtime, @floatFromInt(v)),
+            .string => |s| c.hermes_value_create_string(runtime, s.ptr, s.len),
+        };
+
+        // Create null-terminated property name
+        var name_buf: [256]u8 = undefined;
+        if (name.len >= name_buf.len - 1) continue; // Skip if name too long
+        @memcpy(name_buf[0..name.len], name);
+        name_buf[name.len] = 0; // Null terminator
+
+        c.hermes_value_set_property(runtime, obj, &name_buf, js_value);
+    }
+
+    return obj;
+}
+
+/// Zig host function: getAllOptionsWithScope(scope)
+/// Called from JavaScript: getAllOptionsWithScope('local')
+/// Returns a plain JavaScript object with all options in the specified scope
+/// scope: 'global', 'local', or 'force_local'
+export fn getAllOptionsWithScope(
+    runtime_nullable: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const runtime = runtime_nullable orelse return null;
+    const ctx = @as(*ConfigContext, @ptrCast(@alignCast(context.?)));
+
+    if (arg_count < 1) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Arg 0: scope (string)
+    if (args[0] == null or !c.hermes_value_is_string(args[0])) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    var scope_len: usize = 0;
+    const scope_ptr = c.hermes_value_get_string(runtime, args[0], &scope_len);
+    if (scope_ptr == null) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    const scope_str = scope_ptr[0..scope_len];
+    const scope: options_mod.OptionScope = if (std.mem.eql(u8, scope_str, "global"))
+        .global
+    else if (std.mem.eql(u8, scope_str, "force_local"))
+        .force_local
+    else
+        .local;
+
+    // Create JavaScript object
+    const obj = c.hermes_value_create_object(runtime);
+
+    // For local scope, we need to merge buffer-local and global
+    if (scope == .local) {
+        // First add all global options
+        var global_iter = ctx.options_manager.global_options.iterator();
+        while (global_iter.next()) |entry| {
+            const name = entry.key_ptr.*;
+            const value = entry.value_ptr.*;
+
+            const js_value = switch (value) {
+                .boolean => |v| c.hermes_value_create_boolean(runtime, v),
+                .number => |v| c.hermes_value_create_number(runtime, @floatFromInt(v)),
+                .string => |s| c.hermes_value_create_string(runtime, s.ptr, s.len),
+            };
+
+            // Create null-terminated property name
+            var name_buf: [256]u8 = undefined;
+            if (name.len >= name_buf.len - 1) continue;
+            @memcpy(name_buf[0..name.len], name);
+            name_buf[name.len] = 0;
+
+            c.hermes_value_set_property(runtime, obj, &name_buf, js_value);
+        }
+
+        // Then override with buffer-local options (they take precedence)
+        var local_iter = ctx.options_manager.buffer_local_options.iterator();
+        while (local_iter.next()) |entry| {
+            const name = entry.key_ptr.*;
+            const value = entry.value_ptr.*;
+
+            const js_value = switch (value) {
+                .boolean => |v| c.hermes_value_create_boolean(runtime, v),
+                .number => |v| c.hermes_value_create_number(runtime, @floatFromInt(v)),
+                .string => |s| c.hermes_value_create_string(runtime, s.ptr, s.len),
+            };
+
+            // Create null-terminated property name
+            var name_buf: [256]u8 = undefined;
+            if (name.len >= name_buf.len - 1) continue;
+            @memcpy(name_buf[0..name.len], name);
+            name_buf[name.len] = 0;
+
+            c.hermes_value_set_property(runtime, obj, &name_buf, js_value);
+        }
+    } else {
+        // For global or force_local, iterate just that scope
+        const storage = if (scope == .global)
+            &ctx.options_manager.global_options
+        else
+            &ctx.options_manager.buffer_local_options;
+
+        var iter = storage.iterator();
+        while (iter.next()) |entry| {
+            const name = entry.key_ptr.*;
+            const value = entry.value_ptr.*;
+
+            const js_value = switch (value) {
+                .boolean => |v| c.hermes_value_create_boolean(runtime, v),
+                .number => |v| c.hermes_value_create_number(runtime, @floatFromInt(v)),
+                .string => |s| c.hermes_value_create_string(runtime, s.ptr, s.len),
+            };
+
+            // Create null-terminated property name
+            var name_buf: [256]u8 = undefined;
+            if (name.len >= name_buf.len - 1) continue;
+            @memcpy(name_buf[0..name.len], name);
+            name_buf[name.len] = 0;
+
+            c.hermes_value_set_property(runtime, obj, &name_buf, js_value);
+        }
+    }
+
+    return obj;
+}
+
 /// Apply side effects when certain options are set
 /// For example, cursorline should update HighlightConfig
 fn applySideEffects(ctx: *ConfigContext, name: []const u8, value: OptionValue) void {
@@ -250,20 +581,48 @@ pub fn register(runtime: *c.OVHermesRuntime, ctx: *ConfigContext) void {
         runtime,
         "setHighlight",
         setHighlight,
-        @ptrCast(ctx), // Pass full context
+        @ptrCast(ctx),
     );
 
     c.hermes_register_host_function(
         runtime,
         "getOption",
         getOption,
-        @ptrCast(ctx), // Pass full context
+        @ptrCast(ctx),
     );
 
     c.hermes_register_host_function(
         runtime,
         "setOption",
         setOption,
-        @ptrCast(ctx), // Pass full context
+        @ptrCast(ctx),
+    );
+
+    c.hermes_register_host_function(
+        runtime,
+        "getOptionWithScope",
+        getOptionWithScope,
+        @ptrCast(ctx),
+    );
+
+    c.hermes_register_host_function(
+        runtime,
+        "setOptionWithScope",
+        setOptionWithScope,
+        @ptrCast(ctx),
+    );
+
+    c.hermes_register_host_function(
+        runtime,
+        "getAllOptions",
+        getAllOptions,
+        @ptrCast(ctx),
+    );
+
+    c.hermes_register_host_function(
+        runtime,
+        "getAllOptionsWithScope",
+        getAllOptionsWithScope,
+        @ptrCast(ctx),
     );
 }

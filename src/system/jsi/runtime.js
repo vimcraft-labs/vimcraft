@@ -1,6 +1,14 @@
 // console object (for debugging) - make it global for plugins!
+// React Native approach: Pass raw JavaScript values to native
+// Native code will:
+//   1. Send raw values to Chrome DevTools (for interactive inspection)
+//   2. Convert to strings for text logs (for LLM/file logging)
 globalThis.console = {
-  log: function(...args) { consoleLog(...args); }
+  log: function(...args) {
+    // Pass raw values to native - don't stringify!
+    // This allows Chrome DevTools to show expandable objects
+    consoleLog(...args);
+  }
 };
 
 // Timer Registry (React Native pattern - keeps callbacks alive in JS!)
@@ -117,39 +125,147 @@ globalThis.vim = {
   },
   // Dynamic options proxy - handles ANY option via getOption/setOption
   // Supports both camelCase (JavaScript style) and lowercase (Vim style)
-  opt: new Proxy({}, {
+  opt: new Proxy({
+    get [Symbol.toStringTag]() { return 'vim.opt'; }
+  }, {
     get(target, prop) {
+      if (prop === Symbol.toStringTag) return 'vim.opt';
       if (typeof prop === 'symbol') return undefined;
-      // Call native getOption function
+      // Always fetch from Zig (source of truth)
       return getOption(prop);
     },
     set(target, prop, value) {
       if (typeof prop === 'symbol') return false;
-      // Call native setOption function
+      // Write to Zig (source of truth)
       setOption(prop, value);
       return true;
     },
-    // Support for 'in' operator (e.g., 'number' in vim.opt)
     has(target, prop) {
       if (typeof prop === 'symbol') return false;
       return getOption(prop) !== undefined;
     },
-    // Support for Object.keys(vim.opt) - though options are dynamically defined
+    // Fetch fresh snapshot when Chrome DevTools enumerates
     ownKeys(target) {
-      // Return common options for inspection (non-exhaustive)
-      return ['number', 'relativenumber', 'cursorline', 'tabstop', 'shiftwidth', 'expandtab'];
+      // Clear stale cache
+      for (const key of Object.keys(target)) {
+        delete target[key];
+      }
+
+      // Single JSI call to get ALL set options
+      const allOptions = getAllOptions();
+      Object.assign(target, allOptions);
+
+      return Object.keys(target);
     },
     getOwnPropertyDescriptor(target, prop) {
+      if (typeof prop === 'symbol') return undefined;
+      // Fetch fresh value from Zig
+      const value = getOption(prop);
+      if (value === undefined) return undefined;
       return {
+        value: value,
         enumerable: true,
-        configurable: true
+        configurable: true,
+        writable: true
       };
     }
   }),
-  // TODO: Buffer-local options (vim.opt_local)
-  // opt_local: new Proxy({}, { /* similar to opt */ }),
-  // TODO: Global options (vim.opt_global)
-  // opt_global: new Proxy({}, { /* similar to opt */ })
+  // Buffer-local options (vim.optLocal)
+  // Neovim equivalent: vim.opt_local
+  // Gets buffer-local value first, falls back to global
+  optLocal: new Proxy({
+    get [Symbol.toStringTag]() { return 'vim.optLocal'; }
+  }, {
+    get(target, prop) {
+      if (prop === Symbol.toStringTag) return 'vim.optLocal';
+      if (typeof prop === 'symbol') return undefined;
+      // Always fetch from Zig (source of truth)
+      return getOptionWithScope(prop, 'local');
+    },
+    set(target, prop, value) {
+      if (typeof prop === 'symbol') return false;
+      // Write to Zig (source of truth)
+      setOptionWithScope(prop, value, 'local');
+      return true;
+    },
+    has(target, prop) {
+      if (typeof prop === 'symbol') return false;
+      return getOptionWithScope(prop, 'local') !== undefined;
+    },
+    // Fetch fresh snapshot when Chrome DevTools enumerates
+    ownKeys(target) {
+      // Clear stale cache
+      for (const key of Object.keys(target)) {
+        delete target[key];
+      }
+
+      // Single JSI call to get ALL set options in local scope
+      const allOptions = getAllOptionsWithScope('local');
+      Object.assign(target, allOptions);
+
+      return Object.keys(target);
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (typeof prop === 'symbol') return undefined;
+      // Fetch fresh value from Zig
+      const value = getOptionWithScope(prop, 'local');
+      if (value === undefined) return undefined;
+      return {
+        value: value,
+        enumerable: true,
+        configurable: true,
+        writable: true
+      };
+    }
+  }),
+  // Global options (vim.optGlobal)
+  // Neovim equivalent: vim.opt_global
+  // Always gets/sets global value (no buffer-local fallback)
+  optGlobal: new Proxy({
+    get [Symbol.toStringTag]() { return 'vim.optGlobal'; }
+  }, {
+    get(target, prop) {
+      if (prop === Symbol.toStringTag) return 'vim.optGlobal';
+      if (typeof prop === 'symbol') return undefined;
+      // Always fetch from Zig (source of truth)
+      return getOptionWithScope(prop, 'global');
+    },
+    set(target, prop, value) {
+      if (typeof prop === 'symbol') return false;
+      // Write to Zig (source of truth)
+      setOptionWithScope(prop, value, 'global');
+      return true;
+    },
+    has(target, prop) {
+      if (typeof prop === 'symbol') return false;
+      return getOptionWithScope(prop, 'global') !== undefined;
+    },
+    // Fetch fresh snapshot when Chrome DevTools enumerates
+    ownKeys(target) {
+      // Clear stale cache
+      for (const key of Object.keys(target)) {
+        delete target[key];
+      }
+
+      // Single JSI call to get ALL set options in global scope
+      const allOptions = getAllOptionsWithScope('global');
+      Object.assign(target, allOptions);
+
+      return Object.keys(target);
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (typeof prop === 'symbol') return undefined;
+      // Fetch fresh value from Zig
+      const value = getOptionWithScope(prop, 'global');
+      if (value === undefined) return undefined;
+      return {
+        value: value,
+        enumerable: true,
+        configurable: true,
+        writable: true
+      };
+    }
+  })
 };
 
 // Layer API - NO wrapper needed!

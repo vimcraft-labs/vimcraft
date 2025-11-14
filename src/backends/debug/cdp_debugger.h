@@ -5,8 +5,8 @@
  * to enable Chrome DevTools debugging.
  */
 
-#ifndef OPENVIM_CDP_DEBUGGER_H
-#define OPENVIM_CDP_DEBUGGER_H
+#ifndef VIMCRAFT_CDP_DEBUGGER_H
+#define VIMCRAFT_CDP_DEBUGGER_H
 
 #include "../../system/jsi/hermes_c_api.h"
 #include <stdint.h>
@@ -103,4 +103,4 @@ const char* cdp_debugger_get_url(CDPDebugger* debugger);
 }
 #endif
 
-#endif // OPENVIM_CDP_DEBUGGER_H
+#endif // VIMCRAFT_CDP_DEBUGGER_H

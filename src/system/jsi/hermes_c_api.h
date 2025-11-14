@@ -11,8 +11,8 @@
  * - Context pointer for host function callbacks
  */
 
-#ifndef OPENVIM_HERMES_C_API_H
-#define OPENVIM_HERMES_C_API_H
+#ifndef VIMCRAFT_HERMES_C_API_H
+#define VIMCRAFT_HERMES_C_API_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -417,4 +417,4 @@ void hermes_cdp_add_console_message_values(
 }
 #endif
 
-#endif // OPENVIM_HERMES_C_API_H
+#endif // VIMCRAFT_HERMES_C_API_H

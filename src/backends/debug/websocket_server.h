@@ -6,8 +6,8 @@
  * with the Hermes CDP Agent.
  */
 
-#ifndef OPENVIM_WEBSOCKET_SERVER_H
-#define OPENVIM_WEBSOCKET_SERVER_H
+#ifndef VIMCRAFT_WEBSOCKET_SERVER_H
+#define VIMCRAFT_WEBSOCKET_SERVER_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -122,4 +122,4 @@ const char* websocket_server_get_url(WebSocketServer* server);
 }
 #endif
 
-#endif // OPENVIM_WEBSOCKET_SERVER_H
+#endif // VIMCRAFT_WEBSOCKET_SERVER_H

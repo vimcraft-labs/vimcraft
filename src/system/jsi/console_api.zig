@@ -56,9 +56,14 @@ export fn consoleLog(
         // Pass JavaScript values directly to CDP - let Chrome DevTools format them
         // This properly displays objects, arrays, and all other types
         cdp_c.cdp_debugger_log_values(debugger_ptr, args, arg_count, 0); // 0 = log level
+
+        // When CDP debugger is active, DON'T also log to editor.logger
+        // Otherwise the logger callback will send string logs back to debugger,
+        // overriding the raw CDP values we just sent!
+        return c.hermes_value_create_undefined(runtime_nullable);
     }
 
-    // ALSO forward to editor.logger for LLM analysis (Backend 2: LLM Debug)
+    // ONLY forward to editor.logger when NO CDP debugger (Backend 2: LLM Debug)
     // Convert JavaScript arguments to a single string
     var buf: [4096]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
@@ -88,14 +93,17 @@ export fn consoleLog(
             writer.writeAll("null") catch break;
         } else if (c.hermes_value_is_undefined(arg)) {
             writer.writeAll("undefined") catch break;
-        } else {
-            // Object/Array - just write [object] for now
+        } else if (c.hermes_value_is_object(arg)) {
+            // Object/Array - for text logs just show [object]
             writer.writeAll("[object]") catch break;
+        } else {
+            // Unknown type
+            writer.writeAll("[unknown]") catch break;
         }
     }
 
     // Forward to logger (info level for console.log)
-    // Works with both *Editor and *EditorContext
+    // Only reaches here when NO CDP debugger (--debug-protocol mode or no debugging)
     const log_message = fbs.getWritten();
     if (global_editor_with_logger) |editor| {
         editor.logger.info("{s}", .{log_message}) catch {};
