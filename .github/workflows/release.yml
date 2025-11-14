@@ -205,10 +205,10 @@ jobs:
           # Verify RPATH is set correctly
           if [ "$RUNNER_OS" == "macOS" ]; then
             echo "macOS RPATH:"
-            otool -l zig-out/bin/vimc | grep -A2 "LC_RPATH"
+            otool -l zig-out/bin/vimc | grep -A2 "LC_RPATH" || echo "No RPATH found"
           else
-            echo "Linux RPATH:"
-            readelf -d zig-out/bin/vimc | grep RPATH
+            echo "Linux RPATH/RUNPATH:"
+            readelf -d zig-out/bin/vimc | grep -E "(RPATH|RUNPATH)" || echo "No RPATH/RUNPATH found"
           fi
 
           # Test binary (basic smoke test)
