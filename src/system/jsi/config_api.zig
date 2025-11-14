@@ -562,6 +562,13 @@ fn applySideEffects(ctx: *ConfigContext, name: []const u8, value: OptionValue) v
                 display.setLineNumbers(value.boolean) catch {};
             }
         }
+    } else if (std.mem.eql(u8, name, "relativenumber")) {
+        if (value == .boolean) {
+            // Toggle relative line numbers display
+            if (ctx.display) |display| {
+                display.setRelativeLineNumbers(value.boolean) catch {};
+            }
+        }
     }
 }
 
