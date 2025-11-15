@@ -158,6 +158,9 @@ pub const TerminalBackend = struct {
     /// Handle bracketed paste sequences (ESC[200~ ... ESC[201~)
     /// Returns true if input was part of a paste sequence (handled or accumulating)
     fn handleBracketedPaste(self: *TerminalBackend, input: []const u8, needs_render: *bool) !bool {
+        // Limit paste size to prevent memory exhaustion (10MB maximum)
+        const max_paste_size = 10 * 1024 * 1024;
+
         // Bracketed paste start: ESC[200~
         const paste_start = "\x1b[200~";
         // Bracketed paste end: ESC[201~
@@ -167,6 +170,9 @@ pub const TerminalBackend = struct {
         if (!self.in_paste and input.len >= paste_start.len) {
             if (std.mem.startsWith(u8, input, paste_start)) {
                 self.in_paste = true;
+                // Reset state if allocation fails
+                errdefer self.in_paste = false;
+
                 self.paste_buffer.clearRetainingCapacity();
 
                 // Accumulate any remaining bytes after the start sequence
@@ -181,6 +187,14 @@ pub const TerminalBackend = struct {
 
         // If we're in paste mode, accumulate bytes
         if (self.in_paste) {
+            // Check size limit before accumulating to prevent DoS
+            if (self.paste_buffer.items.len + input.len > max_paste_size) {
+                // Paste too large - abort and reset state
+                self.in_paste = false;
+                self.paste_buffer.clearRetainingCapacity();
+                return error.PasteTooLarge;
+            }
+
             try self.paste_buffer.appendSlice(self.allocator, input);
 
             // Check if paste ended
@@ -197,7 +211,14 @@ pub const TerminalBackend = struct {
 
                         // If in visual mode, delete the selection first (paste replaces selection)
                         var deletion_undo: ?Change = null;
-                        if (self.editor.mode_manager.isVisual() and self.editor.visual_state.active) {
+                        // Save visual state before modifying to enable rollback on error
+                        const had_visual_selection = self.editor.mode_manager.isVisual() and self.editor.visual_state.active;
+                        const saved_visual_state = if (had_visual_selection)
+                            self.editor.visual_state
+                        else
+                            undefined;
+
+                        if (had_visual_selection) {
                             const visual_ops = @import("../../editor/buffer/visual_ops.zig");
                             const Position = @import("visual/visual.zig").Position;
 
@@ -234,6 +255,31 @@ pub const TerminalBackend = struct {
                             self.editor.buffer.beginTransaction();
                         }
 
+                        // Rollback transaction and mode on error
+                        // Note: Conditional mode restore prevents conflict with inner errdefer
+                        errdefer {
+                            if (!was_insert) {
+                                self.editor.buffer.discardTransaction();
+                                // Only restore NORMAL mode if there wasn't a visual selection
+                                // (the inner errdefer restores VISUAL mode in that case)
+                                if (!had_visual_selection) {
+                                    self.editor.mode_manager.enterNormal();
+                                }
+                            }
+                        }
+
+                        // Restore deletion and visual state if paste fails
+                        errdefer {
+                            if (deletion_undo) |del_change| {
+                                // Put deletion back on undo stack so user can still undo it
+                                self.editor.buffer.undo_stack.append(self.allocator, del_change) catch {};
+                            }
+                            if (had_visual_selection) {
+                                self.editor.visual_state = saved_visual_state;
+                                self.editor.mode_manager.enterVisual();
+                            }
+                        }
+
                         // Insert each character at the current position
                         for (paste_content) |char| {
                             try self.editor.buffer.insertChar(char);
@@ -243,18 +289,28 @@ pub const TerminalBackend = struct {
                         if (deletion_undo) |del_change| {
                             // Don't commit the transaction normally - create combined entry
                             if (self.editor.buffer.active_transaction) |trans| {
+                                // Allocate inserted_text first (with errdefer cleanup if append fails)
+                                const inserted_text = try self.allocator.dupe(u8, trans.text_buffer.items);
+                                errdefer self.allocator.free(inserted_text);
+
+                                // Note: Don't free deleted_text here! If append() fails, the outer
+                                // errdefer restores del_change to undo_stack, which owns deleted_text.
+                                // Freeing it here would cause use-after-free.
+
                                 // Create single undo entry for delete+paste operation
                                 const combined_change = Change{
                                     .offset = del_change.offset,
-                                    .deleted_text = del_change.deleted_text, // What was deleted (keep ownership)
-                                    .inserted_text = try self.allocator.dupe(u8, trans.text_buffer.items), // What was pasted
+                                    .deleted_text = del_change.deleted_text,
+                                    .inserted_text = inserted_text,
                                     .cursor_before = del_change.cursor_before,
                                     .cursor_after = trans.cursor_end,
                                 };
                                 try self.editor.buffer.undo_stack.append(self.allocator, combined_change);
 
-                                // Free the empty inserted_text from deletion change
-                                self.allocator.free(del_change.inserted_text);
+                                // Free old inserted_text if non-empty (deletion operations have empty inserted_text)
+                                if (del_change.inserted_text.len > 0) {
+                                    self.allocator.free(del_change.inserted_text);
+                                }
 
                                 // Clear redo stack (change was made)
                                 for (self.editor.buffer.redo_stack.items) |*c| {
@@ -335,17 +391,17 @@ pub const TerminalBackend = struct {
             // Account for gutter width (line numbers, signs, etc.)
             const gutter_width = self.display.gutter_manager.getTotalWidth();
 
-            // Calculate buffer position from screen position
-            const buffer_row = self.display.viewport_top + screen_row;
+            // Use saturating addition to prevent integer overflow
+            const buffer_row = self.display.viewport_top +| screen_row;
             const text_col = if (screen_col >= gutter_width)
                 screen_col - gutter_width
             else
                 0;
-            const buffer_col = self.display.viewport_left + text_col;
+            const buffer_col = self.display.viewport_left +| text_col;
 
             // Move cursor to clicked position (clamped to buffer bounds)
             if (buffer_row < self.editor.buffer.lineCount()) {
-                const line = self.editor.buffer.getLine(buffer_row).?;
+                const line = self.editor.buffer.getLine(buffer_row) orelse return true;
                 const line_len = if (line.len > 0 and line[line.len - 1] == '\n')
                     line.len - 1
                 else

@@ -21,10 +21,18 @@ pub const CommandType = enum {
     get_layer_cells, // NEW: Get cells from specific layer
     get_output_grid, // NEW: Get final composited output grid
     get_logs, // Get log entries from editor.logger
+    get_undo_stack, // NEW: Get undo stack entries (Phase 3)
+    get_redo_stack, // NEW: Get redo stack entries (Phase 3)
+    get_transaction, // NEW: Get active transaction state (Phase 3)
+    get_buffer_info, // NEW: Get buffer metadata (modified flag, path, size)
 
     // Commands
     execute_keys,
     load_file,
+    save_file, // NEW: Save buffer to file
+    set_buffer, // NEW: Set buffer content and cursor (test setup)
+    set_cursor, // NEW: Set cursor position directly
+    set_mode, // NEW: Set mode directly (NORMAL/INSERT/VISUAL/COMMAND)
 
     // Assertions
     assert_cursor,
@@ -73,6 +81,10 @@ pub const CommandArgs = union(enum) {
     },
     execute_keys: struct { keys: []const u8 },
     load_file: struct { path: []const u8 },
+    save_file: struct { path: ?[]const u8 }, // NEW: optional path (null = use buffer.filepath)
+    set_buffer: struct { lines: []const []const u8, cursor: ?Position }, // NEW: set buffer content
+    set_cursor: Position, // NEW: set cursor position directly
+    set_mode: struct { mode: []const u8 }, // NEW: set mode directly
     assert_cursor: Position,
     assert_mode: struct { mode: []const u8 },
     assert_visual_active: struct { active: bool },
@@ -103,6 +115,16 @@ pub const Command = struct {
         switch (self.args) {
             .execute_keys => |a| allocator.free(a.keys),
             .load_file => |a| allocator.free(a.path),
+            .save_file => |a| {
+                if (a.path) |p| allocator.free(p);
+            },
+            .set_buffer => |a| {
+                for (a.lines) |line| {
+                    allocator.free(line);
+                }
+                allocator.free(a.lines);
+            },
+            .set_mode => |a| allocator.free(a.mode),
             .get_layer => |a| allocator.free(a.name),
             .get_layer_cells => |a| allocator.free(a.name),
             .get_logs => |a| {
@@ -146,6 +168,11 @@ pub const ResponseResult = union(enum) {
     layer_cells: LayerCells, // NEW: Layer cell data
     output_grid: OutputGrid, // NEW: Final composited output
     logs: LogsState, // NEW: Log entries from editor.logger
+    undo_stack: UndoStackState, // NEW: Undo stack entries (Phase 3)
+    redo_stack: RedoStackState, // NEW: Redo stack entries (Phase 3)
+    transaction: TransactionState, // NEW: Active transaction state (Phase 3)
+    buffer_info: BufferInfo, // NEW: Buffer metadata
+    file_saved: struct { bytes_written: usize }, // NEW: File save confirmation
     execute_keys: struct { keys_processed: usize },
     assertion: AssertionResult,
     pong: struct { version: []const u8 },
@@ -208,6 +235,34 @@ pub const Response = struct {
                     if (a.actual) |act| allocator.free(act);
                     if (a.diff) |d| allocator.free(d);
                 },
+                .register => |r| {
+                    allocator.free(r.type);
+                    for (r.lines) |line| {
+                        allocator.free(line);
+                    }
+                    allocator.free(r.lines);
+                },
+                .visual => |v| {
+                    allocator.free(v.mode);
+                    for (v.text) |line| {
+                        allocator.free(line);
+                    }
+                    allocator.free(v.text);
+                },
+                .buffer => |b| {
+                    if (b.path) |p| allocator.free(p);
+                    for (b.lines) |line| {
+                        allocator.free(line);
+                    }
+                    allocator.free(b.lines);
+                },
+                .logs => |l| {
+                    for (l.logs) |entry| {
+                        allocator.free(entry.message);
+                        allocator.free(entry.level);
+                    }
+                    allocator.free(l.logs);
+                },
                 .layers => |l| {
                     // Free each layer's name string
                     for (l.layers) |layer| {
@@ -222,6 +277,26 @@ pub const Response = struct {
                     allocator.free(lc.cells);
                 },
                 .output_grid => |og| allocator.free(og.cells),
+                .undo_stack => |us| {
+                    for (us.entries) |entry| {
+                        allocator.free(entry.deleted_text);
+                        allocator.free(entry.inserted_text);
+                    }
+                    allocator.free(us.entries);
+                },
+                .redo_stack => |rs| {
+                    for (rs.entries) |entry| {
+                        allocator.free(entry.deleted_text);
+                        allocator.free(entry.inserted_text);
+                    }
+                    allocator.free(rs.entries);
+                },
+                .transaction => |t| {
+                    allocator.free(t.text_buffer);
+                },
+                .buffer_info => |bi| {
+                    if (bi.filepath) |fp| allocator.free(fp);
+                },
                 // Other types either don't allocate or have different ownership
                 else => {},
             }
@@ -414,6 +489,44 @@ pub const LogsState = struct {
     total_in_buffer: usize, // Total logs available in ring buffer
     truncated: bool, // Whether response was truncated due to max_bytes limit
     bytes_used: usize, // Approximate bytes used by returned logs
+};
+
+/// Single undo entry
+pub const UndoEntry = struct {
+    offset: usize,
+    deleted_text: []const u8,
+    inserted_text: []const u8,
+    cursor_before: Position,
+    cursor_after: Position,
+};
+
+/// Undo stack state
+pub const UndoStackState = struct {
+    entries: []const UndoEntry,
+    count: usize,
+    position: usize, // Current position in undo history
+};
+
+/// Redo stack state
+pub const RedoStackState = struct {
+    entries: []const UndoEntry,
+    count: usize,
+};
+
+/// Active transaction state
+pub const TransactionState = struct {
+    active: bool,
+    text_buffer: []const u8, // Accumulated text in current transaction
+    cursor_start: Position,
+    cursor_end: Position,
+};
+
+/// Buffer metadata
+pub const BufferInfo = struct {
+    modified: bool,
+    filepath: ?[]const u8,
+    size: usize, // Total bytes in buffer
+    line_count: usize,
 };
 
 // Tests

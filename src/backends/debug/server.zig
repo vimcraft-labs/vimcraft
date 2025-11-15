@@ -214,7 +214,7 @@ pub const Server = struct {
     /// This is where the actual command logic is implemented
     fn executeCommand(self: *Server, cmd: protocol.Command) !protocol.ResponseResult {
         return switch (cmd.cmd) {
-            .ping => .{ .pong = .{ .version = protocol.PROTOCOL_VERSION } },
+            .ping => .{ .pong = .{ .version = try self.allocator.dupe(u8, protocol.PROTOCOL_VERSION) } },
 
             .shutdown => {
                 self.stop();
@@ -586,6 +586,247 @@ pub const Server = struct {
                     .height = output.height,
                     .cell_count = cells.items.len,
                 } };
+            },
+
+            .get_undo_stack => {
+                const undo_stack = &self.editor.buffer.undo_stack;
+                const redo_stack = &self.editor.buffer.redo_stack;
+
+                var entries = std.ArrayList(protocol.UndoEntry).empty;
+                defer entries.deinit(self.allocator);
+
+                for (undo_stack.items) |change| {
+                    try entries.append(self.allocator, protocol.UndoEntry{
+                        .offset = change.offset,
+                        .deleted_text = try self.allocator.dupe(u8, change.deleted_text),
+                        .inserted_text = try self.allocator.dupe(u8, change.inserted_text),
+                        .cursor_before = .{
+                            .line = change.cursor_before.row,
+                            .col = change.cursor_before.col,
+                        },
+                        .cursor_after = .{
+                            .line = change.cursor_after.row,
+                            .col = change.cursor_after.col,
+                        },
+                    });
+                }
+
+                const position = undo_stack.items.len -| redo_stack.items.len;
+
+                return .{ .undo_stack = .{
+                    .entries = try entries.toOwnedSlice(self.allocator),
+                    .count = undo_stack.items.len,
+                    .position = position,
+                } };
+            },
+
+            .get_redo_stack => {
+                const redo_stack = &self.editor.buffer.redo_stack;
+
+                var entries = std.ArrayList(protocol.UndoEntry).empty;
+                defer entries.deinit(self.allocator);
+
+                for (redo_stack.items) |change| {
+                    try entries.append(self.allocator, protocol.UndoEntry{
+                        .offset = change.offset,
+                        .deleted_text = try self.allocator.dupe(u8, change.deleted_text),
+                        .inserted_text = try self.allocator.dupe(u8, change.inserted_text),
+                        .cursor_before = .{
+                            .line = change.cursor_before.row,
+                            .col = change.cursor_before.col,
+                        },
+                        .cursor_after = .{
+                            .line = change.cursor_after.row,
+                            .col = change.cursor_after.col,
+                        },
+                    });
+                }
+
+                return .{ .redo_stack = .{
+                    .entries = try entries.toOwnedSlice(self.allocator),
+                    .count = redo_stack.items.len,
+                } };
+            },
+
+            .get_transaction => {
+                const active = self.editor.buffer.active_transaction != null;
+                const text_buffer = if (self.editor.buffer.active_transaction) |trans|
+                    try self.allocator.dupe(u8, trans.text_buffer.items)
+                else
+                    try self.allocator.alloc(u8, 0);
+
+                const cursor_start = if (self.editor.buffer.active_transaction) |trans|
+                    protocol.Position{ .line = trans.cursor_start.row, .col = trans.cursor_start.col }
+                else
+                    protocol.Position{ .line = 0, .col = 0 };
+
+                const cursor_end = if (self.editor.buffer.active_transaction) |trans|
+                    protocol.Position{ .line = trans.cursor_end.row, .col = trans.cursor_end.col }
+                else
+                    protocol.Position{ .line = 0, .col = 0 };
+
+                return .{ .transaction = .{
+                    .active = active,
+                    .text_buffer = text_buffer,
+                    .cursor_start = cursor_start,
+                    .cursor_end = cursor_end,
+                } };
+            },
+
+            .get_buffer_info => {
+                return .{ .buffer_info = .{
+                    .modified = self.editor.buffer.modified,
+                    .filepath = if (self.editor.buffer.filepath) |fp| try self.allocator.dupe(u8, fp) else null,
+                    .size = self.editor.buffer.content.items.len,
+                    .line_count = self.editor.buffer.lineCount(),
+                } };
+            },
+
+            .save_file => {
+                // Save old path to restore on error
+                const old_path = self.editor.buffer.filepath;
+
+                // If path is specified, set it as buffer filepath first
+                if (cmd.args.save_file.path) |path| {
+                    const new_path = try self.editor.buffer.allocator.dupe(u8, path);
+                    self.editor.buffer.filepath = new_path;
+                }
+
+                // Verify we have a filepath
+                if (self.editor.buffer.filepath == null) {
+                    return error.NoFilePath;
+                }
+
+                // Try to save, restore old path on error
+                self.editor.buffer.saveFile() catch |err| {
+                    // Restore old state on error
+                    if (cmd.args.save_file.path != null) {
+                        if (self.editor.buffer.filepath) |fp| {
+                            self.editor.buffer.allocator.free(fp);
+                        }
+                    }
+                    self.editor.buffer.filepath = old_path;
+                    return err;
+                };
+
+                // Success - free old path if we replaced it
+                if (cmd.args.save_file.path != null) {
+                    if (old_path) |op| {
+                        self.editor.buffer.allocator.free(op);
+                    }
+                }
+
+                return .{ .file_saved = .{ .bytes_written = self.editor.buffer.content.items.len } };
+            },
+
+            .set_buffer => {
+                const lines = cmd.args.set_buffer.lines;
+                const cursor_pos = cmd.args.set_buffer.cursor;
+
+                // Use transactional pattern for safe buffer replacement
+                var new_content = std.ArrayList(u8).empty;
+                errdefer new_content.deinit(self.editor.buffer.allocator);
+
+                // Build new buffer content (Vim buffers always end lines with \n)
+                for (lines) |line| {
+                    try new_content.appendSlice(self.editor.buffer.allocator, line);
+                    if (line.len == 0 or line[line.len - 1] != '\n') {
+                        try new_content.append(self.editor.buffer.allocator, '\n');
+                    }
+                }
+
+                // Save old content for rollback
+                var old_content = self.editor.buffer.content;
+                self.editor.buffer.content = new_content;
+                self.editor.buffer.line_starts.clearRetainingCapacity();
+
+                // Rebuild line index - if this fails, restore old content
+                self.editor.buffer.buildLineIndex() catch |err| {
+                    var corrupted = self.editor.buffer.content;
+                    self.editor.buffer.content = old_content;
+                    corrupted.deinit(self.editor.buffer.allocator);
+                    return err;
+                };
+
+                // Success - now safe to clear undo/redo and free old content
+                for (self.editor.buffer.undo_stack.items) |*change| {
+                    change.deinit(self.editor.buffer.allocator);
+                }
+                self.editor.buffer.undo_stack.clearRetainingCapacity();
+
+                for (self.editor.buffer.redo_stack.items) |*change| {
+                    change.deinit(self.editor.buffer.allocator);
+                }
+                self.editor.buffer.redo_stack.clearRetainingCapacity();
+
+                // Free old content
+                old_content.deinit(self.editor.buffer.allocator);
+
+                // Set cursor position if specified
+                if (cursor_pos) |pos| {
+                    self.editor.buffer.cursor.row = pos.line;
+                    self.editor.buffer.cursor.col = pos.col;
+                } else {
+                    self.editor.buffer.cursor.row = 0;
+                    self.editor.buffer.cursor.col = 0;
+                }
+
+                // Mark as not modified (test setup)
+                self.editor.buffer.modified = false;
+
+                return .{ .none = {} };
+            },
+
+            .set_cursor => {
+                const pos = cmd.args.set_cursor;
+                const line_count = self.editor.buffer.lineCount();
+
+                // MEDIUM: Validate cursor position is within buffer bounds
+                if (line_count == 0) {
+                    return error.EmptyBuffer;
+                }
+                if (pos.line >= line_count) {
+                    return error.CursorOutOfBounds;
+                }
+
+                const line = self.editor.buffer.getLine(pos.line) orelse return error.InvalidLine;
+                const line_len = if (line.len > 0 and line[line.len - 1] == '\n')
+                    line.len - 1
+                else
+                    line.len;
+
+                // BUG #5 FIX: Vim cursor in normal mode must be ON a character, not past it
+                // For empty lines (len=0), only col=0 is valid
+                // For non-empty lines, col must be < line_len (on a character, not after last char)
+                if (line_len == 0) {
+                    if (pos.col > 0) {
+                        return error.CursorOutOfBounds;
+                    }
+                } else {
+                    if (pos.col >= line_len) {
+                        return error.CursorOutOfBounds;
+                    }
+                }
+
+                self.editor.buffer.cursor.row = pos.line;
+                self.editor.buffer.cursor.col = pos.col;
+                return .{ .none = {} };
+            },
+
+            .set_mode => {
+                const mode_str = cmd.args.set_mode.mode;
+                if (std.mem.eql(u8, mode_str, "NORMAL")) {
+                    self.editor.mode_manager.enterNormal();
+                } else if (std.mem.eql(u8, mode_str, "INSERT")) {
+                    self.editor.mode_manager.enterInsert();
+                } else if (std.mem.eql(u8, mode_str, "VISUAL")) {
+                    self.editor.mode_manager.enterVisual();
+                } else if (std.mem.eql(u8, mode_str, "COMMAND")) {
+                    self.editor.mode_manager.enterCommand();
+                } else {
+                    return error.InvalidMode;
+                }
+                return .{ .none = {} };
             },
 
             .get_logs => {

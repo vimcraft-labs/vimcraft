@@ -78,6 +78,31 @@ fn serializeCommandArgs(args: protocol.CommandArgs, writer: anytype) !void {
         .load_file => |a| {
             try writer.print("{{\"path\":\"{s}\"}}", .{a.path});
         },
+        .save_file => |a| {
+            if (a.path) |p| {
+                try writer.print("{{\"path\":\"{s}\"}}", .{p});
+            } else {
+                try writer.writeAll("{}");
+            }
+        },
+        .set_buffer => |a| {
+            try writer.writeAll("{\"lines\":[");
+            for (a.lines, 0..) |line, i| {
+                if (i > 0) try writer.writeAll(",");
+                try writer.print("\"{s}\"", .{line});
+            }
+            try writer.writeAll("]");
+            if (a.cursor) |c| {
+                try writer.print(",\"cursor\":{{\"line\":{d},\"col\":{d}}}", .{ c.line, c.col });
+            }
+            try writer.writeAll("}");
+        },
+        .set_cursor => |pos| {
+            try writer.print("{{\"line\":{d},\"col\":{d}}}", .{ pos.line, pos.col });
+        },
+        .set_mode => |a| {
+            try writer.print("{{\"mode\":\"{s}\"}}", .{a.mode});
+        },
         .assert_cursor => |pos| {
             try writer.print("{{\"line\":{d},\"col\":{d}}}", .{ pos.line, pos.col });
         },
@@ -194,6 +219,21 @@ fn serializeResponseResult(result: protocol.ResponseResult, writer: anytype) !vo
         .logs => |logs| {
             try serializeLogsState(logs, writer);
         },
+        .undo_stack => |us| {
+            try serializeUndoStackState(us, writer);
+        },
+        .redo_stack => |rs| {
+            try serializeRedoStackState(rs, writer);
+        },
+        .transaction => |t| {
+            try serializeTransactionState(t, writer);
+        },
+        .buffer_info => |bi| {
+            try serializeBufferInfo(bi, writer);
+        },
+        .file_saved => |fs| {
+            try writer.print("{{\"bytes_written\":{d}}}", .{fs.bytes_written});
+        },
     }
 }
 
@@ -210,6 +250,53 @@ fn serializeLogsState(logs: protocol.LogsState, writer: anytype) !void {
     try writer.print("\"total_in_buffer\":{d},", .{logs.total_in_buffer});
     try writer.print("\"truncated\":{},", .{logs.truncated});
     try writer.print("\"bytes_used\":{d}}}", .{logs.bytes_used});
+}
+
+fn serializeUndoEntry(entry: protocol.UndoEntry, writer: anytype) !void {
+    try writer.print("{{\"offset\":{d},", .{entry.offset});
+    try writer.print("\"deleted_text\":\"{s}\",", .{entry.deleted_text});
+    try writer.print("\"inserted_text\":\"{s}\",", .{entry.inserted_text});
+    try writer.print("\"cursor_before\":{{\"line\":{d},\"col\":{d}}},", .{ entry.cursor_before.line, entry.cursor_before.col });
+    try writer.print("\"cursor_after\":{{\"line\":{d},\"col\":{d}}}}}", .{ entry.cursor_after.line, entry.cursor_after.col });
+}
+
+fn serializeUndoStackState(undo_stack: protocol.UndoStackState, writer: anytype) !void {
+    try writer.writeAll("{\"entries\":[");
+    for (undo_stack.entries, 0..) |entry, i| {
+        if (i > 0) try writer.writeAll(",");
+        try serializeUndoEntry(entry, writer);
+    }
+    try writer.writeAll("],");
+    try writer.print("\"count\":{d},", .{undo_stack.count});
+    try writer.print("\"position\":{d}}}", .{undo_stack.position});
+}
+
+fn serializeRedoStackState(redo_stack: protocol.RedoStackState, writer: anytype) !void {
+    try writer.writeAll("{\"entries\":[");
+    for (redo_stack.entries, 0..) |entry, i| {
+        if (i > 0) try writer.writeAll(",");
+        try serializeUndoEntry(entry, writer);
+    }
+    try writer.writeAll("],");
+    try writer.print("\"count\":{d}}}", .{redo_stack.count});
+}
+
+fn serializeTransactionState(transaction: protocol.TransactionState, writer: anytype) !void {
+    try writer.print("{{\"active\":{},", .{transaction.active});
+    try writer.print("\"text_buffer\":\"{s}\",", .{transaction.text_buffer});
+    try writer.print("\"cursor_start\":{{\"line\":{d},\"col\":{d}}},", .{ transaction.cursor_start.line, transaction.cursor_start.col });
+    try writer.print("\"cursor_end\":{{\"line\":{d},\"col\":{d}}}}}", .{ transaction.cursor_end.line, transaction.cursor_end.col });
+}
+
+fn serializeBufferInfo(buffer_info: protocol.BufferInfo, writer: anytype) !void {
+    try writer.print("{{\"modified\":{},", .{buffer_info.modified});
+    if (buffer_info.filepath) |fp| {
+        try writer.print("\"filepath\":\"{s}\",", .{fp});
+    } else {
+        try writer.writeAll("\"filepath\":null,");
+    }
+    try writer.print("\"size\":{d},", .{buffer_info.size});
+    try writer.print("\"line_count\":{d}}}", .{buffer_info.line_count});
 }
 
 fn serializeLayerState(layer: protocol.LayerState, writer: anytype) !void {
@@ -305,7 +392,7 @@ pub fn parseCommand(json_str: []const u8, allocator: std.mem.Allocator) !protoco
 
 fn parseCommandArgs(cmd: protocol.CommandType, args_obj: std.json.Value, allocator: std.mem.Allocator) !protocol.CommandArgs {
     return switch (cmd) {
-        .ping, .shutdown, .get_state, .get_cursor, .get_mode, .get_visual, .get_registers, .get_buffer, .get_layers => .{ .none = {} },
+        .ping, .shutdown, .get_state, .get_cursor, .get_mode, .get_visual, .get_registers, .get_buffer, .get_layers, .get_undo_stack, .get_redo_stack, .get_transaction, .get_buffer_info => .{ .none = {} },
 
         .get_logs => blk: {
             const count = if (args_obj.object.get("count")) |c| @as(usize, @intCast(c.integer)) else null;
@@ -361,6 +448,43 @@ fn parseCommandArgs(cmd: protocol.CommandType, args_obj: std.json.Value, allocat
             const path = args_obj.object.get("path").?.string;
             const owned = try allocator.dupe(u8, path);
             break :blk .{ .load_file = .{ .path = owned } };
+        },
+
+        .save_file => blk: {
+            const path = if (args_obj.object.get("path")) |p| blk2: {
+                if (p == .null) break :blk2 null;
+                break :blk2 try allocator.dupe(u8, p.string);
+            } else null;
+            break :blk .{ .save_file = .{ .path = path } };
+        },
+
+        .set_buffer => blk: {
+            const lines_array = args_obj.object.get("lines").?.array;
+            const lines = try allocator.alloc([]const u8, lines_array.items.len);
+            errdefer {
+                for (lines[0..lines_array.items.len]) |line| allocator.free(line);
+                allocator.free(lines);
+            }
+            for (lines_array.items, 0..) |line_val, i| {
+                lines[i] = try allocator.dupe(u8, line_val.string);
+            }
+            const cursor = if (args_obj.object.get("cursor")) |c| protocol.Position{
+                .line = @as(usize, @intCast(c.object.get("line").?.integer)),
+                .col = @as(usize, @intCast(c.object.get("col").?.integer)),
+            } else null;
+            break :blk .{ .set_buffer = .{ .lines = lines, .cursor = cursor } };
+        },
+
+        .set_cursor => blk: {
+            const line = @as(usize, @intCast(args_obj.object.get("line").?.integer));
+            const col = @as(usize, @intCast(args_obj.object.get("col").?.integer));
+            break :blk .{ .set_cursor = .{ .line = line, .col = col } };
+        },
+
+        .set_mode => blk: {
+            const mode = args_obj.object.get("mode").?.string;
+            const owned = try allocator.dupe(u8, mode);
+            break :blk .{ .set_mode = .{ .mode = owned } };
         },
 
         .assert_cursor => blk: {
