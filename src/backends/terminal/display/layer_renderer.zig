@@ -6,6 +6,7 @@ const VisualState = @import("../visual/visual.zig").VisualState;
 const YankHighlight = @import("../visual/yank_highlight.zig").YankHighlight;
 const Position = @import("../visual/visual.zig").Position;
 const char_width = @import("char_width.zig");
+const ListChars = @import("../../../editor/config/listchars.zig").ListChars;
 
 // ============================================================================
 // PHASE 2.5: Layer-based Rendering Pipeline
@@ -22,6 +23,8 @@ pub fn updateLayers(
     config: *const highlights.HighlightConfig,
     visual_state: *const VisualState,
     yank_highlight: *const YankHighlight,
+    list_enabled: bool,
+    listchars: *const ListChars,
 ) !void {
     const text_rows = if (self.terminal_rows > 1) self.terminal_rows - 1 else 1;
 
@@ -34,7 +37,7 @@ pub fn updateLayers(
     // Note: virtual_text_layer is managed by plugins via JSI
 
     // Update each layer in logical order (not z-order)
-    try updateBaseLayer(self, buffer, config, text_rows);
+    try updateBaseLayer(self, buffer, config, text_rows, list_enabled, listchars);
     try updateGutterLayer(self, buffer, config, text_rows);
     try updateSelectionLayer(self, buffer, visual_state, config, text_rows);
     try updateYankLayer(self, buffer, yank_highlight, config, text_rows);
@@ -43,17 +46,60 @@ pub fn updateLayers(
     // Virtual text layer is updated by plugins, so skip it here
 }
 
+/// Pre-computed listchars highlight colors (optimization)
+const ListCharsColors = struct {
+    ws_fg: ?highlights.Color, // Whitespace foreground
+    ws_bg: ?highlights.Color, // Whitespace background
+    sk_fg: ?highlights.Color, // SpecialKey foreground
+    sk_bg: ?highlights.Color, // SpecialKey background
+};
+
+/// Compute listchars highlight colors once per frame (performance optimization)
+/// This avoids repeating the same optional unwraps on every line render
+fn computeListCharsColors(
+    config: *const highlights.HighlightConfig,
+    normal_fg: ?highlights.Color,
+    normal_bg: ?highlights.Color,
+) ListCharsColors {
+    // Extract highlight group colors
+    const whitespace_fg = if (config.whitespace) |ws| ws.fg else null;
+    const whitespace_bg = if (config.whitespace) |ws| ws.bg else null;
+    const special_key_fg = if (config.special_key) |sk| sk.fg else null;
+    const special_key_bg = if (config.special_key) |sk| sk.bg else null;
+    const non_text_fg = if (config.non_text) |nt| nt.fg else null;
+    const non_text_bg = if (config.non_text) |nt| nt.bg else null;
+
+    // Compute fallback chains once
+    return .{
+        // Whitespace colors: Whitespace → SpecialKey → NonText → Normal
+        .ws_fg = whitespace_fg orelse special_key_fg orelse non_text_fg orelse normal_fg,
+        .ws_bg = whitespace_bg orelse special_key_bg orelse non_text_bg orelse normal_bg,
+
+        // SpecialKey colors: SpecialKey → NonText → Normal
+        .sk_fg = special_key_fg orelse non_text_fg orelse normal_fg,
+        .sk_bg = special_key_bg orelse non_text_bg orelse normal_bg,
+    };
+}
+
 /// Update base layer: Render buffer text content (z=0)
 fn updateBaseLayer(
     self: *Display,
     buffer: *const Buffer,
     config: *const highlights.HighlightConfig,
     text_rows: usize,
+    list_enabled: bool,
+    listchars: *const ListChars,
 ) !void {
     const gutter_width = self.gutter_manager.getTotalWidth();
 
     const fg_color = if (config.normal) |n| n.fg else null;
     const bg_color = if (config.normal) |n| n.bg else null;
+
+    // Pre-compute listchars colors once per frame (optimization)
+    const lc_colors = if (list_enabled)
+        computeListCharsColors(config, fg_color, bg_color)
+    else
+        undefined; // Won't be used if list_enabled = false
 
     var row: usize = 0;
     while (row < text_rows) : (row += 1) {
@@ -74,8 +120,11 @@ fn updateBaseLayer(
                 0;
             const remaining = line_without_newline[start_col..];
 
-            // Render text to base layer
-            const end_col = self.base_layer.grid.setString(row, gutter_width, remaining, fg_color, bg_color);
+            // Render text to base layer (with invisible character replacement if enabled)
+            const end_col = if (list_enabled)
+                try renderWithListChars(self, row, gutter_width, remaining, listchars, lc_colors, fg_color, bg_color)
+            else
+                self.base_layer.grid.setString(row, gutter_width, remaining, fg_color, bg_color);
 
             // Fill rest of line (only if there's space remaining)
             if (end_col < self.terminal_cols) {
@@ -310,6 +359,200 @@ fn updateYankLayer(
     }
 
     self.yank_layer.markDirty();
+}
+
+/// Render text with invisible character replacements (listchars)
+///
+/// This function processes text character-by-character, replacing invisible characters
+/// (tabs, spaces, nbsp, eol, trailing spaces) with visible symbols according to the
+/// listchars configuration. It applies appropriate highlight colors using Neovim's
+/// highlight group fallback chain.
+///
+/// Highlight Color Fallback Chain (Neovim-compatible):
+/// - Whitespace characters (tab, space, nbsp):
+///   Whitespace.fg → SpecialKey.fg → NonText.fg → Normal.fg
+/// - Special characters (eol, trail):
+///   SpecialKey.fg → NonText.fg → Normal.fg
+///
+/// Background Color Behavior:
+/// - If Whitespace.bg/SpecialKey.bg is set, applies to the entire cell
+/// - If null, uses Normal.bg (allowing transparency for layer blending)
+/// - This matches Neovim's behavior where highlight groups can have partial colors
+///
+/// Parameters:
+/// - row: Screen row to render to (0-indexed)
+/// - start_col: Starting column (typically gutter_width)
+/// - text: UTF-8 encoded text to render (without trailing newline)
+/// - listchars: Configuration for invisible character symbols
+/// - colors: Pre-computed highlight colors (for performance - computed once per frame)
+/// - fg_color: Normal foreground color (fallback for non-listchars text)
+/// - bg_color: Normal background color (fallback for non-listchars text)
+///
+/// Returns: Final column position after rendering (used for line-end padding)
+///
+/// Performance: Colors are pre-computed in updateBaseLayer() to avoid redundant
+/// optional unwraps on every line (saves ~200ns per line × 1000 lines = 200µs per frame).
+fn renderWithListChars(
+    self: *Display,
+    row: usize,
+    start_col: usize,
+    text: []const u8,
+    listchars: *const ListChars,
+    colors: ListCharsColors,
+    fg_color: ?highlights.Color,
+    bg_color: ?highlights.Color,
+) !usize {
+    // Use pre-computed colors (optimization - no optional unwraps in hot loop)
+    const ws_fg = colors.ws_fg;
+    const ws_bg = colors.ws_bg;
+    const sk_fg = colors.sk_fg;
+    const sk_bg = colors.sk_bg;
+    var col = start_col;
+    var byte_idx: usize = 0;
+
+    // Track if we're in trailing whitespace
+    var last_non_space_col = start_col;
+
+    while (byte_idx < text.len and col < self.terminal_cols) {
+        const char_len = std.unicode.utf8ByteSequenceLength(text[byte_idx]) catch 1;
+        if (byte_idx + char_len > text.len) break;
+
+        const codepoint = std.unicode.utf8Decode(text[byte_idx .. byte_idx + char_len]) catch text[byte_idx];
+        var display_char = codepoint;
+
+        // Replace invisible characters based on listchars config
+        switch (codepoint) {
+            '\t' => {
+                // Tab: render as multiple characters (start, middle*, end)
+                // Use Whitespace colors for tabs
+                if (listchars.tab[0] != 0) {
+                    // Render first character
+                    self.base_layer.grid.setCell(row, col, .{
+                        .char = listchars.tab[0],
+                        .fg = ws_fg,
+                        .bg = ws_bg,
+                    });
+                    col += 1;
+                    last_non_space_col = col;
+
+                    // Calculate tab width from global setting (synchronized with vim.opt.tabstop)
+                    const tab_width: usize = char_width.getTabWidth();
+
+                    // CRITICAL FIX: Prevent infinite loop when terminal_cols is 0
+                    if (self.terminal_cols == 0) {
+                        byte_idx += char_len;
+                        continue;
+                    }
+
+                    // CRITICAL FIX: Prevent underflow when tab_width is 0
+                    if (tab_width == 0) {
+                        byte_idx += char_len;
+                        continue;
+                    }
+
+                    const chars_to_fill = tab_width - 1;
+
+                    // Render middle characters
+                    if (listchars.tab[1] != 0) {
+                        var i: usize = 0;
+                        const middle_count = if (listchars.tab[2] != 0 and chars_to_fill > 0)
+                            chars_to_fill - 1
+                        else
+                            chars_to_fill;
+
+                        // CRITICAL: Loop must have BOTH conditions to prevent infinite loop
+                        while (i < middle_count and col < self.terminal_cols) : (i += 1) {
+                            self.base_layer.grid.setCell(row, col, .{
+                                .char = listchars.tab[1],
+                                .fg = ws_fg,
+                                .bg = ws_bg,
+                            });
+                            col += 1;
+                        }
+                    }
+
+                    // Render end character if configured
+                    if (listchars.tab[2] != 0 and col < self.terminal_cols) {
+                        self.base_layer.grid.setCell(row, col, .{
+                            .char = listchars.tab[2],
+                            .fg = ws_fg,
+                            .bg = ws_bg,
+                        });
+                        col += 1;
+                        last_non_space_col = col;
+                    }
+                } else {
+                    // No tab replacement configured, render normally
+                    self.base_layer.grid.setCell(row, col, .{
+                        .char = codepoint,
+                        .fg = fg_color,
+                        .bg = bg_color,
+                    });
+                    col += 1;
+                    last_non_space_col = col;
+                }
+                byte_idx += char_len;
+                continue;
+            },
+            ' ' => {
+                // Regular space
+                if (listchars.space != 0) {
+                    display_char = listchars.space;
+                }
+            },
+            0xA0 => { // Non-breaking space (U+00A0)
+                if (listchars.nbsp != 0) {
+                    display_char = listchars.nbsp;
+                }
+            },
+            else => {
+                last_non_space_col = col + 1;
+            },
+        }
+
+        // Render the character
+        // Use Whitespace colors if character was replaced (space or nbsp)
+        const use_ws_colors = (codepoint == ' ' and listchars.space != 0) or
+            (codepoint == 0xA0 and listchars.nbsp != 0);
+
+        self.base_layer.grid.setCell(row, col, .{
+            .char = display_char,
+            .fg = if (use_ws_colors) ws_fg else fg_color,
+            .bg = if (use_ws_colors) ws_bg else bg_color,
+        });
+        col += 1;
+        byte_idx += char_len;
+    }
+
+    // Post-process: mark trailing spaces
+    // Use SpecialKey colors for trailing spaces
+    if (listchars.trail != 0) {
+        var trail_col = last_non_space_col;
+        while (trail_col < col) : (trail_col += 1) {
+            if (self.base_layer.grid.getCell(row, trail_col)) |cell| {
+                if (cell.char == ' ' or cell.char == listchars.space) {
+                    self.base_layer.grid.setCell(row, trail_col, .{
+                        .char = listchars.trail,
+                        .fg = sk_fg,
+                        .bg = sk_bg,
+                    });
+                }
+            }
+        }
+    }
+
+    // Render EOL character if configured and there's space
+    // Use SpecialKey colors for EOL
+    if (listchars.eol != 0 and col < self.terminal_cols) {
+        self.base_layer.grid.setCell(row, col, .{
+            .char = listchars.eol,
+            .fg = sk_fg,
+            .bg = sk_bg,
+        });
+        col += 1;
+    }
+
+    return col;
 }
 
 /// Update cursor layer: Render cursor line highlight (z=200)

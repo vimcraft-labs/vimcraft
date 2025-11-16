@@ -73,6 +73,22 @@ pub const OPTIONS = [_]OptionMeta{
     },
 
     .{
+        .name = "list",
+        .short_name = null,
+        .type = .boolean,
+        .default = .{ .boolean = false },
+        .scope = .window,
+    },
+
+    .{
+        .name = "listchars",
+        .short_name = "lcs",
+        .type = .string,
+        .default = .{ .string = "tab:> ,trail:-,nbsp:+" }, // Neovim default
+        .scope = .global,
+    },
+
+    .{
         .name = "scrolloff",
         .short_name = "so",
         .type = .number,

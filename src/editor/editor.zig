@@ -14,6 +14,7 @@ const Logger = @import("log.zig").Logger;
 const text_objects = @import("movement/text_objects/text_objects.zig");
 const TextObjectModifier = text_objects.TextObjectModifier;
 const TextObjectType = text_objects.TextObjectType;
+const OptionsManager = @import("config/options.zig").OptionsManager;
 
 /// Pending command for multi-key sequences (like dd, dw)
 const PendingCommand = struct {
@@ -165,6 +166,9 @@ pub const Editor = struct {
 
     // Logger (Core→Backend architecture: Core produces logs, backends consume them)
     logger: Logger,
+
+    // Options (optional - null for headless mode without config)
+    options_manager: ?*OptionsManager = null,
 
     // Cursor rendering override (for animated cursor plugins)
     cursor_render_override: CursorRenderOverride = .{},
@@ -708,13 +712,70 @@ pub const Editor = struct {
             const char = input[0];
             switch (char) {
                 127, 8 => try self.buffer.deleteCharBefore(), // Backspace
-                13 => try self.buffer.insertChar('\n'), // Enter
+                13 => { // Enter
+                    try self.buffer.insertChar('\n');
+                    // Autoindent: copy indent from previous line
+                    if (self.options_manager) |opts_mgr| {
+                        if (opts_mgr.getBoolean("autoindent") orelse false) {
+                            try self.applyAutoIndent();
+                        }
+                    }
+                },
+                9 => { // Tab
+                    // Check expandtab option
+                    const expand_tab = if (self.options_manager) |opts_mgr|
+                        opts_mgr.getBoolean("expandtab") orelse false
+                    else
+                        false;
+
+                    if (expand_tab) {
+                        // Get tabstop value (default 8)
+                        const tabstop = if (self.options_manager) |opts_mgr|
+                            opts_mgr.getNumber("tabstop") orelse 8
+                        else
+                            8;
+
+                        // Insert spaces instead of tab
+                        var i: usize = 0;
+                        while (i < tabstop) : (i += 1) {
+                            try self.buffer.insertChar(' ');
+                        }
+                    } else {
+                        // Insert actual tab character
+                        try self.buffer.insertChar('\t');
+                    }
+                },
                 else => {
                     if (char >= 32 and char < 127) {
                         try self.buffer.insertChar(char);
                     }
                 },
             }
+        }
+    }
+
+    /// Apply auto-indent after inserting a newline
+    /// Copies the indentation from the previous line
+    fn applyAutoIndent(self: *Editor) !void {
+        // Get the previous line (the one we just left)
+        if (self.buffer.cursor.row == 0) return; // No previous line on first line
+
+        const prev_line = self.buffer.getLine(self.buffer.cursor.row - 1) orelse return;
+
+        // Count leading whitespace on previous line
+        var indent_count: usize = 0;
+        for (prev_line) |c| {
+            if (c == ' ' or c == '\t') {
+                indent_count += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Insert the same whitespace on the new line
+        var i: usize = 0;
+        while (i < indent_count) : (i += 1) {
+            try self.buffer.insertChar(prev_line[i]);
         }
     }
 

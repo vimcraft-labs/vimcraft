@@ -3,6 +3,7 @@ const protocol = @import("protocol.zig");
 const json = @import("json.zig");
 const state = @import("state.zig");
 const EditorContext = @import("editor_context.zig").EditorContext;
+const ListChars = @import("../../editor/config/listchars.zig").ListChars;
 
 /// Debug server configuration
 pub const ServerConfig = struct {
@@ -829,6 +830,23 @@ pub const Server = struct {
                 return .{ .none = {} };
             },
 
+            .set_option => {
+                // Check if options_manager is available
+                const opts_mgr = self.editor.options_manager orelse return error.OptionsNotAvailable;
+
+                const opt_name = cmd.args.set_option.name;
+                const opt_value = cmd.args.set_option.value;
+
+                // Set the option based on value type
+                switch (opt_value) {
+                    .boolean => |b| try opts_mgr.setBoolean(opt_name, b),
+                    .number => |n| try opts_mgr.setNumber(opt_name, n),
+                    .string => |s| try opts_mgr.setString(opt_name, s),
+                }
+
+                return .{ .none = {} };
+            },
+
             .get_logs => {
                 const CoreLogLevel = @import("../../editor/log.zig").LogLevel;
                 const logger = &self.editor.logger;
@@ -909,15 +927,10 @@ pub const Server = struct {
                 const keys = cmd.args.execute_keys.keys;
                 try self.editor.executeKeys(keys);
 
-                // CRITICAL: Use headless render to update compositor WITHOUT stdout pollution
-                // This updates layers for inspection while keeping JSON responses clean
-                try self.editor.display.renderHeadless(
-                    &self.editor.buffer,
-                    self.editor.mode_manager.getModeString(),
-                    self.highlight_config,
-                    &self.editor.visual_state,
-                    &self.editor.yank_highlight,
-                );
+                // PERFORMANCE FIX: Don't render after every execute_keys!
+                // Rendering happens ONLY when state is queried (get_layers, get_output_grid, etc.)
+                // This prevents 400× renderHeadless() calls when pasting 400 characters
+                // Old code was calling renderHeadless() here - massive performance bug
 
                 return .{ .execute_keys = .{ .keys_processed = keys.len } };
             },
@@ -926,6 +939,18 @@ pub const Server = struct {
                 const path = cmd.args.load_file.path;
                 try self.editor.buffer.loadFile(path);
 
+                // Get list/listchars options for rendering
+                const list_enabled = if (self.editor.options_manager) |opts|
+                    opts.getBoolean("list") orelse false
+                else
+                    false;
+
+                const listchars = if (self.editor.options_manager) |opts| blk: {
+                    const lcs_str = opts.getString("listchars") orelse "tab:> ,trail:-,nbsp:+";
+                    break :blk try ListChars.parse(self.allocator, lcs_str);
+                } else
+                    ListChars{};
+
                 // CRITICAL: Use headless render to update compositor WITHOUT stdout pollution
                 try self.editor.display.renderHeadless(
                     &self.editor.buffer,
@@ -933,6 +958,8 @@ pub const Server = struct {
                     self.highlight_config,
                     &self.editor.visual_state,
                     &self.editor.yank_highlight,
+                    list_enabled,
+                    &listchars,
                 );
 
                 return .{ .none = {} };

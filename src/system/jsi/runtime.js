@@ -146,6 +146,19 @@ globalThis.vim = {
     },
     set(target, prop, value) {
       if (typeof prop === 'symbol') return false;
+
+      // Special handling for listchars: convert object to string format
+      if ((prop === 'listchars' || prop === 'lcs') && typeof value === 'object' && value !== null) {
+        // Convert { tab: "→·", space: "·", trail: "~" } to "tab:→·,space:·,trail:~"
+        const parts = [];
+        for (const [key, val] of Object.entries(value)) {
+          if (typeof val === 'string' && val.length > 0) {
+            parts.push(`${key}:${val}`);
+          }
+        }
+        value = parts.join(',');
+      }
+
       // Write to Zig (source of truth)
       setOption(prop, value);
       // Note: DO NOT update target here - it creates stale cache
@@ -205,6 +218,18 @@ globalThis.vim = {
     },
     set(target, prop, value) {
       if (typeof prop === 'symbol') return false;
+
+      // Special handling for listchars: convert object to string format
+      if ((prop === 'listchars' || prop === 'lcs') && typeof value === 'object' && value !== null) {
+        const parts = [];
+        for (const [key, val] of Object.entries(value)) {
+          if (typeof val === 'string' && val.length > 0) {
+            parts.push(`${key}:${val}`);
+          }
+        }
+        value = parts.join(',');
+      }
+
       // Write to Zig (source of truth)
       setOptionWithScope(prop, value, 'local');
       return true;
@@ -261,6 +286,18 @@ globalThis.vim = {
     },
     set(target, prop, value) {
       if (typeof prop === 'symbol') return false;
+
+      // Special handling for listchars: convert object to string format
+      if ((prop === 'listchars' || prop === 'lcs') && typeof value === 'object' && value !== null) {
+        const parts = [];
+        for (const [key, val] of Object.entries(value)) {
+          if (typeof val === 'string' && val.length > 0) {
+            parts.push(`${key}:${val}`);
+          }
+        }
+        value = parts.join(',');
+      }
+
       // Write to Zig (source of truth)
       setOptionWithScope(prop, value, 'global');
       return true;

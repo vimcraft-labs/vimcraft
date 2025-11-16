@@ -55,6 +55,11 @@ pub const HighlightConfig = struct {
     line_nr: ?Highlight = null,
     cursorline_nr: ?Highlight = null, // Line number on cursor line (CursorLineNr)
 
+    // Invisible character highlighting (listchars)
+    whitespace: ?Highlight = null, // Whitespace characters (space, tab, nbsp) - Neovim uses this
+    special_key: ?Highlight = null, // Special keys and characters (eol, trail) - Vim tradition
+    non_text: ?Highlight = null, // Non-text characters (eol, extends, precedes) - fallback
+
     // Options
     cursorline_enabled: bool = true, // Enabled by default (standard Vim/Neovim behavior)
 
@@ -90,6 +95,12 @@ pub const HighlightConfig = struct {
             self.line_nr = hl;
         } else if (std.mem.eql(u8, name, "CursorLineNr")) {
             self.cursorline_nr = hl;
+        } else if (std.mem.eql(u8, name, "Whitespace")) {
+            self.whitespace = hl;
+        } else if (std.mem.eql(u8, name, "SpecialKey")) {
+            self.special_key = hl;
+        } else if (std.mem.eql(u8, name, "NonText")) {
+            self.non_text = hl;
         }
         // Add more highlight groups as needed
     }
@@ -110,6 +121,12 @@ pub const HighlightConfig = struct {
             return self.line_nr;
         } else if (std.mem.eql(u8, name, "CursorLineNr")) {
             return self.cursorline_nr;
+        } else if (std.mem.eql(u8, name, "Whitespace")) {
+            return self.whitespace;
+        } else if (std.mem.eql(u8, name, "SpecialKey")) {
+            return self.special_key;
+        } else if (std.mem.eql(u8, name, "NonText")) {
+            return self.non_text;
         }
         return null;
     }
@@ -137,4 +154,139 @@ test "Color: ANSI escape codes" {
 
     const fg = try color.toAnsiFg(&buf);
     try std.testing.expectEqualStrings("\x1b[38;2;43;43;43m", fg);
+}
+
+test "HighlightConfig: set and get Whitespace" {
+    var config = HighlightConfig.init(std.testing.allocator);
+    defer config.deinit();
+
+    const hl = Highlight{
+        .fg = Color{ .r = 80, .g = 80, .b = 80 },
+        .bg = Color{ .r = 30, .g = 30, .b = 30 },
+    };
+    config.setHighlight("Whitespace", hl);
+
+    const retrieved = config.getHighlight("Whitespace");
+    try std.testing.expect(retrieved != null);
+    try std.testing.expectEqual(@as(u8, 80), retrieved.?.fg.?.r);
+    try std.testing.expectEqual(@as(u8, 80), retrieved.?.fg.?.g);
+    try std.testing.expectEqual(@as(u8, 80), retrieved.?.fg.?.b);
+    try std.testing.expectEqual(@as(u8, 30), retrieved.?.bg.?.r);
+}
+
+test "HighlightConfig: set and get SpecialKey" {
+    var config = HighlightConfig.init(std.testing.allocator);
+    defer config.deinit();
+
+    const hl = Highlight{
+        .fg = Color{ .r = 128, .g = 128, .b = 128 },
+    };
+    config.setHighlight("SpecialKey", hl);
+
+    const retrieved = config.getHighlight("SpecialKey");
+    try std.testing.expect(retrieved != null);
+    try std.testing.expectEqual(@as(u8, 128), retrieved.?.fg.?.r);
+    try std.testing.expect(retrieved.?.bg == null); // Background not set
+}
+
+test "HighlightConfig: set and get NonText" {
+    var config = HighlightConfig.init(std.testing.allocator);
+    defer config.deinit();
+
+    const hl = Highlight{
+        .fg = Color{ .r = 64, .g = 64, .b = 64 },
+    };
+    config.setHighlight("NonText", hl);
+
+    const retrieved = config.getHighlight("NonText");
+    try std.testing.expect(retrieved != null);
+    try std.testing.expectEqual(@as(u8, 64), retrieved.?.fg.?.r);
+}
+
+test "HighlightConfig: get non-existent highlight returns null" {
+    var config = HighlightConfig.init(std.testing.allocator);
+    defer config.deinit();
+
+    const retrieved = config.getHighlight("Whitespace");
+    try std.testing.expect(retrieved == null);
+}
+
+test "HighlightConfig: all three invisible char highlights" {
+    var config = HighlightConfig.init(std.testing.allocator);
+    defer config.deinit();
+
+    // Set all three highlight groups
+    config.setHighlight("Whitespace", Highlight{
+        .fg = Color{ .r = 50, .g = 50, .b = 50 },
+    });
+    config.setHighlight("SpecialKey", Highlight{
+        .fg = Color{ .r = 80, .g = 80, .b = 80 },
+    });
+    config.setHighlight("NonText", Highlight{
+        .fg = Color{ .r = 40, .g = 40, .b = 40 },
+    });
+
+    // Verify all are set correctly
+    const ws = config.getHighlight("Whitespace");
+    const sk = config.getHighlight("SpecialKey");
+    const nt = config.getHighlight("NonText");
+
+    try std.testing.expect(ws != null);
+    try std.testing.expect(sk != null);
+    try std.testing.expect(nt != null);
+
+    try std.testing.expectEqual(@as(u8, 50), ws.?.fg.?.r);
+    try std.testing.expectEqual(@as(u8, 80), sk.?.fg.?.r);
+    try std.testing.expectEqual(@as(u8, 40), nt.?.fg.?.r);
+}
+
+test "HighlightConfig: overwrite existing highlight" {
+    var config = HighlightConfig.init(std.testing.allocator);
+    defer config.deinit();
+
+    // Set initial value
+    config.setHighlight("Whitespace", Highlight{
+        .fg = Color{ .r = 50, .g = 50, .b = 50 },
+    });
+
+    // Overwrite with new value
+    config.setHighlight("Whitespace", Highlight{
+        .fg = Color{ .r = 100, .g = 100, .b = 100 },
+    });
+
+    // Verify new value
+    const retrieved = config.getHighlight("Whitespace");
+    try std.testing.expectEqual(@as(u8, 100), retrieved.?.fg.?.r);
+}
+
+test "HighlightConfig: partial highlight (only fg)" {
+    var config = HighlightConfig.init(std.testing.allocator);
+    defer config.deinit();
+
+    const hl = Highlight{
+        .fg = Color{ .r = 128, .g = 0, .b = 0 },
+        // bg intentionally not set
+    };
+    config.setHighlight("SpecialKey", hl);
+
+    const retrieved = config.getHighlight("SpecialKey");
+    try std.testing.expect(retrieved != null);
+    try std.testing.expect(retrieved.?.fg != null);
+    try std.testing.expect(retrieved.?.bg == null);
+}
+
+test "HighlightConfig: partial highlight (only bg)" {
+    var config = HighlightConfig.init(std.testing.allocator);
+    defer config.deinit();
+
+    const hl = Highlight{
+        // fg intentionally not set
+        .bg = Color{ .r = 0, .g = 0, .b = 128 },
+    };
+    config.setHighlight("NonText", hl);
+
+    const retrieved = config.getHighlight("NonText");
+    try std.testing.expect(retrieved != null);
+    try std.testing.expect(retrieved.?.fg == null);
+    try std.testing.expect(retrieved.?.bg != null);
 }

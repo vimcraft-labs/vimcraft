@@ -103,6 +103,15 @@ fn serializeCommandArgs(args: protocol.CommandArgs, writer: anytype) !void {
         .set_mode => |a| {
             try writer.print("{{\"mode\":\"{s}\"}}", .{a.mode});
         },
+        .set_option => |a| {
+            try writer.print("{{\"name\":\"{s}\",\"value\":", .{a.name});
+            switch (a.value) {
+                .boolean => |b| try writer.print("{}", .{b}),
+                .number => |n| try writer.print("{d}", .{n}),
+                .string => |s| try writer.print("\"{s}\"", .{s}),
+            }
+            try writer.writeAll("}");
+        },
         .assert_cursor => |pos| {
             try writer.print("{{\"line\":{d},\"col\":{d}}}", .{ pos.line, pos.col });
         },
@@ -485,6 +494,49 @@ fn parseCommandArgs(cmd: protocol.CommandType, args_obj: std.json.Value, allocat
             const mode = args_obj.object.get("mode").?.string;
             const owned = try allocator.dupe(u8, mode);
             break :blk .{ .set_mode = .{ .mode = owned } };
+        },
+
+        .set_option => blk: {
+            const name = args_obj.object.get("name").?.string;
+            const owned_name = try allocator.dupe(u8, name);
+
+            const value_json = args_obj.object.get("value").?;
+            const value = switch (value_json) {
+                .bool => |b| protocol.OptionValue{ .boolean = b },
+                .integer => |i| protocol.OptionValue{ .number = i },
+                .string => |s| protocol.OptionValue{ .string = try allocator.dupe(u8, s) },
+                .object => |obj| blk2: {
+                    // Special handling for listchars: convert object to string format
+                    // {"tab":"→·","space":"·"} -> "tab:→·,space:·"
+                    if (std.mem.eql(u8, name, "listchars") or std.mem.eql(u8, name, "lcs")) {
+                        // Build comma-separated key:value pairs
+                        var result: std.ArrayList(u8) = .empty;
+                        errdefer result.deinit(allocator);
+
+                        var first = true;
+                        var iter = obj.iterator();
+                        while (iter.next()) |entry| {
+                            if (!first) {
+                                try result.append(allocator, ',');
+                            }
+                            first = false;
+
+                            try result.appendSlice(allocator, entry.key_ptr.*);
+                            try result.append(allocator, ':');
+
+                            if (entry.value_ptr.* == .string) {
+                                try result.appendSlice(allocator, entry.value_ptr.string);
+                            }
+                        }
+
+                        break :blk2 protocol.OptionValue{ .string = try result.toOwnedSlice(allocator) };
+                    }
+                    return error.InvalidOptionValue;
+                },
+                else => return error.InvalidOptionValue,
+            };
+
+            break :blk .{ .set_option = .{ .name = owned_name, .value = value } };
         },
 
         .assert_cursor => blk: {

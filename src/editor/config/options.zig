@@ -269,7 +269,9 @@ test "OptionsManager: init and deinit" {
     var mgr = OptionsManager.init(allocator);
     defer mgr.deinit();
 
-    try std.testing.expect(mgr.options.count() == 0);
+    try std.testing.expect(mgr.global_options.count() == 0);
+    try std.testing.expect(mgr.buffer_local_options.count() == 0);
+    try std.testing.expect(mgr.window_local_options.count() == 0);
 }
 
 test "OptionsManager: set and get boolean" {

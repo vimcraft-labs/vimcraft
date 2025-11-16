@@ -22,6 +22,7 @@ const yank = @import("editor/buffer/yank.zig");
 const paste = @import("editor/buffer/paste.zig");
 const cellwidth = @import("backends/terminal/display/cellwidth.zig");
 const EditOps = @import("editor/buffer/edit.zig").EditOps;
+const ListChars = @import("editor/config/listchars.zig").ListChars;
 
 // Import Hermes C API (use hermes_c namespace to avoid shadowing)
 const hermes_c = @cImport({
@@ -163,6 +164,8 @@ const ReloadState = struct {
     allocator: std.mem.Allocator,
     needs_reload: bool = false,
     config_path: []const u8,
+    // Compositor invalidation: safer and simpler than full renderHeadless()
+    display: ?*Display = null,
 
     fn markForReload(self: *ReloadState) void {
         self.needs_reload = true;
@@ -191,6 +194,26 @@ const ReloadState = struct {
                 self.needs_reload = false;
                 return err;
             };
+        }
+
+        // CRITICAL FIX: Invalidate compositor to force recomposite on next render
+        // This is simpler and safer than calling renderHeadless():
+        // - No performance cost (deferred to next render)
+        // - No lifetime/pointer safety issues
+        // - No error handling complexity
+        // - Works for ALL config changes (not just visual options)
+        // Next render() will automatically recomposite with new config state
+        if (self.display) |display| {
+            // Mark ALL layers dirty to ensure complete recomposite
+            // This prevents 1-frame visual glitches when gutter width changes
+            display.gutter_layer.markDirty();
+            display.base_layer.markDirty();
+            display.cursor_layer.markDirty();
+            display.selection_layer.markDirty();
+            display.yank_layer.markDirty();
+            display.virtual_text_layer.markDirty();
+            // Note: compositor.composite() will be called in next render()
+            // This ensures gutter width changes are reflected for all layers
         }
 
         self.needs_reload = false;
@@ -387,6 +410,9 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     var options_mgr = OptionsManager.init(allocator);
     defer options_mgr.deinit();
 
+    // Wire options manager to editor context
+    editor_ctx.options_manager = &options_mgr;
+
     // Initialize JavaScript runtime for config loading
     const runtime_nullable = hermes_c.hermes_runtime_create();
     if (runtime_nullable == null) {
@@ -497,6 +523,9 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var options_mgr = OptionsManager.init(allocator);
     defer options_mgr.deinit();
 
+    // Wire options manager to editor core
+    editor.options_manager = &options_mgr;
+
     // Get config paths for hot reload
     var paths = try ConfigPaths.init(allocator);
     defer paths.deinit();
@@ -509,6 +538,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         .debugger_state = &debugger_state,
         .allocator = allocator,
         .config_path = paths.init_js_path,
+        .display = &display,
     };
 
     // Initialize JavaScript runtime for config loading
@@ -611,6 +641,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         &display,
         &highlight_config,
     );
+    defer backend.deinit();
 
     // Initial render
     try backend.render();
@@ -664,7 +695,12 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
                 .input;
             render_stats.recordRender(render_source);
 
+            const r1 = std.time.nanoTimestamp();
             try backend.render();
+            const r2 = std.time.nanoTimestamp();
+            if (r2 - r1 > 50_000_000) { // More than 50ms
+                std.debug.print("!!! RENDER took {}ms !!!\n", .{@divTrunc(r2 - r1, 1_000_000)});
+            }
             needs_render = false;
             editor.js_state_dirty = false; // Reset flag after render completes
         }
@@ -767,6 +803,9 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     var options_mgr = OptionsManager.init(allocator);
     defer options_mgr.deinit();
 
+    // Wire options manager to editor core
+    editor.options_manager = &options_mgr;
+
     // Get config paths
     var paths = try ConfigPaths.init(allocator);
     defer paths.deinit();
@@ -779,6 +818,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         .debugger_state = &debugger_state,
         .allocator = allocator,
         .config_path = paths.init_js_path,
+        .display = &display,
     };
 
     // Create Hermes runtime (must stay alive for debugger)
@@ -946,6 +986,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         &display,
         &highlight_config,
     );
+    defer backend.deinit();
 
     // Initial render
     try backend.render();
@@ -1249,3 +1290,4 @@ pub const __YankHighlight = YankHighlight;
 pub const __RegisterManager = RegisterManager;
 pub const __paste = paste;
 pub const __highlights = highlights;
+pub const __ListChars = @import("editor/config/listchars.zig").ListChars;

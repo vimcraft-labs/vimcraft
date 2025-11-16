@@ -28,6 +28,7 @@ pub const Change = struct {
 /// Transaction for grouping multiple changes into a single undo unit
 const Transaction = struct {
     start_offset: usize,
+    current_offset: usize, // Track current position during transaction (line_starts may be stale)
     text_buffer: std.ArrayList(u8),
     cursor_start: Cursor,
     cursor_end: Cursor,
@@ -36,6 +37,7 @@ const Transaction = struct {
     fn init(allocator: std.mem.Allocator, offset: usize, cursor: Cursor) Transaction {
         return .{
             .start_offset = offset,
+            .current_offset = offset,
             .text_buffer = .empty,
             .cursor_start = cursor,
             .cursor_end = cursor,
@@ -241,6 +243,26 @@ pub const Buffer = struct {
     /// Commit the active transaction to undo stack
     pub fn commitTransaction(self: *Buffer) !void {
         if (self.active_transaction) |*trans| {
+            // Rebuild line index now that transaction is complete
+            // (deferred during insertChar for performance)
+            try self.buildLineIndex();
+
+            // CRITICAL: After rebuilding line_starts, cursor position might be invalid
+            // During transaction, cursor.row is incremented for '\n', but line_starts
+            // wasn't rebuilt, so cursor.row might point past the end of actual lines.
+            // Clamp cursor to valid range after rebuild.
+            if (self.cursor.row >= self.lineCount()) {
+                if (self.lineCount() > 0) {
+                    self.cursor.row = self.lineCount() - 1;
+                    // Position at end of last line
+                    const line_len = self.getLineLengthVisual(self.cursor.row);
+                    self.cursor.col = line_len;
+                } else {
+                    self.cursor.row = 0;
+                    self.cursor.col = 0;
+                }
+            }
+
             // Only create change if there's actual content
             if (trans.text_buffer.items.len > 0) {
                 const change = Change{
@@ -248,7 +270,7 @@ pub const Buffer = struct {
                     .deleted_text = try self.allocator.alloc(u8, 0),
                     .inserted_text = try self.allocator.dupe(u8, trans.text_buffer.items),
                     .cursor_before = trans.cursor_start,
-                    .cursor_after = trans.cursor_end,
+                    .cursor_after = self.cursor, // Use clamped cursor position
                 };
                 try self.undo_stack.append(self.allocator, change);
 
@@ -268,6 +290,10 @@ pub const Buffer = struct {
     /// Used when manually creating a combined undo entry
     pub fn discardTransaction(self: *Buffer) void {
         if (self.active_transaction) |*trans| {
+            // Rebuild line index now that transaction is complete
+            // (deferred during insertChar for performance)
+            self.buildLineIndex() catch {}; // Best effort - ignore errors
+
             trans.deinit();
             self.active_transaction = null;
         }
@@ -285,13 +311,26 @@ pub const Buffer = struct {
 
     /// Insert character at cursor position
     pub fn insertChar(self: *Buffer, char: u8) !void {
-        const offset = self.getCursorOffset();
+        // During transactions, use tracked offset (line_starts may be stale)
+        // Otherwise, calculate from cursor position
+        const offset = if (self.active_transaction) |trans|
+            trans.current_offset
+        else
+            self.getCursorOffset();
+
+        // DEBUG: Removed logging to avoid test output noise
 
         // Insert character
         try self.content.insert(self.allocator, offset, char);
 
-        // Rebuild line index after insertion (offsets have shifted)
-        try self.buildLineIndex();
+        // Rebuild line index only when necessary:
+        // - If we're NOT in a transaction (single char insertions need immediate index update)
+        // During transactions (paste), defer ALL rebuilding until transaction completes
+        // CRITICAL: Do NOT rebuild during transaction even for newlines!
+        // Rebuilding would invalidate current_offset tracking and cause freeze/corruption
+        if (self.active_transaction == null) {
+            try self.buildLineIndex();
+        }
 
         // Update cursor position
         if (char == '\n') {
@@ -303,10 +342,13 @@ pub const Buffer = struct {
             self.cursor.col += 1;
         }
 
-        // If we're in a transaction, just add to the buffer
+        // If we're in a transaction, update tracked offset and buffer
         if (self.active_transaction) |*trans| {
             try trans.text_buffer.append(self.allocator, char);
             trans.cursor_end = self.cursor;
+            trans.current_offset += 1; // Track next insertion position
+
+            // DEBUG: Removed logging
         } else {
             // No transaction - record individual change (normal typing)
             const cursor_before = Cursor{
@@ -662,4 +704,44 @@ test "Buffer: cursor movement" {
     buffer.moveCursorRelative(0, 1);
     try std.testing.expectEqual(@as(usize, 1), buffer.cursor.col);
     try std.testing.expectEqual(@as(u8, 'e'), buffer.getCharAtCursor().?);
+}
+
+test "Buffer: paste with tab during transaction" {
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    // Start with empty buffer
+    try buffer.content.appendSlice(allocator, "");
+    try buffer.buildLineIndex();
+
+    // Simulate what bracketed paste does:
+    // 1. Start transaction
+    buffer.beginTransaction();
+
+    // 2. Insert "hello\tworld\n" character by character
+    const paste_content = "hello\tworld\n";
+    for (paste_content) |char| {
+        try buffer.insertChar(char);
+    }
+
+    // 3. Commit transaction
+    try buffer.commitTransaction();
+
+    // Verify final content
+    try std.testing.expectEqualStrings("hello\tworld\n", buffer.content.items);
+
+    // Verify line count (terminal \n doesn't create new line in line_starts)
+    try std.testing.expectEqual(@as(usize, 1), buffer.lineCount());
+
+    // Verify cursor position
+    // During transaction, cursor was incremented to (1,0) for the '\n'
+    // After commit, cursor is clamped because lineCount=1 but cursor.row was 1
+    // So cursor should be clamped to (0, 11) - end of the line
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 11), buffer.cursor.col); // At end of "hello\tworld"
+
+    // Verify line content
+    const line1 = buffer.getLine(0).?;
+    try std.testing.expectEqualStrings("hello\tworld\n", line1);
 }

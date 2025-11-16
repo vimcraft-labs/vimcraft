@@ -33,6 +33,7 @@ pub const CommandType = enum {
     set_buffer, // NEW: Set buffer content and cursor (test setup)
     set_cursor, // NEW: Set cursor position directly
     set_mode, // NEW: Set mode directly (NORMAL/INSERT/VISUAL/COMMAND)
+    set_option, // NEW: Set vim option (Phase 4)
 
     // Assertions
     assert_cursor,
@@ -67,6 +68,13 @@ pub const Position = struct {
     col: usize,
 };
 
+/// Option value (for set_option command)
+pub const OptionValue = union(enum) {
+    boolean: bool,
+    number: i64,
+    string: []const u8,
+};
+
 /// Command arguments (union based on command type)
 pub const CommandArgs = union(enum) {
     none: void,
@@ -85,6 +93,7 @@ pub const CommandArgs = union(enum) {
     set_buffer: struct { lines: []const []const u8, cursor: ?Position }, // NEW: set buffer content
     set_cursor: Position, // NEW: set cursor position directly
     set_mode: struct { mode: []const u8 }, // NEW: set mode directly
+    set_option: struct { name: []const u8, value: OptionValue }, // NEW: set vim option
     assert_cursor: Position,
     assert_mode: struct { mode: []const u8 },
     assert_visual_active: struct { active: bool },
@@ -125,6 +134,13 @@ pub const Command = struct {
                 allocator.free(a.lines);
             },
             .set_mode => |a| allocator.free(a.mode),
+            .set_option => |a| {
+                allocator.free(a.name);
+                switch (a.value) {
+                    .string => |s| allocator.free(s),
+                    else => {},
+                }
+            },
             .get_layer => |a| allocator.free(a.name),
             .get_layer_cells => |a| allocator.free(a.name),
             .get_logs => |a| {

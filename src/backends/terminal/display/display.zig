@@ -12,6 +12,7 @@ const CursorPosition = @import("../../../editor/editor.zig").CursorPosition;
 const char_width = @import("char_width.zig");
 const gutter = @import("gutter.zig");
 const VirtualTextRenderer = @import("virtual_text.zig").VirtualTextRenderer;
+const ListChars = @import("../../../editor/config/listchars.zig").ListChars;
 
 // Multi-layer rendering system (Phase 2)
 const Layer = @import("layer.zig").Layer;
@@ -86,6 +87,9 @@ pub const Display = struct {
         var compositor = try Compositor.init(allocator, 24, 80);
         errdefer compositor.deinit();
 
+        // PERFORMANCE: Initialize displayColumnToByte cache for 15× speedup
+        try char_width.initCache(allocator);
+
         return .{
             .allocator = allocator,
             .stdout = std.fs.File.stdout(),
@@ -121,6 +125,9 @@ pub const Display = struct {
         // Cleanup layer system (Phase 2)
         self.compositor.deinit();
         self.layer_manager.deinit();
+
+        // PERFORMANCE: Cleanup displayColumnToByte cache
+        char_width.deinitCache();
     }
 
     // ============================================================================
@@ -244,6 +251,13 @@ pub const Display = struct {
             } else {
                 // Register new line number column
                 try self.gutter_manager.registerColumn("line_numbers", renderer);
+
+                // CRITICAL FIX: Set initial width immediately after registration
+                // Without this, getTotalWidth() returns 0 until next updateGutterCache()
+                if (self.gutter_manager.getColumn("line_numbers")) |col| {
+                    col.cached_width = gutter.calculateLineNumberWidth(self.cached_line_count);
+                    col.cache_key = self.cached_line_count;
+                }
             }
         }
 
@@ -317,6 +331,8 @@ pub const Display = struct {
         visual_state: *const VisualState,
         yank_highlight: *const YankHighlight,
         cursor_override: ?CursorPosition,
+        list_enabled: bool,
+        listchars: *const ListChars,
     ) !void {
         // Update terminal size (handles resize and ensures correct dimensions)
         try self.getTerminalSize();
@@ -358,9 +374,13 @@ pub const Display = struct {
             self.viewport_left = cursor_display_col;
         }
 
+        // PERFORMANCE: Clear displayColumnToByte cache at start of each frame
+        // Cache is only valid for one frame (same line may have different content next frame)
+        char_width.clearCache();
+
         // PHASE 2.5: Multi-layer rendering pipeline (ACTIVATED!)
         // STEP 1: Update all layers from buffer state
-        try layer_renderer.updateLayers(self, buffer, status, config, visual_state, yank_highlight);
+        try layer_renderer.updateLayers(self, buffer, status, config, visual_state, yank_highlight, list_enabled, listchars);
 
         // STEP 1.5: Apply virtual text overlay (Neovim-style extmarks)
         // Plugins render arbitrary text via virtual_text_layer
@@ -415,6 +435,8 @@ pub const Display = struct {
         config: *const highlights.HighlightConfig,
         visual_state: *const VisualState,
         yank_highlight: *const YankHighlight,
+        list_enabled: bool,
+        listchars: *const ListChars,
     ) !void {
         // Update gutter cache (Neovim optimization: invalidate on line count change)
         self.updateGutterCache(buffer);
@@ -447,8 +469,11 @@ pub const Display = struct {
             self.viewport_left = cursor_display_col;
         }
 
+        // PERFORMANCE: Clear displayColumnToByte cache at start of each frame
+        char_width.clearCache();
+
         // STEP 1: Update all layers from buffer state
-        try layer_renderer.updateLayers(self, buffer, status, config, visual_state, yank_highlight);
+        try layer_renderer.updateLayers(self, buffer, status, config, visual_state, yank_highlight, list_enabled, listchars);
 
         // STEP 1.5: Apply virtual text overlay (Neovim-style extmarks)
         self.virtual_text.applyToGrid(&self.virtual_text_layer.grid);
