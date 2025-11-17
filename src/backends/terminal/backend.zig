@@ -60,10 +60,14 @@ pub const TerminalBackend = struct {
         };
 
         // Convert timeout to milliseconds for poll()
-        const poll_timeout: i32 = if (timeout_ms) |t|
-            @intCast(@min(t, std.math.maxInt(i32)))
+        // CRITICAL: If input handler has incomplete sequence (e.g., lone ESC),
+        // use shorter timeout (10ms) to check ESC timeout faster
+        const base_timeout: i64 = if (timeout_ms) |t| t else 100;
+        const has_incomplete = self.input_handler.unconsumedBytes() > 0;
+        const poll_timeout: i32 = if (has_incomplete)
+            10 // Short timeout to check ESC timeout quickly
         else
-            100;
+            @intCast(@min(base_timeout, std.math.maxInt(i32)));
 
         const poll_result = try posix.poll(&poll_fds, poll_timeout);
 
@@ -93,8 +97,14 @@ pub const TerminalBackend = struct {
 
             switch (parse_result) {
                 .incomplete => {
-                    // Partial sequence in buffer - wait for more bytes
-                    // NO timeout needed! InputHandler tells us when sequence is incomplete.
+                    // Partial sequence in buffer - could be waiting for ESC timeout
+                    // If no new data arrived (poll_result == 0), check if timeout elapsed
+                    if (poll_result == 0) {
+                        // Poll timed out - no new data arrived
+                        // Try parsing again - timeout logic in InputHandler may now treat ESC as complete
+                        continue;
+                    }
+                    // New data available but sequence still incomplete - wait for more bytes
                     return true; // Don't render, no state change yet
                 },
                 .none => {

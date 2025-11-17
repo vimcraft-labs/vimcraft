@@ -81,8 +81,10 @@ pub const GutterManager = struct {
         var offset: usize = 0;
         for (self.columns.items) |col| {
             if (col.enabled and col.cached_width > 0) {
-                const remaining = buf[offset..];
-                const written = col.renderer(line_num, cursor_line, remaining);
+                // Slice buffer to exact column width so renderer knows its boundaries
+                const col_end = @min(offset + col.cached_width, buf.len);
+                const col_buf = buf[offset..col_end];
+                const written = col.renderer(line_num, cursor_line, col_buf);
                 offset += written;
             }
         }
@@ -133,38 +135,115 @@ pub const LineNumberMode = enum {
 
 /// Calculate width needed for line numbers
 /// Uses fast integer log10 (Helix approach)
-/// IMPORTANT: Includes trailing space that renderer adds ("{d} ")
+/// IMPORTANT: Includes 1 space separator after the number
 pub fn calculateLineNumberWidth(line_count: usize) usize {
     if (line_count == 0) return 2; // "0 " = 1 digit + 1 space
-    // Use checked_ilog10 equivalent
+    // Use checked_ilog10 equivalent to count digits
     var count = line_count;
     var width: usize = 1;
     while (count >= 10) {
         width += 1;
         count /= 10;
     }
-    // Add 1 for trailing space that renderer adds
+    // Add 1 for the space separator after the number
     return width + 1;
 }
 
 /// Absolute line number renderer
+/// Renders right-aligned line number with 1 space separator
 pub fn renderAbsoluteLineNumber(line_num: usize, cursor_line: usize, buf: []u8) usize {
     _ = cursor_line;
     // Display line numbers as 1-indexed
     const display_num = line_num + 1;
-    const formatted = std.fmt.bufPrint(buf, "{d} ", .{display_num}) catch buf[0..0];
-    return formatted.len;
+
+    // Count digits to determine padding
+    var num_digits: usize = 1;
+    var temp = display_num;
+    while (temp >= 10) {
+        num_digits += 1;
+        temp /= 10;
+    }
+
+    // Calculate padding for right-alignment
+    // buf.len is the cached_width (digits + 1 space)
+    const total_width = buf.len;
+    if (total_width == 0) return 0;
+
+    // Right-align: add padding spaces, then number, then 1 separator space
+    const num_width = num_digits; // Just the digits
+    const padding = if (total_width > num_width + 1)
+        total_width - num_width - 1 // -1 for the separator space
+    else
+        0;
+
+    var offset: usize = 0;
+
+    // Add left padding spaces for right-alignment
+    for (0..padding) |_| {
+        if (offset >= buf.len) return offset;
+        buf[offset] = ' ';
+        offset += 1;
+    }
+
+    // Add the number
+    const formatted = std.fmt.bufPrint(buf[offset..], "{d}", .{display_num}) catch return offset;
+    offset += formatted.len;
+
+    // Add 1 separator space
+    if (offset < buf.len) {
+        buf[offset] = ' ';
+        offset += 1;
+    }
+
+    return offset;
 }
 
 /// Relative line number renderer
+/// Renders right-aligned relative distance with 1 space separator
 pub fn renderRelativeLineNumber(line_num: usize, cursor_line: usize, buf: []u8) usize {
     const distance = if (line_num >= cursor_line)
         line_num - cursor_line
     else
         cursor_line - line_num;
 
-    const formatted = std.fmt.bufPrint(buf, "{d} ", .{distance}) catch buf[0..0];
-    return formatted.len;
+    // Count digits
+    var num_digits: usize = 1;
+    var temp = distance;
+    while (temp >= 10) {
+        num_digits += 1;
+        temp /= 10;
+    }
+
+    // Calculate padding for right-alignment
+    const total_width = buf.len;
+    if (total_width == 0) return 0;
+
+    const num_width = num_digits;
+    const padding = if (total_width > num_width + 1)
+        total_width - num_width - 1
+    else
+        0;
+
+    var offset: usize = 0;
+
+    // Add left padding
+    for (0..padding) |_| {
+        if (offset >= buf.len) return offset;
+        buf[offset] = ' ';
+        offset += 1;
+    }
+
+    // Add the number
+    const formatted = std.fmt.bufPrint(buf[offset..], "{d}", .{distance}) catch return offset;
+    offset += formatted.len;
+
+    // Add separator space
+    if (offset < buf.len) {
+        buf[offset] = ' ';
+        offset += 1;
+    }
+
+    return offset;
 }
 
 /// Hybrid line number renderer (absolute on cursor line, relative elsewhere)

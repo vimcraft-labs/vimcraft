@@ -5,8 +5,8 @@ This file provides guidance to Claude Code when working with code in this reposi
 ## Quick Navigation
 
 **Critical Workflows**:
+- [Testing Architecture](#testing-architecture-hybrid-approach) - PTY + Debug Protocol (complementary systems)
 - [Test-Driven Development (TDD)](#test-driven-development-tdd) - MANDATORY workflow: write tests first
-- [Debug Protocol](#debug-protocol--verification-system) - LLM-optimized JSON testing (see [docs/development/debug-protocol.md](docs/development/debug-protocol.md))
 - [Logging Architecture](#logging-architecture) - Use `editor.logger`, not `std.debug.print`
 - [Debugging Principles](#debugging-principles) - 7 proven principles for efficient bug fixing
 - [Build Commands](#build-commands) - How to build and run
@@ -38,9 +38,60 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 **Reference Codebases**: `../neovim` (API compatibility), `../helix` (design patterns), `../ghostty` (Zig best practices)
 
+## Testing Architecture: Hybrid Approach
+
+**Critical**: Vimcraft uses **two complementary testing systems** for comprehensive coverage:
+
+1. **PTY Testing** (95% terminal coverage) - Tests actual terminal backend via pseudoterminals
+2. **Debug Protocol** (100% state introspection) - Inspects internal state and logs
+
+See [docs/development/pty-testing.md](docs/development/pty-testing.md) for complete PTY guide.
+
+### Quick Reference: When to Use Each System
+
+**PTY Tests** (`zig build pty_tests`):
+- ✅ **Terminal I/O validation** - Input parsing, ANSI output, user experience
+- ✅ **Regression tests** - User-facing bugs (like `Aii` inserting on wrong line)
+- ✅ **Render timing bugs** - Issues that only appear when rendering between keystrokes
+
+**Debug Protocol** (`./zig-out/bin/vimc --debug-protocol`):
+- ✅ **State inspection** - Cursor position, mode, registers, buffer content
+- ✅ **Layer debugging** - Compositor pipeline, layer composition
+- ✅ **Log analysis** - Filtered logs with `get_logs` command
+
+**Best Practice**: Use BOTH! PTY reproduces user-facing bugs, Debug Protocol diagnoses root causes.
+
+### Example: Hybrid Debugging Workflow
+
+```bash
+# Step 1: Reproduce bug with PTY (simulates real user)
+zig test src/backends/terminal/tests/core_tests.zig --test-filter "Aii"
+# Test fails: "ii" appears on line 2 instead of line 1
+
+# Step 2: Diagnose with Debug Protocol (inspect internal state)
+./zig-out/bin/vimc --debug-protocol &
+PID=$!
+
+echo '{"cmd":"load_file","args":{"path":"/tmp/test.txt"},"id":"1"}'
+echo '{"cmd":"get_state","id":"2"}'
+# Response shows: cursor at (0,12), mode=INSERT
+
+echo '{"cmd":"get_logs","args":{"level":"debug","max_bytes":4096},"id":"3"}'
+# Logs reveal: "Skipping buildLineIndex (in transaction)"
+
+kill $PID
+
+# Step 3: Identify root cause
+# enterInsertMode() starts transaction → prevents line_starts rebuild
+
+# Step 4: Fix and verify with both systems
+zig build test         # Unit tests pass
+zig build pty_tests    # PTY tests pass (user experience validated)
+```
+
 ## Debug Protocol & Verification System
 
-**Critical**: Vimcraft uses Zig-based debug protocol for LLM-driven development with structured JSON communication.
+**Role**: State introspection and logging (complements PTY tests, does NOT replace them)
 
 ### Background Mode (REQUIRED for Multi-Command Debugging)
 

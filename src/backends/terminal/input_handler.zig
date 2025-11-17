@@ -32,6 +32,10 @@ pub const InputHandler = struct {
     buffer: std.ArrayList(u8),
     buffer_start: usize = 0,  // Start of unconsumed data
 
+    // Escape key timeout tracking (Vim-style: 'ttimeoutlen')
+    // When ESC is received alone, wait this long before treating it as lone ESC
+    esc_received_time: ?i64 = null,  // Timestamp when ESC was first seen
+
     pub fn init(allocator: std.mem.Allocator) InputHandler {
         return .{
             .allocator = allocator,
@@ -105,21 +109,25 @@ pub const InputHandler = struct {
             if (unconsumed[1] == '[') {
                 switch (unconsumed[2]) {
                     'A' => {
+                        self.esc_received_time = null;  // Clear ESC timer
                         const bytes = unconsumed[0..3];
                         self.buffer_start += 3;
                         return .{ .complete = .{ .bytes = bytes, .kind = .arrow_up } };
                     },
                     'B' => {
+                        self.esc_received_time = null;  // Clear ESC timer
                         const bytes = unconsumed[0..3];
                         self.buffer_start += 3;
                         return .{ .complete = .{ .bytes = bytes, .kind = .arrow_down } };
                     },
                     'C' => {
+                        self.esc_received_time = null;  // Clear ESC timer
                         const bytes = unconsumed[0..3];
                         self.buffer_start += 3;
                         return .{ .complete = .{ .bytes = bytes, .kind = .arrow_right } };
                     },
                     'D' => {
+                        self.esc_received_time = null;  // Clear ESC timer
                         const bytes = unconsumed[0..3];
                         self.buffer_start += 3;
                         return .{ .complete = .{ .bytes = bytes, .kind = .arrow_left } };
@@ -132,10 +140,30 @@ pub const InputHandler = struct {
         // Partial arrow key? (ESC or ESC[)
         if (unconsumed.len < 3) {
             if (unconsumed.len == 1 or (unconsumed.len == 2 and unconsumed[1] == '[')) {
+                // Check if we should wait or timeout
+                const now = std.time.milliTimestamp();
+
+                if (self.esc_received_time) |start_time| {
+                    // ESC timeout (Vim 'ttimeoutlen'): 50ms default
+                    // If more than 50ms has passed, treat as lone ESC
+                    const elapsed = now - start_time;
+                    if (elapsed > 50) {
+                        // Timeout! Treat first byte as standalone ESC
+                        self.esc_received_time = null;
+                        return self.parseNormalChar(unconsumed);
+                    }
+                } else {
+                    // First time seeing this ESC - start timer
+                    self.esc_received_time = now;
+                }
+
                 // Could be start of arrow key - wait for more bytes
                 return .{ .incomplete = {} };
             }
         }
+
+        // Not a partial sequence - clear ESC timer
+        self.esc_received_time = null;
 
         // Bracketed paste sequences
         const paste_start = "\x1b[200~";

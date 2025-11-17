@@ -573,6 +573,24 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_unit_tests.step);
 
     // ============================================================================
+    // PTY Tests (Terminal Backend Integration Tests)
+    // ============================================================================
+    const pty_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/backends/terminal/tests/core_tests.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    const run_pty_tests = b.addRunArtifact(pty_tests);
+    // PTY tests require vimc to be built first
+    run_pty_tests.step.dependOn(b.getInstallStep());
+
+    const pty_test_step = b.step("pty_tests", "Run PTY integration tests (requires vimc built)");
+    pty_test_step.dependOn(&run_pty_tests.step);
+
+    // ============================================================================
     // NOTE: Hermes+JSI Integration
     // ============================================================================
     // Hermes is now fully integrated into the main build system!

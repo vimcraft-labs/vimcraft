@@ -5,6 +5,7 @@ const Display = vimcraft.__Display;
 const VisualState = vimcraft.__VisualState;
 const YankHighlight = vimcraft.__YankHighlight;
 const highlights = vimcraft.__highlights;
+const ListChars = vimcraft.__ListChars;
 const benchmark = @import("benchmark.zig");
 
 /// Create a test file with N lines
@@ -30,7 +31,8 @@ fn benchRender(
     visual_state: *VisualState,
     yank_highlight: *YankHighlight,
 ) !void {
-    try display.render(buffer, status, config, visual_state, yank_highlight, null);
+    const listchars = ListChars{};
+    try display.render(buffer, status, config, visual_state, yank_highlight, null, false, &listchars);
 }
 
 /// Run display rendering benchmarks
@@ -168,11 +170,12 @@ pub fn runDisplayBenchmarks(allocator: std.mem.Allocator) !void {
         var scroll_test_count: usize = 0;
         const start = std.time.nanoTimestamp();
 
+        const listchars = ListChars{};
         while (scroll_test_count < 100) : (scroll_test_count += 1) {
             // Simulate scrolling by changing viewport
             display.viewport_top = scroll_test_count * 10;
             buffer.cursor.row = display.viewport_top + 10;
-            try display.render(&buffer, status, &config, &visual_state, &yank_highlight, null);
+            try display.render(&buffer, status, &config, &visual_state, &yank_highlight, null, false, &listchars);
         }
 
         const end = std.time.nanoTimestamp();
