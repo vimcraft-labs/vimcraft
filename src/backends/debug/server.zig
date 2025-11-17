@@ -4,6 +4,7 @@ const json = @import("json.zig");
 const state = @import("state.zig");
 const EditorContext = @import("editor_context.zig").EditorContext;
 const ListChars = @import("../../editor/config/listchars.zig").ListChars;
+const handlers = @import("handlers.zig");
 
 /// Debug server configuration
 pub const ServerConfig = struct {
@@ -45,9 +46,8 @@ pub const Server = struct {
 
         if (self.config.use_stdio) {
             try self.runStdio();
-        } else if (self.config.socket_path) |_| {
-            // TODO: Implement Unix socket server
-            return error.NotImplemented;
+        } else if (self.config.socket_path) |socket_path| {
+            try self.runSocket(socket_path);
         } else {
             return error.InvalidConfiguration;
         }
@@ -196,6 +196,122 @@ pub const Server = struct {
         }
     }
 
+    /// Run server using Unix socket (non-blocking, integrates with event loop)
+    fn runSocket(self: *Server, socket_path: []const u8) !void {
+        const EventLoopProcessor = @import("../../system/event_loop/processor.zig").EventLoopProcessor;
+
+        // Validate socket path length (Unix domain sockets have a 108-byte limit on macOS/Linux)
+        if (socket_path.len >= 104) {  // Leave some margin
+            return error.SocketPathTooLong;
+        }
+
+        // Remove old socket if it exists (with proper error handling)
+        std.fs.deleteFileAbsolute(socket_path) catch |err| {
+            // Only ignore "file not found" errors, report others
+            if (err != error.FileNotFound) {
+                // Log warning but continue - socket might be cleaned up anyway
+            }
+        };
+
+        // Create Unix domain socket
+        const address = try std.net.Address.initUnix(socket_path);
+        var server = address.listen(.{}) catch |err| {
+            // If socket creation fails, try to clean up and provide better error
+            std.fs.deleteFileAbsolute(socket_path) catch {};
+            return err;
+        };
+
+        // Ensure socket is ALWAYS cleaned up, even on error
+        defer {
+            server.deinit();
+            std.fs.deleteFileAbsolute(socket_path) catch {};
+        }
+
+        // Set restrictive permissions on socket file (owner read/write only: 0600)
+        // This prevents other users from connecting to our debug socket
+        // Note: We open the socket file and call chmod on the file handle, not the path
+        if (std.fs.openFileAbsolute(socket_path, .{})) |socket_file| {
+            defer socket_file.close();
+            socket_file.chmod(0o600) catch {
+                // chmod failed - continue anyway (socket is still usable)
+            };
+        } else |_| {
+            // openFile failed - continue anyway (socket is still usable)
+            // This can happen on some filesystems or if socket was deleted between creation and chmod
+        }
+
+        var event_processor = EventLoopProcessor.init(self.allocator);
+
+        // Accept connections and handle requests (one at a time)
+        while (self.running) {
+            // Process event loop: libuv + timers + animation frames
+            _ = event_processor.tick();
+
+            // Poll for incoming connections (non-blocking with 10ms timeout)
+            var poll_fds = [_]std.posix.pollfd{
+                .{
+                    .fd = server.stream.handle,
+                    .events = std.posix.POLL.IN,
+                    .revents = 0,
+                },
+            };
+
+            const poll_result = std.posix.poll(&poll_fds, 10) catch |err| {
+                if (err == error.Interrupted) continue;
+                return err;
+            };
+
+            // If no connection available, continue event loop
+            if (poll_result == 0) continue;
+
+            // Accept connection
+            const connection = server.accept() catch continue;
+            defer connection.stream.close();
+
+            // Read JSON command (line-delimited)
+            var buf: [8192]u8 = undefined;
+            const len = connection.stream.read(&buf) catch continue;
+            if (len == 0) continue;
+
+            const request = std.mem.trim(u8, buf[0..len], " \t\r\n");
+            if (request.len == 0) continue;
+
+            // Parse command
+            var cmd = json.parseCommand(request, self.allocator) catch |err| {
+                const err_str = try std.fmt.allocPrint(self.allocator, "Failed to parse command: {}", .{err});
+                defer self.allocator.free(err_str);
+
+                const response = try json.createErrorResponse(
+                    self.allocator,
+                    "unknown",
+                    err_str,
+                    0,
+                );
+                defer {
+                    var mut_response = response;
+                    mut_response.deinit(self.allocator);
+                }
+
+                const response_json = try json.serializeResponse(response, self.allocator);
+                defer self.allocator.free(response_json);
+
+                _ = connection.stream.write(response_json) catch {};
+                continue;
+            };
+            defer cmd.deinit(self.allocator);
+
+            // Handle command and get response
+            var response = try self.handleCommand(cmd);
+            defer response.deinit(self.allocator);
+
+            // Serialize and send response
+            const response_json = try json.serializeResponse(response, self.allocator);
+            defer self.allocator.free(response_json);
+
+            _ = connection.stream.write(response_json) catch {};
+        }
+    }
+
     /// Handle a command and return a response
     fn handleCommand(self: *Server, cmd: protocol.Command) !protocol.Response {
         const start_time = std.time.nanoTimestamp();
@@ -224,91 +340,36 @@ pub const Server = struct {
 
             // State queries - get full editor state snapshot
             .get_state => {
-                const mode_str = try self.allocator.dupe(u8, self.editor.mode_manager.getModeString());
-
-                // Get buffer lines
-                var buffer_lines = std.ArrayList([]const u8).empty;
-                defer buffer_lines.deinit(self.allocator);
-
-                for (0..self.editor.buffer.lineCount()) |i| {
-                    if (self.editor.buffer.getLine(i)) |line| {
-                        const owned = try self.allocator.dupe(u8, line);
-                        try buffer_lines.append(self.allocator, owned);
-                    }
-                }
-
-                // Get viewport state from display
-                const viewport = protocol.ViewportState{
-                    .top = self.editor.display.viewport_top,
-                    .left = self.editor.display.viewport_left,
-                    .height = if (self.editor.display.terminal_rows > 1)
-                        self.editor.display.terminal_rows - 1
-                    else
-                        1,
-                    .width = self.editor.display.terminal_cols,
+                const ctx = handlers.HandlerContext{
+                    .allocator = self.allocator,
+                    .buffer = &self.editor.buffer,
+                    .mode_manager = &self.editor.mode_manager,
+                    .visual_state = &self.editor.visual_state,
+                    .display = &self.editor.display,
                 };
-
-                // Get visual state (if active)
-                var visual: ?protocol.VisualState = null;
-                if (self.editor.visual_state.active) {
-                    const cursor = self.editor.buffer.cursor;
-                    const range = self.editor.visual_state.getRange(.{ .line = cursor.row, .col = cursor.col });
-
-                    var text_lines = std.ArrayList([]const u8).empty;
-                    defer text_lines.deinit(self.allocator);
-
-                    for (range.start.line..range.end.line + 1) |line_idx| {
-                        const line = self.editor.buffer.getLine(line_idx) orelse continue;
-                        const owned = try self.allocator.dupe(u8, line);
-                        try text_lines.append(self.allocator, owned);
-                    }
-
-                    const mode_str_vis = switch (self.editor.visual_state.mode) {
-                        .char => "char",
-                        .line => "line",
-                        .block => "block",
-                    };
-
-                    visual = protocol.VisualState{
-                        .active = true,
-                        .mode = try self.allocator.dupe(u8, mode_str_vis),
-                        .anchor = .{ .line = self.editor.visual_state.anchor.line, .col = self.editor.visual_state.anchor.col },
-                        .head = .{ .line = cursor.row, .col = cursor.col },
-                        .text = try text_lines.toOwnedSlice(self.allocator),
-                    };
-                }
-
-                return .{ .state = protocol.EditorState{
-                    .mode = mode_str,
-                    .cursor = .{
-                        .line = self.editor.buffer.cursor.row,
-                        .col = self.editor.buffer.cursor.col,
-                    },
-                    .buffer = protocol.BufferState{
-                        .path = if (self.editor.buffer.filepath) |p| try self.allocator.dupe(u8, p) else null,
-                        .lines = try buffer_lines.toOwnedSlice(self.allocator),
-                        .modified = false, // TODO: track modifications
-                        .line_count = self.editor.buffer.lineCount(),
-                    },
-                    .visual = visual,
-                    .registers = protocol.RegistersState{
-                        .registers = &[_]protocol.RegisterState{},
-                        .count = 0,
-                    },
-                    .viewport = viewport,
-                } };
+                return try handlers.handleGetState(ctx);
             },
 
             .get_cursor => {
-                return .{ .cursor = .{
-                    .line = self.editor.buffer.cursor.row,
-                    .col = self.editor.buffer.cursor.col,
-                } };
+                const ctx = handlers.HandlerContext{
+                    .allocator = self.allocator,
+                    .buffer = &self.editor.buffer,
+                    .mode_manager = &self.editor.mode_manager,
+                    .visual_state = &self.editor.visual_state,
+                    .display = &self.editor.display,
+                };
+                return try handlers.handleGetCursor(ctx);
             },
 
             .get_mode => {
-                const mode_str = try self.allocator.dupe(u8, self.editor.mode_manager.getModeString());
-                return .{ .mode = .{ .mode = mode_str } };
+                const ctx = handlers.HandlerContext{
+                    .allocator = self.allocator,
+                    .buffer = &self.editor.buffer,
+                    .mode_manager = &self.editor.mode_manager,
+                    .visual_state = &self.editor.visual_state,
+                    .display = &self.editor.display,
+                };
+                return try handlers.handleGetMode(ctx);
             },
 
             .get_visual => {
@@ -681,6 +742,28 @@ pub const Server = struct {
                     .size = self.editor.buffer.content.items.len,
                     .line_count = self.editor.buffer.lineCount(),
                 } };
+            },
+
+            .get_gutter_state => {
+                const ctx = handlers.HandlerContext{
+                    .allocator = self.allocator,
+                    .buffer = &self.editor.buffer,
+                    .mode_manager = &self.editor.mode_manager,
+                    .visual_state = &self.editor.visual_state,
+                    .display = &self.editor.display,
+                };
+                return try handlers.handleGetGutterState(ctx);
+            },
+
+            .get_terminal_updates => {
+                const ctx = handlers.HandlerContext{
+                    .allocator = self.allocator,
+                    .buffer = &self.editor.buffer,
+                    .mode_manager = &self.editor.mode_manager,
+                    .visual_state = &self.editor.visual_state,
+                    .display = &self.editor.display,
+                };
+                return try handlers.handleGetTerminalUpdates(ctx);
             },
 
             .save_file => {

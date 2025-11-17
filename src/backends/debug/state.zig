@@ -166,6 +166,49 @@ pub fn serializeRegistersState(registers: protocol.RegistersState, writer: anyty
     try writer.writeAll("]}");
 }
 
+/// Serialize gutter column state
+pub fn serializeGutterColumn(col: protocol.GutterColumn, writer: anytype) !void {
+    try writer.writeAll("{");
+    try writer.print("\"name\":\"{s}\",", .{col.name});
+    try writer.print("\"enabled\":{},", .{col.enabled});
+    try writer.print("\"cached_width\":{d},", .{col.cached_width});
+    try writer.print("\"cache_key\":{d}", .{col.cache_key});
+    try writer.writeAll("}");
+}
+
+/// Serialize gutter state
+pub fn serializeGutterState(gutter: protocol.GutterState, writer: anytype) !void {
+    try writer.writeAll("{");
+
+    // Gutter width
+    try writer.print("\"gutter_width\":{d},", .{gutter.gutter_width});
+
+    // Cached line count
+    try writer.print("\"cached_line_count\":{d},", .{gutter.cached_line_count});
+
+    // Columns
+    try writer.writeAll("\"columns\":[");
+    for (gutter.columns, 0..) |col, i| {
+        if (i > 0) try writer.writeAll(",");
+        try serializeGutterColumn(col, writer);
+    }
+    try writer.writeAll("],");
+
+    // Line number config
+    try writer.writeAll("\"line_number_config\":{");
+    try writer.print("\"mode\":\"{s}\",", .{gutter.line_number_config.mode});
+    try writer.print("\"number\":{},", .{gutter.line_number_config.number});
+    try writer.print("\"relative_number\":{}", .{gutter.line_number_config.relative_number});
+    try writer.writeAll("},");
+
+    // Sign column config
+    try writer.writeAll("\"sign_column_config\":{");
+    try writer.print("\"mode\":\"{s}\"", .{gutter.sign_column_config.mode});
+    try writer.writeAll("}");
+
+    try writer.writeAll("}");
+}
+
 /// Create EditorState from current runtime state
 /// This will be called by the debug server to capture a snapshot
 pub fn captureEditorState(

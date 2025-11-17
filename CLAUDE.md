@@ -62,7 +62,11 @@ kill $VIMCRAFT_PID
 
 ### Core Features
 
-**Architecture**: JSON-RPC over stdin/stdout (MCP-style) → Deep introspection, fast iteration, deterministic results
+**Architecture**: Dual implementation with shared handlers (73% code deduplication)
+- Terminal Mode: Unix socket server for live sessions (`debug_socket.zig`)
+- Headless Mode: stdio/socket server for automated testing (`server.zig`)
+- Shared Handlers: 5 unified command implementations (`handlers.zig`)
+- Protocol: JSON-RPC over stdin/stdout (MCP-style) → Deep introspection, fast iteration, deterministic results
 
 **Key Commands**:
 - `get_state` - Full editor snapshot (mode, cursor, buffer, visual, registers)
@@ -70,7 +74,7 @@ kill $VIMCRAFT_PID
 - `get_layers` - Layer state inspection
 - `get_logs {"level":"info","max_bytes":4096}` - Query logs (size-limited for LLM context)
 
-**Status**: Background mode ready ✅, JSON parser robust ✅, 8 layers tracked ✅. See [docs/development/debug-protocol.md](docs/development/debug-protocol.md) for complete spec.
+**Status**: Background mode ready ✅, JSON parser robust ✅, 8 layers tracked ✅, Handler unification complete ✅. See [docs/development/debug-protocol.md](docs/development/debug-protocol.md) for protocol spec, [docs/reviews/debug-handlers-unification-review.md](docs/reviews/debug-handlers-unification-review.md) for architecture details.
 
 ### When and How to Use Debug Protocol
 

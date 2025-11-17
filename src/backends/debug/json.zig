@@ -240,10 +240,50 @@ fn serializeResponseResult(result: protocol.ResponseResult, writer: anytype) !vo
         .buffer_info => |bi| {
             try serializeBufferInfo(bi, writer);
         },
+        .gutter_state => |gs| {
+            try state.serializeGutterState(gs, writer);
+        },
+        .terminal_updates => |tu| {
+            try serializeTerminalUpdates(tu, writer);
+        },
         .file_saved => |fs| {
             try writer.print("{{\"bytes_written\":{d}}}", .{fs.bytes_written});
         },
     }
+}
+
+fn serializeRawUpdate(update: protocol.RawUpdate, writer: anytype) !void {
+    try writer.print("{{\"row\":{d},\"col\":{d},\"char\":{d}", .{ update.row, update.col, update.char });
+    if (update.fg) |fg| {
+        try writer.print(",\"fg\":{{\"r\":{d},\"g\":{d},\"b\":{d}}}", .{ fg.r, fg.g, fg.b });
+    }
+    if (update.bg) |bg| {
+        try writer.print(",\"bg\":{{\"r\":{d},\"g\":{d},\"b\":{d}}}", .{ bg.r, bg.g, bg.b });
+    }
+    if (update.bold) try writer.writeAll(",\"bold\":true");
+    if (update.italic) try writer.writeAll(",\"italic\":true");
+    if (update.underline) try writer.writeAll(",\"underline\":true");
+    try writer.writeAll("}");
+}
+
+fn serializeTerminalUpdates(tu: protocol.TerminalUpdates, writer: anytype) !void {
+    try writer.writeAll("{\"raw_updates\":[");
+    for (tu.raw_updates, 0..) |update, i| {
+        if (i > 0) try writer.writeAll(",");
+        try serializeRawUpdate(update, writer);
+    }
+    try writer.writeAll("],");
+    try writer.print("\"update_count\":{d},", .{tu.update_count});
+    try writer.print("\"ansi_bytes\":\"{s}\",", .{tu.ansi_bytes});
+    try writer.writeAll("\"ansi_breakdown\":[");
+    for (tu.ansi_breakdown, 0..) |cmd, i| {
+        if (i > 0) try writer.writeAll(",");
+        try writer.print("{{\"seq\":\"{s}\",\"desc\":\"{s}\"}}", .{ cmd.seq, cmd.desc });
+    }
+    try writer.writeAll("],");
+    try writer.print("\"optimizations\":{{\"adjacent_cells_skipped\":{d},", .{tu.optimizations.adjacent_cells_skipped});
+    try writer.print("\"attribute_changes_deduped\":{d},", .{tu.optimizations.attribute_changes_deduped});
+    try writer.print("\"char_zero_to_space\":{d}}}}}", .{tu.optimizations.char_zero_to_space});
 }
 
 fn serializeLogsState(logs: protocol.LogsState, writer: anytype) !void {
@@ -401,7 +441,7 @@ pub fn parseCommand(json_str: []const u8, allocator: std.mem.Allocator) !protoco
 
 fn parseCommandArgs(cmd: protocol.CommandType, args_obj: std.json.Value, allocator: std.mem.Allocator) !protocol.CommandArgs {
     return switch (cmd) {
-        .ping, .shutdown, .get_state, .get_cursor, .get_mode, .get_visual, .get_registers, .get_buffer, .get_layers, .get_undo_stack, .get_redo_stack, .get_transaction, .get_buffer_info => .{ .none = {} },
+        .ping, .shutdown, .get_state, .get_cursor, .get_mode, .get_visual, .get_registers, .get_buffer, .get_layers, .get_undo_stack, .get_redo_stack, .get_transaction, .get_buffer_info, .get_gutter_state, .get_terminal_updates => .{ .none = {} },
 
         .get_logs => blk: {
             const count = if (args_obj.object.get("count")) |c| @as(usize, @intCast(c.integer)) else null;

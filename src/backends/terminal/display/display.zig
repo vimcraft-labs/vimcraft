@@ -212,6 +212,7 @@ pub const Display = struct {
     /// - Register line number renderer based on mode (absolute/relative/hybrid)
     /// - Cache width calculation with invalidation on line count change
     fn updateGutterColumns(self: *Display) !void {
+
         // Sign column comes FIRST (before line numbers) in Neovim
         const sign_mode = self.sign_column_config.mode;
         self.gutter_manager.setColumnEnabled("signs", false);
@@ -233,7 +234,6 @@ pub const Display = struct {
 
         // Line numbers come SECOND (after signs)
         const line_mode = self.line_number_config.getMode();
-        self.gutter_manager.setColumnEnabled("line_numbers", false);
 
         if (line_mode != .none) {
             // Determine which renderer to use
@@ -247,18 +247,27 @@ pub const Display = struct {
             // Check if line number column already exists
             if (self.gutter_manager.getColumn("line_numbers")) |col| {
                 col.renderer = renderer;
-                col.enabled = true;
+                col.enabled = true;  // Ensure it's enabled
             } else {
                 // Register new line number column
                 try self.gutter_manager.registerColumn("line_numbers", renderer);
 
                 // CRITICAL FIX: Set initial width immediately after registration
-                // Without this, getTotalWidth() returns 0 until next updateGutterCache()
+                // Use a reasonable default since cached_line_count is 0 at startup
+                // (updateGutterCache() hasn't run yet). Will be updated on first render.
                 if (self.gutter_manager.getColumn("line_numbers")) |col| {
-                    col.cached_width = gutter.calculateLineNumberWidth(self.cached_line_count);
+                    const initial_width = if (self.cached_line_count > 0)
+                        gutter.calculateLineNumberWidth(self.cached_line_count)
+                    else
+                        2; // Default: handles files up to 99 lines, updated on first render
+                    col.cached_width = initial_width;
                     col.cache_key = self.cached_line_count;
+                    col.enabled = true;  // Ensure it's enabled
                 }
             }
+        } else {
+            // Only disable if line_mode is .none
+            self.gutter_manager.setColumnEnabled("line_numbers", false);
         }
 
         // CRITICAL: Mark gutter layer as dirty to trigger re-render

@@ -25,6 +25,8 @@ pub const CommandType = enum {
     get_redo_stack, // NEW: Get redo stack entries (Phase 3)
     get_transaction, // NEW: Get active transaction state (Phase 3)
     get_buffer_info, // NEW: Get buffer metadata (modified flag, path, size)
+    get_gutter_state, // NEW: Get gutter/line number configuration and state
+    get_terminal_updates, // NEW: Get Terminal ANSI output for debugging (Terminal mode only)
 
     // Commands
     execute_keys,
@@ -188,6 +190,8 @@ pub const ResponseResult = union(enum) {
     redo_stack: RedoStackState, // NEW: Redo stack entries (Phase 3)
     transaction: TransactionState, // NEW: Active transaction state (Phase 3)
     buffer_info: BufferInfo, // NEW: Buffer metadata
+    gutter_state: GutterState, // NEW: Gutter configuration and state
+    terminal_updates: TerminalUpdates, // NEW: Terminal ANSI output for debugging
     file_saved: struct { bytes_written: usize }, // NEW: File save confirmation
     execute_keys: struct { keys_processed: usize },
     assertion: AssertionResult,
@@ -312,6 +316,28 @@ pub const Response = struct {
                 },
                 .buffer_info => |bi| {
                     if (bi.filepath) |fp| allocator.free(fp);
+                },
+                .gutter_state => |gs| {
+                    // Free mode strings
+                    allocator.free(gs.line_number_config.mode);
+                    allocator.free(gs.sign_column_config.mode);
+                    // Free each column's name
+                    for (gs.columns) |col| {
+                        allocator.free(col.name);
+                    }
+                    allocator.free(gs.columns);
+                },
+                .terminal_updates => |tu| {
+                    // Free raw updates
+                    allocator.free(tu.raw_updates);
+                    // Free ANSI bytes
+                    allocator.free(tu.ansi_bytes);
+                    // Free breakdown commands
+                    for (tu.ansi_breakdown) |cmd| {
+                        allocator.free(cmd.seq);
+                        allocator.free(cmd.desc);
+                    }
+                    allocator.free(tu.ansi_breakdown);
                 },
                 // Other types either don't allocate or have different ownership
                 else => {},
@@ -543,6 +569,63 @@ pub const BufferInfo = struct {
     filepath: ?[]const u8,
     size: usize, // Total bytes in buffer
     line_count: usize,
+};
+
+/// Single gutter column state
+pub const GutterColumn = struct {
+    name: []const u8,
+    enabled: bool,
+    cached_width: usize,
+    cache_key: usize,
+};
+
+/// Gutter configuration and state
+pub const GutterState = struct {
+    gutter_width: usize, // Total width of gutter area
+    cached_line_count: usize, // Cached buffer line count (for width calculation)
+    columns: []const GutterColumn, // Array of gutter columns (line_numbers, sign_column, etc.)
+    line_number_config: struct {
+        mode: []const u8, // "off", "number", "relative", "hybrid"
+        number: bool, // vim.opt.number
+        relative_number: bool, // vim.opt.relativeNumber
+    },
+    sign_column_config: struct {
+        mode: []const u8, // "yes", "no", "auto", "auto2-9"
+    },
+};
+
+/// Raw update from diff algorithm (before ANSI rendering)
+pub const RawUpdate = struct {
+    row: usize,
+    col: usize,
+    char: u21,
+    fg: ?Color,
+    bg: ?Color,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+};
+
+/// ANSI command breakdown (for debugging)
+pub const AnsiCommand = struct {
+    seq: []const u8, // The ANSI escape sequence or character
+    desc: []const u8, // Human-readable description
+};
+
+/// ANSI rendering optimization statistics
+pub const AnsiOptimizations = struct {
+    adjacent_cells_skipped: usize, // Cursor moves skipped due to adjacency
+    attribute_changes_deduped: usize, // Attribute codes skipped (already set)
+    char_zero_to_space: usize, // char=0 converted to space
+};
+
+/// Terminal updates with ANSI simulation (for debugging Terminal rendering bugs)
+pub const TerminalUpdates = struct {
+    raw_updates: []const RawUpdate, // Updates from diff algorithm
+    update_count: usize,
+    ansi_bytes: []const u8, // Complete ANSI output (exact bytes sent to Terminal)
+    ansi_breakdown: []const AnsiCommand, // Human-readable breakdown of ANSI sequences
+    optimizations: AnsiOptimizations, // Statistics on optimizations applied
 };
 
 // Tests
