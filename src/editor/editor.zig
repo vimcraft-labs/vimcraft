@@ -257,10 +257,10 @@ pub const Editor = struct {
         }
     }
 
-    /// Enter insert mode and start a transaction for undo grouping
+    /// Enter insert mode (no transaction - regular typing rebuilds line_starts immediately)
+    /// Transactions are ONLY used for bracketed paste operations in backend.zig
     fn enterInsertMode(self: *Editor) void {
         self.mode_manager.enterInsert();
-        self.buffer.beginTransaction();
     }
 
     /// Handle input in Normal mode
@@ -688,7 +688,8 @@ pub const Editor = struct {
     /// Handle input in Insert mode
     fn handleInsertMode(self: *Editor, input: []const u8) !void {
         if (input.len == 1 and input[0] == 27) { // ESC
-            // Commit any active transaction before exiting insert mode
+            // IMPORTANT: Bracketed paste in backend.zig manages transactions
+            // Regular typing has NO transaction, so only commit if one exists
             if (self.buffer.active_transaction != null) {
                 try self.buffer.commitTransaction();
             }
@@ -1124,5 +1125,29 @@ test "Editor: 'o' command opens new line AFTER current line" {
     try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.col);
 
     // Should be in insert mode
+    try std.testing.expect(editor.mode_manager.isInsert());
+}
+
+test "Editor: 'A' followed by 'ii' inserts both characters on same line" {
+    const allocator = std.testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    // Setup: README.md first line
+    try editor.buffer.content.appendSlice(allocator, "# Vimcraft\n");
+    try editor.buffer.buildLineIndex();
+
+    // Execute: A (append at end) then ii (type two i's)
+    try editor.executeKeys("Aii");
+
+    // Verify: First line should be "# Vimcraftii\n"
+    const first_line = editor.buffer.getLine(0).?;
+    try std.testing.expectEqualStrings("# Vimcraftii\n", first_line);
+
+    // Verify: Cursor should be at (0, 12) - after the two i's
+    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 12), editor.buffer.cursor.col);
+
+    // Verify: Should be in INSERT mode
     try std.testing.expect(editor.mode_manager.isInsert());
 }

@@ -599,7 +599,6 @@ pub const TerminalBackend = struct {
 
     /// Render the editor state to terminal
     pub fn render(self: *TerminalBackend) !void {
-        const render_start = std.time.nanoTimestamp();
 
         // Check if yank highlight has expired and deactivate it (passive timer approach)
         // This matches Neovim's pattern: check during render, deactivate when expired
@@ -659,11 +658,5 @@ pub const TerminalBackend = struct {
         }
 
         try self.display.flush();
-
-        const render_end = std.time.nanoTimestamp();
-        const total_ms = @divTrunc(render_end - render_start, 1_000_000);
-        if (total_ms > 100) {
-            std.debug.print("!!! TOTAL RENDER took {}ms !!!\n", .{total_ms});
-        }
     }
 };

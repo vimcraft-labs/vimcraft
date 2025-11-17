@@ -30,6 +30,7 @@ pub const CommandType = enum {
 
     // Commands
     execute_keys,
+    execute_keys_with_render_trace, // NEW: Execute keys + capture render pipeline state
     load_file,
     save_file, // NEW: Save buffer to file
     set_buffer, // NEW: Set buffer content and cursor (test setup)
@@ -90,6 +91,7 @@ pub const CommandArgs = union(enum) {
         max_bytes: ?usize, // Maximum response size in bytes (null = unlimited, but recommended for LLM: 4096-8192)
     },
     execute_keys: struct { keys: []const u8 },
+    execute_keys_with_render_trace: struct { keys: []const u8 },
     load_file: struct { path: []const u8 },
     save_file: struct { path: ?[]const u8 }, // NEW: optional path (null = use buffer.filepath)
     set_buffer: struct { lines: []const []const u8, cursor: ?Position }, // NEW: set buffer content
@@ -125,6 +127,7 @@ pub const Command = struct {
         // Free args based on type
         switch (self.args) {
             .execute_keys => |a| allocator.free(a.keys),
+            .execute_keys_with_render_trace => |a| allocator.free(a.keys),
             .load_file => |a| allocator.free(a.path),
             .save_file => |a| {
                 if (a.path) |p| allocator.free(p);
@@ -192,6 +195,7 @@ pub const ResponseResult = union(enum) {
     buffer_info: BufferInfo, // NEW: Buffer metadata
     gutter_state: GutterState, // NEW: Gutter configuration and state
     terminal_updates: TerminalUpdates, // NEW: Terminal ANSI output for debugging
+    render_trace: RenderTrace, // NEW: Render pipeline trace (captured DURING render)
     file_saved: struct { bytes_written: usize }, // NEW: File save confirmation
     execute_keys: struct { keys_processed: usize },
     assertion: AssertionResult,
@@ -338,6 +342,21 @@ pub const Response = struct {
                         allocator.free(cmd.desc);
                     }
                     allocator.free(tu.ansi_breakdown);
+                },
+                .render_trace => |rt| {
+                    // Free terminal updates
+                    allocator.free(rt.terminal_updates);
+                    // Free dirty rows
+                    allocator.free(rt.dirty_rows);
+                    // Free compositor cells
+                    allocator.free(rt.compositor_cells);
+                    // Free buffer lines
+                    for (rt.buffer_lines) |line| {
+                        allocator.free(line);
+                    }
+                    allocator.free(rt.buffer_lines);
+                    // Free mode string
+                    allocator.free(rt.mode);
                 },
                 // Other types either don't allocate or have different ownership
                 else => {},
@@ -617,6 +636,25 @@ pub const AnsiOptimizations = struct {
     adjacent_cells_skipped: usize, // Cursor moves skipped due to adjacency
     attribute_changes_deduped: usize, // Attribute codes skipped (already set)
     char_zero_to_space: usize, // char=0 converted to space
+};
+
+/// Render trace (captured DURING render, not after)
+/// This is THE KEY to debugging terminal rendering bugs without a TTY
+pub const RenderTrace = struct {
+    // What diff() generated DURING the render (before swapBuffers)
+    terminal_updates: []const RawUpdate,
+    update_count: usize,
+
+    // Dirty rows at time of diff
+    dirty_rows: []const usize,
+
+    // Compositor output grid state (for comparison)
+    compositor_cells: []const OutputCell,
+
+    // Buffer state (for verification)
+    buffer_lines: []const []const u8,
+    cursor: Position,
+    mode: []const u8,
 };
 
 /// Terminal updates with ANSI simulation (for debugging Terminal rendering bugs)

@@ -218,3 +218,170 @@ pub fn handleGetTerminalUpdates(ctx: HandlerContext) !protocol.ResponseResult {
         },
     } };
 }
+
+/// Extended context for handlers that need Editor access
+/// This is needed for execute_keys_with_render_trace which needs to call Editor.executeKeys()
+pub const ExtendedHandlerContext = struct {
+    base: HandlerContext,
+    editor_context: *@import("editor_context.zig").EditorContext, // For executeKeys access
+    highlight_config: *const @import("../../editor/config/highlights.zig").HighlightConfig,
+};
+
+/// Execute keys and capture render pipeline state DURING render (before swapBuffers)
+/// This is THE KEY to debugging terminal rendering bugs without a TTY
+///
+/// The problem with get_terminal_updates:
+/// - execute_keys → renderHeadless → swapBuffers (clears dirty flags)
+/// - get_terminal_updates → diff() returns [] (no dirty rows!)
+///
+/// This handler solves it by:
+/// - execute_keys (buffer state changes)
+/// - Manually run render steps WITHOUT swapBuffers
+/// - Capture diff() output BEFORE swapBuffers clears dirty flags
+/// - Return RenderTrace with all pipeline state
+pub fn handleExecuteKeysWithRenderTrace(
+    ext_ctx: ExtendedHandlerContext,
+    keys: []const u8,
+) !protocol.ResponseResult {
+    const ctx = ext_ctx.base;
+    const editor = ext_ctx.editor_context;
+    const highlight_config = ext_ctx.highlight_config;
+
+    // STEP 1: Execute keys to update buffer state
+    try editor.executeKeys(keys);
+
+    // STEP 2: Manually run render pipeline (same as renderHeadless but with capture)
+    const layer_renderer = @import("../terminal/display/layer_renderer.zig");
+    const ListChars = @import("../../editor/config/listchars.zig").ListChars;
+
+    // Get list/listchars options
+    const list_enabled = if (editor.options_manager) |opts|
+        opts.getBoolean("list") orelse false
+    else
+        false;
+
+    const listchars = if (editor.options_manager) |opts| blk: {
+        const lcs_str = opts.getString("listchars") orelse "tab:> ,trail:-,nbsp:+";
+        break :blk try ListChars.parse(ctx.allocator, lcs_str);
+    } else
+        ListChars{};
+
+    // Update layers from buffer state
+    try layer_renderer.updateLayers(
+        ctx.display,
+        &editor.buffer,
+        editor.mode_manager.getModeString(),
+        highlight_config,
+        &editor.visual_state,
+        &editor.yank_highlight,
+        list_enabled,
+        &listchars,
+    );
+
+    // Apply virtual text overlay
+    ctx.display.virtual_text.applyToGrid(&ctx.display.virtual_text_layer.grid);
+
+    // Composite all layers
+    try ctx.display.compositor.composite(ctx.display.layer_manager.layers.items);
+
+    // STEP 3: CRITICAL - Capture dirty rows BEFORE calling diff()
+    // (diff() doesn't modify dirty flags, but we need them for analysis)
+    const output = ctx.display.compositor.getOutput();
+    var dirty_rows = std.ArrayList(usize).empty;
+    defer dirty_rows.deinit(ctx.allocator);
+
+    var iter = output.dirty_lines.iterator(.{});
+    while (iter.next()) |row| {
+        try dirty_rows.append(ctx.allocator, row);
+    }
+
+    // STEP 4: Call diff() to generate terminal updates
+    // This is the data we COULDN'T get before (because swapBuffers cleared dirty flags)
+    const updates = try output.diff(ctx.allocator);
+    defer ctx.allocator.free(updates);
+
+    // Clone raw updates for response
+    var raw_updates = std.ArrayList(protocol.RawUpdate).empty;
+    defer raw_updates.deinit(ctx.allocator);
+
+    for (updates) |update| {
+        try raw_updates.append(ctx.allocator, protocol.RawUpdate{
+            .row = update.row,
+            .col = update.col,
+            .char = update.cell.char,
+            .fg = if (update.cell.fg) |fg| protocol.Color{
+                .r = fg.r,
+                .g = fg.g,
+                .b = fg.b,
+            } else null,
+            .bg = if (update.cell.bg) |bg| protocol.Color{
+                .r = bg.r,
+                .g = bg.g,
+                .b = bg.b,
+            } else null,
+            .bold = update.cell.bold,
+            .italic = update.cell.italic,
+            .underline = update.cell.underline,
+        });
+    }
+
+    // STEP 5: Capture compositor output grid state (for comparison/debugging)
+    var compositor_cells = std.ArrayList(protocol.OutputCell).empty;
+    defer compositor_cells.deinit(ctx.allocator);
+
+    for (0..output.height) |row| {
+        for (0..output.width) |col| {
+            const cell = output.getCell(row, col) orelse continue;
+
+            // Only include non-empty cells to reduce JSON size
+            if (cell.char == 0 and cell.fg == null and cell.bg == null) continue;
+
+            try compositor_cells.append(ctx.allocator, protocol.OutputCell{
+                .row = row,
+                .col = col,
+                .char = cell.char,
+                .fg = if (cell.fg) |fg| protocol.Color{
+                    .r = fg.r,
+                    .g = fg.g,
+                    .b = fg.b,
+                } else null,
+                .bg = if (cell.bg) |bg| protocol.Color{
+                    .r = bg.r,
+                    .g = bg.g,
+                    .b = bg.b,
+                } else null,
+            });
+        }
+    }
+
+    // STEP 6: Capture buffer state (for verification)
+    var buffer_lines = std.ArrayList([]const u8).empty;
+    defer buffer_lines.deinit(ctx.allocator);
+
+    for (0..editor.buffer.lineCount()) |i| {
+        if (editor.buffer.getLine(i)) |line| {
+            const owned = try ctx.allocator.dupe(u8, line);
+            try buffer_lines.append(ctx.allocator, owned);
+        }
+    }
+
+    const mode_str = try ctx.allocator.dupe(u8, editor.mode_manager.getModeString());
+
+    // STEP 7: NOW call swapBuffers to maintain state consistency
+    // This ensures next render sees correct previous state
+    output.swapBuffers();
+
+    // STEP 8: Return RenderTrace with all captured data
+    return .{ .render_trace = protocol.RenderTrace{
+        .terminal_updates = try raw_updates.toOwnedSlice(ctx.allocator),
+        .update_count = updates.len,
+        .dirty_rows = try dirty_rows.toOwnedSlice(ctx.allocator),
+        .compositor_cells = try compositor_cells.toOwnedSlice(ctx.allocator),
+        .buffer_lines = try buffer_lines.toOwnedSlice(ctx.allocator),
+        .cursor = .{
+            .line = editor.buffer.cursor.row,
+            .col = editor.buffer.cursor.col,
+        },
+        .mode = mode_str,
+    } };
+}

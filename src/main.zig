@@ -695,12 +695,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
                 .input;
             render_stats.recordRender(render_source);
 
-            const r1 = std.time.nanoTimestamp();
             try backend.render();
-            const r2 = std.time.nanoTimestamp();
-            if (r2 - r1 > 50_000_000) { // More than 50ms
-                std.debug.print("!!! RENDER took {}ms !!!\n", .{@divTrunc(r2 - r1, 1_000_000)});
-            }
             needs_render = false;
             editor.js_state_dirty = false; // Reset flag after render completes
         }

@@ -133,8 +133,9 @@ pub const LineNumberMode = enum {
 
 /// Calculate width needed for line numbers
 /// Uses fast integer log10 (Helix approach)
+/// IMPORTANT: Includes trailing space that renderer adds ("{d} ")
 pub fn calculateLineNumberWidth(line_count: usize) usize {
-    if (line_count == 0) return 1; // "0 " = 1 digit + space in renderer
+    if (line_count == 0) return 2; // "0 " = 1 digit + 1 space
     // Use checked_ilog10 equivalent
     var count = line_count;
     var width: usize = 1;
@@ -142,8 +143,8 @@ pub fn calculateLineNumberWidth(line_count: usize) usize {
         width += 1;
         count /= 10;
     }
-    // Width is just the digit count; renderer adds the space
-    return width;
+    // Add 1 for trailing space that renderer adds
+    return width + 1;
 }
 
 /// Absolute line number renderer
@@ -191,10 +192,10 @@ pub fn renderSignColumn(line_num: usize, cursor_line: usize, buf: []u8) usize {
 }
 
 test "calculateLineNumberWidth" {
-    try std.testing.expectEqual(@as(usize, 1), calculateLineNumberWidth(0)); // "0 " = 1 digit
-    try std.testing.expectEqual(@as(usize, 1), calculateLineNumberWidth(9)); // "9 " = 1 digit
-    try std.testing.expectEqual(@as(usize, 2), calculateLineNumberWidth(10)); // "10 " = 2 digits
-    try std.testing.expectEqual(@as(usize, 2), calculateLineNumberWidth(99)); // "99 " = 2 digits
-    try std.testing.expectEqual(@as(usize, 3), calculateLineNumberWidth(100)); // "100 " = 3 digits
-    try std.testing.expectEqual(@as(usize, 4), calculateLineNumberWidth(1000)); // "1000 " = 4 digits
+    try std.testing.expectEqual(@as(usize, 2), calculateLineNumberWidth(0)); // "0 " = 1 digit + 1 space
+    try std.testing.expectEqual(@as(usize, 2), calculateLineNumberWidth(9)); // "9 " = 1 digit + 1 space
+    try std.testing.expectEqual(@as(usize, 3), calculateLineNumberWidth(10)); // "10 " = 2 digits + 1 space
+    try std.testing.expectEqual(@as(usize, 3), calculateLineNumberWidth(99)); // "99 " = 2 digits + 1 space
+    try std.testing.expectEqual(@as(usize, 4), calculateLineNumberWidth(100)); // "100 " = 3 digits + 1 space
+    try std.testing.expectEqual(@as(usize, 5), calculateLineNumberWidth(1000)); // "1000 " = 4 digits + 1 space
 }

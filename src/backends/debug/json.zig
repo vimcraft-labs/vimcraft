@@ -75,6 +75,9 @@ fn serializeCommandArgs(args: protocol.CommandArgs, writer: anytype) !void {
         .execute_keys => |a| {
             try writer.print("{{\"keys\":\"{s}\"}}", .{a.keys});
         },
+        .execute_keys_with_render_trace => |a| {
+            try writer.print("{{\"keys\":\"{s}\"}}", .{a.keys});
+        },
         .load_file => |a| {
             try writer.print("{{\"path\":\"{s}\"}}", .{a.path});
         },
@@ -249,6 +252,9 @@ fn serializeResponseResult(result: protocol.ResponseResult, writer: anytype) !vo
         .file_saved => |fs| {
             try writer.print("{{\"bytes_written\":{d}}}", .{fs.bytes_written});
         },
+        .render_trace => |rt| {
+            try serializeRenderTrace(rt, writer);
+        },
     }
 }
 
@@ -284,6 +290,56 @@ fn serializeTerminalUpdates(tu: protocol.TerminalUpdates, writer: anytype) !void
     try writer.print("\"optimizations\":{{\"adjacent_cells_skipped\":{d},", .{tu.optimizations.adjacent_cells_skipped});
     try writer.print("\"attribute_changes_deduped\":{d},", .{tu.optimizations.attribute_changes_deduped});
     try writer.print("\"char_zero_to_space\":{d}}}}}", .{tu.optimizations.char_zero_to_space});
+}
+
+fn serializeRenderTrace(rt: protocol.RenderTrace, writer: anytype) !void {
+    // Serialize terminal updates
+    try writer.writeAll("{\"terminal_updates\":[");
+    for (rt.terminal_updates, 0..) |update, i| {
+        if (i > 0) try writer.writeAll(",");
+        try serializeRawUpdate(update, writer);
+    }
+    try writer.writeAll("],");
+    try writer.print("\"update_count\":{d},", .{rt.update_count});
+
+    // Serialize dirty rows
+    try writer.writeAll("\"dirty_rows\":[");
+    for (rt.dirty_rows, 0..) |row, i| {
+        if (i > 0) try writer.writeAll(",");
+        try writer.print("{d}", .{row});
+    }
+    try writer.writeAll("],");
+
+    // Serialize compositor cells
+    try writer.writeAll("\"compositor_cells\":[");
+    for (rt.compositor_cells, 0..) |cell, i| {
+        if (i > 0) try writer.writeAll(",");
+        try serializeOutputCell(cell, writer);
+    }
+    try writer.writeAll("],");
+
+    // Serialize buffer lines (escape newlines/quotes for valid JSON)
+    try writer.writeAll("\"buffer_lines\":[");
+    for (rt.buffer_lines, 0..) |line, i| {
+        if (i > 0) try writer.writeAll(",");
+        try writer.writeAll("\"");
+        for (line) |ch| {
+            switch (ch) {
+                '\n' => try writer.writeAll("\\n"),
+                '\r' => try writer.writeAll("\\r"),
+                '\t' => try writer.writeAll("\\t"),
+                '\\' => try writer.writeAll("\\\\"),
+                '"' => try writer.writeAll("\\\""),
+                else => try writer.writeByte(ch),
+            }
+        }
+        try writer.writeAll("\"");
+    }
+    try writer.writeAll("],");
+
+    // Serialize cursor and mode
+    try writer.print("\"cursor\":{{\"line\":{d},\"col\":{d}}},", .{ rt.cursor.line, rt.cursor.col });
+    try writer.print("\"mode\":\"{s}\"}}", .{rt.mode});
 }
 
 fn serializeLogsState(logs: protocol.LogsState, writer: anytype) !void {
@@ -491,6 +547,12 @@ fn parseCommandArgs(cmd: protocol.CommandType, args_obj: std.json.Value, allocat
             const keys = args_obj.object.get("keys").?.string;
             const owned = try allocator.dupe(u8, keys);
             break :blk .{ .execute_keys = .{ .keys = owned } };
+        },
+
+        .execute_keys_with_render_trace => blk: {
+            const keys = args_obj.object.get("keys").?.string;
+            const owned = try allocator.dupe(u8, keys);
+            break :blk .{ .execute_keys_with_render_trace = .{ .keys = owned } };
         },
 
         .load_file => blk: {

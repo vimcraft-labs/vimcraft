@@ -1067,6 +1067,25 @@ pub const Server = struct {
                 return .{ .execute_keys = .{ .keys_processed = keys.len } };
             },
 
+            .execute_keys_with_render_trace => {
+                const keys = cmd.args.execute_keys_with_render_trace.keys;
+
+                // Create extended context with Editor access
+                const ext_ctx = handlers.ExtendedHandlerContext{
+                    .base = handlers.HandlerContext{
+                        .allocator = self.allocator,
+                        .buffer = &self.editor.buffer,
+                        .mode_manager = &self.editor.mode_manager,
+                        .visual_state = &self.editor.visual_state,
+                        .display = &self.editor.display,
+                    },
+                    .editor_context = self.editor,
+                    .highlight_config = self.highlight_config,
+                };
+
+                return try handlers.handleExecuteKeysWithRenderTrace(ext_ctx, keys);
+            },
+
             .load_file => {
                 const path = cmd.args.load_file.path;
                 try self.editor.buffer.loadFile(path);

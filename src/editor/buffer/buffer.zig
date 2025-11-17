@@ -318,8 +318,6 @@ pub const Buffer = struct {
         else
             self.getCursorOffset();
 
-        // DEBUG: Removed logging to avoid test output noise
-
         // Insert character
         try self.content.insert(self.allocator, offset, char);
 

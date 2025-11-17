@@ -80,7 +80,8 @@ pub const Display = struct {
         const yank = try layer_manager.createLayer(ZIndex.SEARCH, 24, 80, "yank"); // Reuse SEARCH z-index
 
         // PHASE 6: Enable caching for static layers (huge performance win)
-        gutter_layer.setCacheable(true); // Gutter rarely changes
+        // TEMPORARY FIX: Disable gutter caching due to override bug
+        // gutter_layer.setCacheable(true); // Gutter rarely changes
         virtual_text.setCacheable(true); // Plugin-managed
 
         // Create compositor
@@ -286,9 +287,17 @@ pub const Display = struct {
             // Recalculate line number width if enabled
             if (self.line_number_config.getMode() != .none) {
                 if (self.gutter_manager.getColumn("line_numbers")) |col| {
+                    const old_width = col.cached_width;
                     const new_width = gutter.calculateLineNumberWidth(line_count);
                     col.cached_width = new_width;
                     col.cache_key = line_count;
+
+                    // CRITICAL: Mark gutter layer dirty if width changed
+                    // Without this, gutter doesn't re-render when width changes,
+                    // causing buffer content to override gutter area
+                    if (old_width != new_width) {
+                        self.gutter_layer.markDirty();
+                    }
                 }
             }
         }

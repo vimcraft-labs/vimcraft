@@ -49,12 +49,21 @@ pub const Compositor = struct {
         // Debug: Log composition start (to verify compositor is called)
         debug_log.log("[Compositor] Starting composition with {d} layers", .{layers.len});
 
-        // CRITICAL FIX: Don't clear the grid cells - only clear dirty flags!
-        // Clearing cells and then re-blending produces identical results between frames,
-        // causing diff() to generate zero updates even though lines are marked dirty.
-        // Instead, clear cells to blank AND dirty flags, then let blending overwrite.
-        // This ensures cells that AREN'T touched by any layer become blank.
-        self.output_grid.clear(); // This marks all dirty and resets to blank - needed for correctness
+        // Clear output grid (resets cells to blank and marks dirty rows)
+        self.output_grid.clear();
+
+        // CRITICAL FIX: Invalidate 'previous' buffer for dirty rows BEFORE blending
+        // This ensures diff() sees cells as different even when content is identical between frames
+        // Example: Gutter shows "4  " in frame N and frame N+1. Without this fix:
+        //   - current has "4  ", previous has "4  " → diff() sees them as equal → 0 updates → terminal never refreshes
+        // With this fix:
+        //   - We mark previous as blank for dirty rows → current has "4  ", previous has blank → diff() generates updates
+        var iter = self.output_grid.dirty_lines.iterator(.{});
+        while (iter.next()) |row| {
+            for (0..self.output_grid.width) |col| {
+                self.output_grid.previous[row][col] = .{ .char = 0, .fg = null, .bg = null };
+            }
+        }
 
         // Iterate layers in z-index order
         for (layers) |layer| {
@@ -160,6 +169,16 @@ pub const Compositor = struct {
         const height = @min(self.output_grid.height, layer.grid.height);
         const width = @min(self.output_grid.width, layer.grid.width);
 
+        // CRITICAL FIX: If layer is dirty, mark ALL its rows as dirty in output grid
+        // This ensures that when gutter content doesn't change between frames
+        // (e.g., lines 4-5 still show "4 " and "5 "), those rows still get re-rendered
+        // to the terminal to override any stale content
+        if (layer.dirty) {
+            for (0..height) |row| {
+                self.output_grid.markDirty(row);
+            }
+        }
+
         var cells_with_content: usize = 0;
         for (0..height) |row| {
             for (0..width) |col| {
@@ -180,7 +199,6 @@ pub const Compositor = struct {
                 const result = blendCell(src, dst, layer.opacity);
 
                 self.output_grid.setCell(row, col, result);
-                self.output_grid.markDirty(row); // CRITICAL FIX: Mark row as dirty so diff() will check it
                 self.stats.cells_blended += 1;
             }
         }
