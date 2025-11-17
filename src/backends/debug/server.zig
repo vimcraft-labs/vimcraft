@@ -492,6 +492,30 @@ pub const Server = struct {
             },
 
             .get_layers => {
+                // CRITICAL FIX: Trigger headless render to get FRESH layer state
+                // Same fix as get_output_grid - ensures layers show current state
+                const list_enabled = if (self.editor.options_manager) |opts|
+                    opts.getBoolean("list") orelse false
+                else
+                    false;
+
+                const listchars = if (self.editor.options_manager) |opts| blk: {
+                    const lcs_str = opts.getString("listchars") orelse "tab:> ,trail:-,nbsp:+";
+                    break :blk try ListChars.parse(self.allocator, lcs_str);
+                } else
+                    ListChars{};
+
+                try self.editor.display.renderHeadless(
+                    &self.editor.buffer,
+                    self.editor.mode_manager.getModeString(),
+                    self.highlight_config,
+                    &self.editor.visual_state,
+                    &self.editor.yank_highlight,
+                    list_enabled,
+                    &listchars,
+                );
+
+                // Now get FRESH layer state
                 const display = &self.editor.display;
                 const layer_mgr = &display.layer_manager;
                 const compositor = &display.compositor;
@@ -611,6 +635,31 @@ pub const Server = struct {
             },
 
             .get_output_grid => {
+                // CRITICAL FIX: Trigger headless render to get FRESH compositor output
+                // Without this, we return stale data from the last load_file call.
+                // This ensures debug protocol shows live, current rendering state.
+                const list_enabled = if (self.editor.options_manager) |opts|
+                    opts.getBoolean("list") orelse false
+                else
+                    false;
+
+                const listchars = if (self.editor.options_manager) |opts| blk: {
+                    const lcs_str = opts.getString("listchars") orelse "tab:> ,trail:-,nbsp:+";
+                    break :blk try ListChars.parse(self.allocator, lcs_str);
+                } else
+                    ListChars{};
+
+                try self.editor.display.renderHeadless(
+                    &self.editor.buffer,
+                    self.editor.mode_manager.getModeString(),
+                    self.highlight_config,
+                    &self.editor.visual_state,
+                    &self.editor.yank_highlight,
+                    list_enabled,
+                    &listchars,
+                );
+
+                // Now compositor has FRESH data - get it
                 const display = &self.editor.display;
                 const compositor = &display.compositor;
                 const output = compositor.getOutput();
@@ -1011,9 +1060,9 @@ pub const Server = struct {
                 try self.editor.executeKeys(keys);
 
                 // PERFORMANCE FIX: Don't render after every execute_keys!
-                // Rendering happens ONLY when state is queried (get_layers, get_output_grid, etc.)
-                // This prevents 400× renderHeadless() calls when pasting 400 characters
-                // Old code was calling renderHeadless() here - massive performance bug
+                // Rendering is deferred until compositor output is queried (get_output_grid, get_layers).
+                // This prevents 400× renderHeadless() calls when pasting 400 characters.
+                // Old code was calling renderHeadless() here - massive performance bug.
 
                 return .{ .execute_keys = .{ .keys_processed = keys.len } };
             },
