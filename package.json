@@ -1,6 +1,6 @@
 {
   "name": "vimcraft",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "**Status**: ✅ Zig executes JavaScript via Hermes + JSI bridge working",
   "main": "init.js",
   "directories": {

@@ -141,39 +141,6 @@ pub fn build(b: *std.Build) void {
     };
 
     // ============================================================================
-    // Filetype Data Generation (from Neovim)
-    // ============================================================================
-    // Generate src/editor/treesitter/filetype_data.zig from Neovim's filetype.lua
-    // Extracts 1,405+ filetype mappings at build time for compile-time initialization
-    const filetype_data = blk: {
-        // Build the generator executable
-        const generate_exe = b.addExecutable(.{
-            .name = "generate-filetype-data",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("scripts/generate_filetype_data.zig"),
-                .target = b.graph.host,
-                .optimize = .ReleaseFast,
-            }),
-        });
-
-        // Run the generator
-        const generate_run = b.addRunArtifact(generate_exe);
-
-        // Track Neovim's filetype.lua as input dependency
-        // When this file changes, Zig will automatically re-run the generator
-        generate_run.addFileInput(b.path("vendor/neovim/runtime/lua/vim/filetype.lua"));
-
-        // Capture generated Zig code from stdout
-        const wf = b.addWriteFiles();
-        const filetype_output = wf.addCopyFile(
-            generate_run.captureStdOut(),
-            "filetype_data.zig",
-        );
-
-        break :blk filetype_output;
-    };
-
-    // ============================================================================
     // C Library: libvterm (from Neovim) - DEFERRED
     // ============================================================================
     // NOTE: libvterm has dependencies on many Neovim internal headers
@@ -235,12 +202,6 @@ pub fn build(b: *std.Build) void {
     unicode_tables.addStepDependencies(&exe.step);
     exe.root_module.addAnonymousImport("unicode_tables", .{
         .root_source_file = unicode_tables,
-    });
-
-    // Add filetype_data dependency (must be generated before compilation)
-    filetype_data.addStepDependencies(&exe.step);
-    exe.root_module.addAnonymousImport("filetype_data", .{
-        .root_source_file = filetype_data,
     });
 
     // Add Ghostty's grapheme module with its dependencies
@@ -324,6 +285,32 @@ pub fn build(b: *std.Build) void {
     // Release workflow will replace these with @executable_path/../lib (macOS) or $ORIGIN/../lib (Linux)
     exe.addRPath(b.path("vendor/hermes/build/API/hermes"));
     exe.addRPath(b.path("vendor/hermes/build/jsi"));
+
+    // ============================================================================
+    // go-enry (Language Detection)
+    // ============================================================================
+    // Link go-enry shared library for filetype detection
+    // Provides GitHub Linguist-based language detection (697 languages)
+    // Replaces compile-time Neovim mappings with content-based detection
+    //
+    // Build instructions:
+    //   macOS:   ./scripts/build-enry.sh darwin
+    //   Linux:   ./scripts/build-enry.sh linux
+    //   Windows: ./scripts/build-enry.sh windows
+    //
+    // Platform-specific library path
+    const enry_lib_path = if (target.result.os.tag == .linux)
+        "vendor/go-enry/.shared/linux"
+    else if (target.result.os.tag == .windows)
+        "vendor/go-enry/.shared/windows"
+    else
+        "vendor/go-enry/.shared/darwin"; // macOS default
+
+    exe.addLibraryPath(b.path(enry_lib_path));
+    exe.linkSystemLibrary("enry");
+
+    // Set RPATH for go-enry dynamic library
+    exe.addRPath(b.path(enry_lib_path));
 
     // ============================================================================
     // libuv (Event Loop & Async I/O)
@@ -428,12 +415,6 @@ pub fn build(b: *std.Build) void {
 
     // Add uucode module
     bench.root_module.addImport("uucode", uucode_module);
-
-    // Add filetype_data dependency for benchmarks
-    filetype_data.addStepDependencies(&bench.step);
-    bench.root_module.addAnonymousImport("filetype_data", .{
-        .root_source_file = filetype_data,
-    });
 
     // Add C++ source files
     bench.addCSourceFile(.{
@@ -549,12 +530,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = unicode_tables,
     });
 
-    // Add filetype_data dependency for tests
-    filetype_data.addStepDependencies(&unit_tests.step);
-    unit_tests.root_module.addAnonymousImport("filetype_data", .{
-        .root_source_file = filetype_data,
-    });
-
     // Add ghostty_grapheme module for tests (same as main exe)
     unit_tests.root_module.addImport("ghostty_grapheme", ghostty_grapheme_mod);
 
@@ -599,6 +574,11 @@ pub fn build(b: *std.Build) void {
     // Link directly to our vendored libuv to avoid Homebrew conflicts
     unit_tests.addObjectFile(b.path("vendor/libuv/build/libuv.a"));
 
+    // go-enry for tests (same platform as main exe)
+    unit_tests.addLibraryPath(b.path(enry_lib_path));
+    unit_tests.linkSystemLibrary("enry");
+    unit_tests.addRPath(b.path(enry_lib_path));
+
     // OpenSSL for Linux (WebSocket SHA1 hashing) - all Linux builds
     if (is_linux) {
         const lib_dir = switch (target.result.cpu.arch) {
@@ -640,6 +620,78 @@ pub fn build(b: *std.Build) void {
 
     const pty_test_step = b.step("pty_tests", "Run PTY integration tests (requires vimc built)");
     pty_test_step.dependOn(&run_pty_tests.step);
+
+    // ============================================================================
+    // JSI HostObject Performance Benchmark
+    // ============================================================================
+    const jsi_bench = b.addExecutable(.{
+        .name = "jsi-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/jsi_bench_main.zig"),
+            .target = target,
+            .optimize = .ReleaseFast, // Use optimized build for accurate benchmarks
+        }),
+    });
+
+    // Link C and C++ for Hermes
+    jsi_bench.linkLibC();
+    jsi_bench.linkLibCpp();
+
+    // Ghostty components (for Buffer dependencies)
+    jsi_bench.addIncludePath(b.path("vendor/ghostty/src"));
+
+    // Hermes include paths
+    jsi_bench.addIncludePath(b.path("src"));
+    jsi_bench.addIncludePath(b.path("vendor/hermes/API"));
+    jsi_bench.addIncludePath(b.path("vendor/hermes/API/jsi"));
+    jsi_bench.addIncludePath(b.path("vendor/hermes/public"));
+
+    // Add uucode module (required by Buffer)
+    jsi_bench.root_module.addImport("uucode", uucode_module);
+
+    // Add unicode_tables import (required by grapheme)
+    unicode_tables.addStepDependencies(&jsi_bench.step);
+    jsi_bench.root_module.addAnonymousImport("unicode_tables", .{
+        .root_source_file = unicode_tables,
+    });
+
+    // Add ghostty_grapheme module (required by Buffer)
+    jsi_bench.root_module.addImport("ghostty_grapheme", ghostty_grapheme_mod);
+
+    // Add C++ source files
+    jsi_bench.addCSourceFile(.{
+        .file = b.path("src/system/jsi/hermes_c_api.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    jsi_bench.addCSourceFile(.{
+        .file = b.path("vendor/hermes/API/jsi/jsi/jsi.cpp"),
+        .flags = &[_][]const u8{
+            "-std=c++17",
+            "-fno-sanitize=all",
+        },
+    });
+
+    // Link Hermes dynamically
+    jsi_bench.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
+    jsi_bench.addLibraryPath(b.path("vendor/hermes/build/jsi"));
+    jsi_bench.linkSystemLibrary("hermes_lean");
+    jsi_bench.linkSystemLibrary("jsi");
+
+    // Set RPATH for finding Hermes libraries at runtime
+    jsi_bench.addRPath(b.path("vendor/hermes/build/API/hermes"));
+    jsi_bench.addRPath(b.path("vendor/hermes/build/jsi"));
+
+    b.installArtifact(jsi_bench);
+
+    const run_jsi_bench = b.addRunArtifact(jsi_bench);
+    run_jsi_bench.step.dependOn(b.getInstallStep());
+
+    const jsi_bench_step = b.step("jsi-bench", "Run JSI HostObject performance benchmark");
+    jsi_bench_step.dependOn(&run_jsi_bench.step);
 
     // ============================================================================
     // NOTE: Hermes+JSI Integration

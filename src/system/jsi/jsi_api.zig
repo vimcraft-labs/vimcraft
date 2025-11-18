@@ -22,6 +22,7 @@ pub const layer_api = @import("layer_api.zig");
 pub const motion_api = @import("motion_api.zig");
 pub const keymap_api = @import("keymap_api.zig");
 pub const filetype_api = @import("filetype_api.zig");
+pub const buffer_api = @import("buffer_api.zig");
 pub const loader = @import("loader.zig");
 
 /// Context struct for host functions
@@ -81,6 +82,7 @@ pub fn initJSI(
 
     // Register configuration API (setHighlight, setOption, getOption)
     config_api.register(runtime, cfg_ctx);
+    config_api.registerLegacy(runtime, cfg_ctx); // Register helper functions (getAllOptions, getAllOptionsWithScope)
 
     // Register console API (consoleLog)
     console_api.register(runtime);
@@ -102,6 +104,10 @@ pub fn initJSI(
     // Register filetype API (vim.filetype.match)
     // Both Editor and EditorContext have ts_loader, so register for both
     filetype_api.register(runtime, editor_or_context, allocator);
+
+    // Register buffer API (vim.buffer.getContent, vim.buffer.getLineContent, etc.)
+    // Both Editor and EditorContext have buffer, so register for both
+    buffer_api.register(runtime, cfg_ctx.buffer.?);
 
     // Register layer API (createLayer, renderVirtualText, setLayerOpacity, etc.)
     layer_api.register(runtime, display);

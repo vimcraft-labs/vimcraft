@@ -63,6 +63,11 @@ jobs:
         with:
           version: 0.15.2
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -177,6 +182,51 @@ jobs:
           # Verify library exists
           ls -lh vendor/libuv/build/ || echo "Warning: libuv/build directory missing"
 
+      - name: Cache go-enry build
+        id: cache-enry
+        uses: actions/cache@v4
+        with:
+          path: vendor/go-enry/.shared
+          key: enry-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/go-enry/shared/**/*.go') }}
+          restore-keys: |
+            enry-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build go-enry
+        run: |
+          # Detect platform
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            ENRY_LIB="vendor/go-enry/.shared/linux/libenry.so"
+            PLATFORM="linux"
+          else
+            ENRY_LIB="vendor/go-enry/.shared/darwin/libenry.dylib"
+            PLATFORM="darwin"
+          fi
+
+          # Check if already built
+          ENRY_BUILT=false
+          [ -f "$ENRY_LIB" ] && ENRY_BUILT=true
+
+          if [ "$ENRY_BUILT" = false ]; then
+            echo "Building go-enry for $PLATFORM..."
+            # Use single-arch build for CI/CD (avoids CGO cross-compilation issues)
+            ENRY_SINGLE_ARCH=1 ./scripts/build-enry.sh "$PLATFORM"
+            echo "✓ go-enry built successfully"
+          else
+            echo "✓ go-enry found in cache"
+          fi
+
+          # Verify shared library exists and check architecture
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            ls -lh "$ENRY_LIB"
+            # Verify architecture matches runner
+            file "$ENRY_LIB" || echo "Warning: file check failed"
+            lipo -info "$ENRY_LIB" || echo "Warning: lipo check failed"
+            # Verify install name has @rpath prefix
+            otool -L "$ENRY_LIB" | head -3 || echo "Warning: otool check failed"
+          else
+            ls -lh "$ENRY_LIB"
+          fi
+
       - name: Build Vimcraft
         run: |
           # Show versions
@@ -196,6 +246,7 @@ jobs:
             # macOS: Delete build-time RPATHs and add release RPATH
             install_name_tool -delete_rpath "$(pwd)/vendor/hermes/build/API/hermes" zig-out/bin/vimc || true
             install_name_tool -delete_rpath "$(pwd)/vendor/hermes/build/jsi" zig-out/bin/vimc || true
+            install_name_tool -delete_rpath "$(pwd)/vendor/go-enry/.shared/darwin" zig-out/bin/vimc || true
             install_name_tool -add_rpath "@executable_path/../lib" zig-out/bin/vimc
           else
             # Linux: Replace all RPATHs with release RPATH
@@ -245,10 +296,12 @@ jobs:
           if [ "$RUNNER_OS" == "Linux" ]; then
             cp vendor/hermes/build/API/hermes/libhermes_lean.so vimcraft-package/lib/
             cp vendor/hermes/build/jsi/libjsi.so vimcraft-package/lib/
+            cp vendor/go-enry/.shared/linux/libenry.so vimcraft-package/lib/
           else
             # macOS: Copy .dylib files
             cp vendor/hermes/build/API/hermes/libhermes_lean.dylib vimcraft-package/lib/ || echo "Warning: libhermes_lean.dylib not found"
             cp vendor/hermes/build/jsi/libjsi.dylib vimcraft-package/lib/ || echo "Warning: libjsi.dylib not found"
+            cp vendor/go-enry/.shared/darwin/libenry.dylib vimcraft-package/lib/ || echo "Warning: libenry.dylib not found"
           fi
 
           # Create tarball (with bin/ and lib/ directories)

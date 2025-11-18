@@ -91,6 +91,19 @@ Welcome to Vimcraft development! This guide will help you set up your developmen
 - JSI bridge requirements
 - Test strategy for timeout behavior
 
+### [go-enry Integration Guide](./go-enry-integration.md)
+**Purpose**: Complete guide to language detection via go-enry (GitHub Linguist)
+**Read if**: You're working with language detection, building for production, or troubleshooting runtime issues
+**Key topics**:
+- go-enry architecture (697 languages supported)
+- Building go-enry for macOS, Linux, and Windows
+- Cross-platform deployment strategies
+- Error handling and validation
+- Memory management with arena allocators
+- Platform-specific dynamic linking (RPATH, install names)
+- CI/CD integration
+- Comprehensive troubleshooting guide
+
 ---
 
 ## 🚀 Quick Start (15 Minutes)

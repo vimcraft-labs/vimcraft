@@ -1,21 +1,21 @@
 /// Filetype API Module
 /// Handles filetype detection for JavaScript plugins
 /// Exposes vim.filetype.match() API compatible with Neovim
+/// Uses go-enry for GitHub Linguist-based language detection (697 languages)
 const std = @import("std");
 const Editor = @import("../../editor/editor.zig").Editor;
 const helpers = @import("helpers.zig");
-const Loader = @import("../../editor/treesitter/loader.zig").Loader;
+const enry = @import("../enry/enry.zig");
 const Buffer = @import("../../editor/buffer/buffer.zig").Buffer;
 
 // Import shared Hermes C API
 const c_api = @import("c_api.zig");
 const c = c_api.c;
 
-/// Context struct that works with both Editor and EditorContext
-/// Both types have ts_loader and buffer fields
+/// Context struct for filetype detection
 const FiletypeContext = struct {
-    ts_loader: *Loader,
     buffer: *Buffer,
+    allocator: std.mem.Allocator,
 };
 
 /// Global context (allocated on heap, cleaned up in jsi_api.deinitJSI())
@@ -26,12 +26,12 @@ var global_allocator: ?std.mem.Allocator = null;
 /// Detects filetype from filename or buffer
 ///
 /// JavaScript API:
-///   vim.filetype.match({ filename: "foo.rs" })      // returns "rust"
-///   vim.filetype.match({ filename: "Makefile" })    // returns "make"
+///   vim.filetype.match({ filename: "foo.rs" })      // returns "Rust"
+///   vim.filetype.match({ filename: "Makefile" })    // returns "Makefile"
 ///   vim.filetype.match({ buf: 0 })                  // returns filetype for current buffer
 ///
-/// Uses Neovim's comprehensive filetype database (1,437+ compile-time mappings)
-export fn vim_filetype_match(
+/// Uses go-enry for GitHub Linguist-based language detection (697 languages)
+pub export fn vim_filetype_match(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -60,15 +60,41 @@ export fn vim_filetype_match(
             return c.hermes_value_create_null(runtime);
         };
 
-        // Detect filetype from filename
-        const filetype = ctx.ts_loader.detectFiletype(filename, null);
+        // Smart content detection: if filename matches current buffer's filepath,
+        // use buffer content for better accuracy (helps disambiguate .rs, .h, etc.)
+        const content = blk: {
+            if (ctx.buffer.filepath) |buf_path| {
+                // Check if filename matches buffer path (basename or full path)
+                const buf_basename = std.fs.path.basename(buf_path);
+                const filename_basename = std.fs.path.basename(filename);
+
+                if (std.mem.eql(u8, filename, buf_path) or
+                    std.mem.eql(u8, filename_basename, buf_basename)) {
+                    // Filename matches loaded buffer - use content for accuracy
+                    break :blk if (ctx.buffer.content.items.len > 0)
+                        ctx.buffer.content.items
+                    else
+                        null;
+                }
+            }
+            // No match - filename-only detection
+            break :blk null;
+        };
+
+        // Detect language from filename using go-enry (with content if available)
+        const language = enry.detectLanguage(ctx.allocator, filename, content) catch {
+            c.hermes_value_destroy(filename_prop);
+            return c.hermes_value_create_null(runtime);
+        };
         c.hermes_value_destroy(filename_prop);
 
-        if (filetype) |ft| {
-            // Return filetype string
-            return c.hermes_value_create_string(runtime, ft.ptr, ft.len);
+        if (language) |lang| {
+            // Return language string (enry allocates, we need to copy for Hermes then free enry's)
+            const result = c.hermes_value_create_string(runtime, lang.ptr, lang.len);
+            ctx.allocator.free(lang); // Free enry's allocation
+            return result;
         } else {
-            // Unknown filetype
+            // Unknown language
             return c.hermes_value_create_null(runtime);
         }
     }
@@ -92,24 +118,24 @@ export fn vim_filetype_match(
             return c.hermes_value_create_null(runtime);
         };
 
-        // Get first line of buffer for shebang detection
-        var first_line: ?[]const u8 = null;
-        if (ctx.buffer.content.items.len > 0) {
-            // Find end of first line
-            const content = ctx.buffer.content.items;
-            var end: usize = 0;
-            while (end < content.len and content[end] != '\n') : (end += 1) {}
-            first_line = content[0..end];
-        }
+        // Get buffer content for language detection (helps with ambiguous extensions)
+        const content = if (ctx.buffer.content.items.len > 0)
+            ctx.buffer.content.items
+        else
+            null;
 
-        // Detect filetype
-        const filetype = ctx.ts_loader.detectFiletype(path, first_line);
+        // Detect language using go-enry (filename + content for best accuracy)
+        const language = enry.detectLanguage(ctx.allocator, path, content) catch {
+            return c.hermes_value_create_null(runtime);
+        };
 
-        if (filetype) |ft| {
-            // Return filetype string
-            return c.hermes_value_create_string(runtime, ft.ptr, ft.len);
+        if (language) |lang| {
+            // Return language string (enry allocates, we need to copy for Hermes then free enry's)
+            const result = c.hermes_value_create_string(runtime, lang.ptr, lang.len);
+            ctx.allocator.free(lang); // Free enry's allocation
+            return result;
         } else {
-            // Unknown filetype
+            // Unknown language
             return c.hermes_value_create_null(runtime);
         }
     }
@@ -118,15 +144,96 @@ export fn vim_filetype_match(
     return c.hermes_value_create_null(runtime);
 }
 
-/// Register filetype API functions with runtime
-/// Works with both *Editor and *EditorContext (both have ts_loader and buffer fields)
+// ============================================================================
+// HostObject Implementation (Zero-Copy JSI)
+// ============================================================================
+
+/// vim.filetype HostObject getter - routes property access to methods
+pub export fn filetypeHostObjectGet(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    prop_name: [*c]const u8,
+) callconv(.c) ?*c.OVHermesValue {
+    const rt = runtime orelse return null;
+    const name = std.mem.span(prop_name);
+
+    // Use StaticStringMap for O(1) property dispatch
+    const PropertyMap = std.StaticStringMap(*const fn (
+        ?*c.OVHermesRuntime,
+        ?*anyopaque,
+        [*c]?*c.OVHermesValue,
+        usize,
+    ) callconv(.c) ?*c.OVHermesValue).initComptime(.{
+        .{ "match", vim_filetype_match },
+    });
+
+    const func = PropertyMap.get(name) orelse return null;
+
+    // Return function value (wrapped by C++ CustomHostObject)
+    return c.hermes_create_function(rt, prop_name, func, context);
+}
+
+/// vim.filetype HostObject enumerator - returns array of method names
+pub export fn filetypeHostObjectEnumerator(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+    const rt = runtime orelse return null;
+
+    const method_names = [_][]const u8{
+        "match",
+    };
+
+    const arr = c.hermes_array_create(rt, method_names.len) orelse return null;
+
+    for (method_names, 0..) |name, i| {
+        const str = c.hermes_value_create_string(rt, name.ptr, name.len) orelse continue;
+        c.hermes_array_set(rt, arr, i, str);
+        c.hermes_value_destroy(str);
+    }
+
+    return arr;
+}
+
+// ============================================================================
+// Registration
+// ============================================================================
+
+/// Register filetype API as HostObject (zero-copy, 3-5x faster)
+/// JavaScript usage: vim.filetype.match({ filename: "foo.rs" })
+/// Works with both *Editor and *EditorContext (both have buffer fields)
 /// Note: Allocator must be passed in from jsi_api.initJSI()
 pub fn register(runtime: *c.OVHermesRuntime, editor_or_context: anytype, allocator: std.mem.Allocator) void {
     // Allocate FiletypeContext on heap (cleaned up in jsi_api.deinitJSI())
     const ctx = allocator.create(FiletypeContext) catch @panic("Failed to allocate FiletypeContext");
     ctx.* = FiletypeContext{
-        .ts_loader = &editor_or_context.ts_loader,
         .buffer = &editor_or_context.buffer,
+        .allocator = allocator,
+    };
+
+    // Store in globals for cleanup
+    global_filetype_ctx = ctx;
+    global_allocator = allocator;
+
+    c.hermes_register_host_object(
+        runtime,
+        "vimFiletype",
+        filetypeHostObjectGet,
+        null, // No setter (read-only methods)
+        filetypeHostObjectEnumerator,
+        @ptrCast(ctx),
+    );
+}
+
+/// Legacy registration (backwards compatibility)
+/// TODO: Remove after all examples/tests updated
+pub fn registerLegacy(runtime: *c.OVHermesRuntime, editor_or_context: anytype, allocator: std.mem.Allocator) void {
+    // Allocate FiletypeContext on heap (cleaned up in jsi_api.deinitJSI())
+    const ctx = allocator.create(FiletypeContext) catch @panic("Failed to allocate FiletypeContext");
+    ctx.* = FiletypeContext{
+        .buffer = &editor_or_context.buffer,
+        .allocator = allocator,
     };
 
     // Store in globals for cleanup

@@ -33,6 +33,11 @@ jobs:
         with:
           version: 0.15.2
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -103,6 +108,30 @@ jobs:
             echo "✓ libuv found in cache"
           fi
 
+      - name: Cache go-enry build
+        id: cache-enry
+        uses: actions/cache@v4
+        with:
+          path: vendor/go-enry/.shared
+          key: enry-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/go-enry/shared/**/*.go') }}
+          restore-keys: |
+            enry-ci-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build go-enry
+        run: |
+          ENRY_BUILT=false
+          [ -f "vendor/go-enry/.shared/linux/libenry.so" ] && ENRY_BUILT=true
+
+          if [ "$ENRY_BUILT" = false ]; then
+            echo "Building go-enry for Linux..."
+            ./scripts/build-enry.sh linux
+          else
+            echo "✓ go-enry found in cache"
+          fi
+
+          # Verify
+          ls -lh vendor/go-enry/.shared/linux/libenry.so
+
       - name: Check Zig formatting
         run: |
           zig fmt --check src/
@@ -113,9 +142,9 @@ jobs:
 
       - name: Run tests
         run: |
-          zig build test
+          LD_LIBRARY_PATH=vendor/go-enry/.shared/linux zig build test
 
       - name: Smoke test binary
         run: |
-          ./zig-out/bin/vimc --version || true
-          echo '{"cmd":"get_state","id":"1"}' | timeout 2 ./zig-out/bin/vimc --debug-protocol || true
+          LD_LIBRARY_PATH=vendor/go-enry/.shared/linux ./zig-out/bin/vimc --version || true
+          echo '{"cmd":"get_state","id":"1"}' | LD_LIBRARY_PATH=vendor/go-enry/.shared/linux timeout 2 ./zig-out/bin/vimc --debug-protocol || true
