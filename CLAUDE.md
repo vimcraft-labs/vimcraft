@@ -8,7 +8,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 - [Testing Architecture](#testing-architecture-hybrid-approach) - PTY + Debug Protocol (complementary systems)
 - [Test-Driven Development (TDD)](#test-driven-development-tdd) - MANDATORY workflow: write tests first
 - [Logging Architecture](#logging-architecture) - Use `editor.logger`, not `std.debug.print`
-- [Debugging Principles](#debugging-principles) - 7 proven principles for efficient bug fixing
+- [Debugging Principles](#debugging-principles) - 8 proven principles + tool selection guide
 - [Build Commands](#build-commands) - How to build and run
 
 **Project Info**: [Overview](#project-overview) · [Architecture](#architecture) · [Key Files](#key-files) · [Navigation](#navigation-commands) · [Roadmap](#roadmap)
@@ -189,7 +189,7 @@ kill $PID
 
 ## Debugging Principles
 
-**7 Proven Principles** (from cursorline bug fix):
+**8 Proven Principles** (from cursorline and cursor flickering bug fixes):
 
 1. **Simplest Test Case** - Single file, minimal content (not full app)
 2. **Trust User Reports** - Don't over-theorize, believe symptom descriptions
@@ -198,6 +198,90 @@ kill $PID
 5. **Log Transformations** - Show before→after, not just final state
 6. **Targeted Tests** - Verify fix + edge cases + no side effects
 7. **Follow Breadcrumbs** - User reports contain critical clues
+8. **Use the Right Tool** - Debug Protocol for logic bugs, PTY for rendering bugs
+
+### Debug Protocol vs PTY Testing: Real-World Case Study
+
+**Cursor Flickering Bug** (January 2025) - Perfect example of tool selection:
+
+**Bug**: Cursor flickered between bright/faded states during rapid input (holding 'j')
+
+**What Debug Protocol Shows** (not helpful for this bug):
+```json
+{"mode":"NORMAL","cursor":{"line":10,"col":0}}  // Internal state correct ✅
+// But NO information about terminal escape codes being sent!
+```
+
+**What PTY Testing Would Catch** (immediately reveals the problem):
+```zig
+test "cursor codes not redundant" {
+    var pty = try PTY.spawn("./zig-out/bin/vimcraft");
+
+    // Hold 'j' for rapid movement
+    for (0..20) |_| {
+        try pty.send("j");
+        std.time.sleep(10 * std.time.ns_per_ms);
+    }
+
+    const output = try pty.readAll();
+    // Count escape codes: \x1b[?25l (hide), \x1b[?25h (show)
+    const hide_count = std.mem.count(u8, output, "\x1b[?25l");
+    const show_count = std.mem.count(u8, output, "\x1b[?25h");
+
+    // FAIL: Expected 0, got 20! (cursor toggled on EVERY render)
+    try expectEqual(@as(usize, 0), hide_count);
+}
+```
+
+**Root Causes Found** (only discoverable via terminal output inspection):
+1. Redundant cursor shape codes (`\x1b[2 q`) sent 20× per second
+2. Redundant cursor visibility toggle (`\x1b[?25l`, `\x1b[?25h`) 40× per second
+
+**Key Insight**: Debug Protocol shows state is correct, but PTY testing reveals rendering bugs. Neither tool alone is sufficient - you need BOTH!
+
+### Tool Selection Guide
+
+**Use Debug Protocol When**:
+- ✅ Debugging crashes/panics (exact stack traces)
+- ✅ Verifying internal state (cursor position, mode, buffer content)
+- ✅ Tracing logic errors (wrong calculations, incorrect flow)
+- ✅ Inspecting layer composition (what's enabled/dirty)
+- ✅ Analyzing logs for state transitions
+
+**Use PTY Testing When**:
+- ✅ Validating terminal output (ANSI escape codes)
+- ✅ Catching visual artifacts (flickering, incorrect colors)
+- ✅ Testing timing-sensitive bugs (rapid input handling)
+- ✅ Verifying user experience (what user actually sees)
+- ✅ Counting redundant operations (escape code frequency)
+
+**Use BOTH When**:
+- ✅ Complex bugs with state + rendering components
+- ✅ First reproducing with PTY, then diagnosing with Debug Protocol
+- ✅ Verifying complete fix (state correct AND rendering smooth)
+
+### Common Bug Patterns by Tool
+
+**Caught by Debug Protocol**:
+- Early return optimization → Skips validation (check opacity >= 1.0 returns)
+- Type conversion → Loses data (@intFromFloat with NaN/Infinity)
+- Null handling → Assumes non-null when optional (check .? usage)
+- State transitions → Mode not changing, cursor wrong position
+- Logic errors → Wrong calculations, incorrect conditions
+
+**Caught ONLY by PTY Testing**:
+- Redundant escape codes → Terminal codes sent unnecessarily
+- Visual flickering → Cursor visibility toggled too often
+- Color bleeding → ANSI reset codes missing
+- Terminal-specific bugs → Works in one terminal, breaks in another
+- Performance issues → Too many escape codes overwhelming terminal
+
+**Requires Both Tools**:
+- Input handling bugs → Key processed (Debug) but display wrong (PTY)
+- Rendering pipeline bugs → State correct but output corrupted
+- Timing bugs → State updates but render lags
+
+### Debugging Workflow Examples
 
 **Mandatory Workflow for Crashes**:
 ```
@@ -227,11 +311,20 @@ echo '{"cmd":"get_logs","args":{"max_bytes":4096},"id":"3"}'  # Check blend/diff
 # Bug is in the stage where data exists before but not after
 ```
 
-**Common Bug Patterns** (recognize and fix fast):
-- Early return optimization → Skips validation (check opacity >= 1.0 returns)
-- Type conversion → Loses data (@intFromFloat with NaN/Infinity)
-- Null handling → Assumes non-null when optional (check .? usage)
-- Dirty tracking → Changes not marked, diff misses them
+**Terminal Output Bug Workflow** (NEW):
+```bash
+# Step 1: Write PTY test to capture actual output
+zig test src/backends/terminal/tests/output_test.zig
+
+# Step 2: Parse terminal output for escape codes
+# Look for patterns like:
+# - Redundant codes (same code sent multiple times)
+# - Missing codes (expected code not present)
+# - Wrong order (codes sent in incorrect sequence)
+
+# Step 3: Add state tracking to prevent redundancy
+# Example: track last_cursor_shape to avoid re-sending
+```
 
 **Add Debug Logs When Investigating** (make data flow visible):
 ```zig
@@ -239,9 +332,15 @@ echo '{"cmd":"get_logs","args":{"max_bytes":4096},"id":"3"}'  # Check blend/diff
 editor.logger.debug("TRANSFORM[{s}]: before={} after={}", .{component, before, after});
 editor.logger.debug("LAYER[{s}]: enabled={} dirty={} cells={}", .{name, enabled, dirty, count});
 editor.logger.debug("BLEND: src={u} dst={u} result={u}", .{src.char, dst.char, result.char});
+
+// NEW: Log terminal escape codes for PTY debugging
+editor.logger.debug("ESCAPE: sending {s}", .{escape_code});
+editor.logger.debug("CURSOR: shape={s} visibility={}", .{shape, visible});
 ```
 
-**Success Metrics**: Fix in 1-2 iterations (not 5-10), root cause identified (not guessed), verified with debug protocol.
+**Success Metrics**: Fix in 1-2 iterations (not 5-10), root cause identified (not guessed), verified with BOTH debug protocol AND PTY tests.
+
+**Reference**: See [docs/bugfixes/cursor-flickering-fix.md](docs/bugfixes/cursor-flickering-fix.md) for detailed case study.
 
 ## Test-Driven Development (TDD)
 
