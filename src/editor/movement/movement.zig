@@ -401,6 +401,52 @@ pub fn moveToViewportBottom(buffer: *Buffer, viewport_top: usize, viewport_heigh
     moveToFirstNonBlank(buffer); // Move to first non-blank char (Vim behavior)
 }
 
+/// Center current line in viewport (zz)
+/// Returns the new viewport_top position
+pub fn centerLineInViewport(cursor_row: usize, viewport_height: usize, buffer_line_count: usize) usize {
+    const half_height = viewport_height / 2;
+
+    // Try to center the cursor line
+    if (cursor_row >= half_height) {
+        const new_top = cursor_row - half_height;
+        // Make sure we don't scroll past the end
+        const max_top = if (buffer_line_count > viewport_height)
+            buffer_line_count - viewport_height
+        else
+            0;
+        return @min(new_top, max_top);
+    }
+
+    // Cursor is in the first half of the file, show from top
+    return 0;
+}
+
+/// Move current line to top of viewport (zt)
+/// Returns the new viewport_top position
+pub fn moveLineToViewportTop(cursor_row: usize, buffer_line_count: usize, viewport_height: usize) usize {
+    _ = viewport_height;
+    _ = buffer_line_count;
+    return cursor_row;
+}
+
+/// Move current line to bottom of viewport (zb)
+/// Returns the new viewport_top position
+pub fn moveLineToViewportBottom(cursor_row: usize, viewport_height: usize, buffer_line_count: usize) usize {
+    // Try to position cursor line at bottom
+    if (cursor_row + 1 >= viewport_height) {
+        const new_top = (cursor_row + 1) - viewport_height;
+        // Make sure we don't scroll past the end
+        const max_top = if (buffer_line_count > viewport_height)
+            buffer_line_count - viewport_height
+        else
+            0;
+        return @min(new_top, max_top);
+    }
+
+    // File is too short, show from top
+    return 0;
+}
+
 // Tests
 test "Movement: basic hjkl" {
     const allocator = std.testing.allocator;

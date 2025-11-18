@@ -117,6 +117,10 @@ pub const EditorContext = struct {
     cmd_buffer: CommandBuffer,
     mapping_depth: usize = 0,
 
+    // Viewport commands - set when ready for execution
+    viewport_movement: ?u8 = null, // H/M/L - move cursor to viewport top/middle/bottom
+    viewport_adjustment: ?u8 = null, // zz/zt/zb - adjust viewport to center/top/bottom current line
+
     pub fn init(allocator: std.mem.Allocator) !EditorContext {
         var buffer = Buffer.init(allocator);
         errdefer buffer.deinit();
@@ -159,44 +163,69 @@ pub const EditorContext = struct {
         self.logger.deinit();
     }
 
-    /// Execute pending viewport command (H/M/L) if one exists
+    /// Execute pending viewport command (H/M/L) or viewport adjustment (zz/zt/zb) if one exists
     /// Returns true if a viewport command was executed
     fn executeViewportCommand(self: *EditorContext) bool {
         if (!self.mode_manager.isNormal()) return false;
 
-        if (self.pending_cmd.get()) |pending| {
-            if (pending == 'H' or pending == 'M' or pending == 'L') {
-                const text_rows = if (self.display.terminal_rows > 1)
-                    self.display.terminal_rows - 1
-                else
-                    1;
+        // Check for viewport movement commands (H/M/L)
+        if (self.viewport_movement) |cmd| {
+            const text_rows = if (self.display.terminal_rows > 1)
+                self.display.terminal_rows - 1
+            else
+                1;
 
-                // CRITICAL FIX: Update viewport_top BEFORE using it (same as terminal backend)
-                // This prevents race condition where we use stale viewport_top from previous frame
-                // Mirrors display.render() logic at display.zig:478-483
-                if (self.buffer.cursor.row < self.display.viewport_top) {
-                    self.display.viewport_top = self.buffer.cursor.row;
-                } else if (self.buffer.cursor.row >= self.display.viewport_top + text_rows) {
-                    // CRITICAL: Use saturating arithmetic to prevent underflow (matches terminal backend)
-                    // If cursor.row < text_rows, non-saturating would wrap to MAX_USIZE
-                    self.display.viewport_top = self.buffer.cursor.row -| text_rows +| 1;
-                }
-
-                // NOW execute with fresh viewport_top
-                const viewport_height = text_rows;
-                const viewport_top = self.display.viewport_top;
-
-                switch (pending) {
-                    'H' => movement.moveToViewportTop(&self.buffer, viewport_top),
-                    'M' => movement.moveToViewportMiddle(&self.buffer, viewport_top, viewport_height),
-                    'L' => movement.moveToViewportBottom(&self.buffer, viewport_top, viewport_height),
-                    else => {},
-                }
-
-                self.pending_cmd.clear();
-                return true;
+            // CRITICAL FIX: Update viewport_top BEFORE using it (same as terminal backend)
+            // This prevents race condition where we use stale viewport_top from previous frame
+            // Mirrors display.render() logic at display.zig:478-483
+            if (self.buffer.cursor.row < self.display.viewport_top) {
+                self.display.viewport_top = self.buffer.cursor.row;
+            } else if (self.buffer.cursor.row >= self.display.viewport_top + text_rows) {
+                // CRITICAL: Use saturating arithmetic to prevent underflow (matches terminal backend)
+                // If cursor.row < text_rows, non-saturating would wrap to MAX_USIZE
+                self.display.viewport_top = self.buffer.cursor.row -| text_rows +| 1;
             }
+
+            // NOW execute with fresh viewport_top
+            const viewport_height = text_rows;
+            const viewport_top = self.display.viewport_top;
+
+            switch (cmd) {
+                'H' => movement.moveToViewportTop(&self.buffer, viewport_top),
+                'M' => movement.moveToViewportMiddle(&self.buffer, viewport_top, viewport_height),
+                'L' => movement.moveToViewportBottom(&self.buffer, viewport_top, viewport_height),
+                else => {},
+            }
+
+            self.viewport_movement = null;
+            return true;
         }
+
+        // Check for viewport adjustment commands (zz/zt/zb)
+        // Only execute when viewport_adjustment is set (command is COMPLETE)
+        if (self.viewport_adjustment) |adj| {
+            const text_rows = if (self.display.terminal_rows > 1)
+                self.display.terminal_rows - 1
+            else
+                1;
+
+            const cursor_row = self.buffer.cursor.row;
+            const buffer_line_count = self.buffer.lineCount();
+
+            // Calculate new viewport_top based on command
+            const new_viewport_top = switch (adj) {
+                'z' => movement.centerLineInViewport(cursor_row, text_rows, buffer_line_count), // zz
+                't' => movement.moveLineToViewportTop(cursor_row, buffer_line_count, text_rows), // zt
+                'b' => movement.moveLineToViewportBottom(cursor_row, text_rows, buffer_line_count), // zb
+                else => self.display.viewport_top,
+            };
+
+            // Update viewport and clear the adjustment flag
+            self.display.viewport_top = new_viewport_top;
+            self.viewport_adjustment = null;
+            return true;
+        }
+
         return false;
     }
 
@@ -268,6 +297,19 @@ pub const EditorContext = struct {
                 if (pending == 'g') {
                     if (char == 'g') { // gg - go to file start
                         movement.moveToFileStart(&self.buffer);
+                    }
+                    self.pending_cmd.clear();
+                    return;
+                }
+
+                // Handle pending 'z' commands (viewport adjustment)
+                // Note: Actual execution happens in executeViewportCommand() on next iteration
+                if (pending == 'z') {
+                    if (char == 'z' or char == 't' or char == 'b') {
+                        // zz, zt, zb - command is COMPLETE, signal for execution
+                        self.viewport_adjustment = char; // 'z'=center, 't'=top, 'b'=bottom
+                        self.pending_cmd.clear();
+                        return; // Will be processed on next iteration
                     }
                     self.pending_cmd.clear();
                     return;
@@ -366,9 +408,15 @@ pub const EditorContext = struct {
                 },
 
                 // Viewport-relative movement (H, M, L)
-                // Note: Execution happens on NEXT processInput() call when pending command is detected
+                // Set immediate flag for execution (not pending - single character commands)
                 'H', 'M', 'L' => {
-                    self.pending_cmd.set(char);
+                    self.viewport_movement = char;
+                },
+
+                // Viewport adjustment (zz, zt, zb)
+                // Note: Execution happens on NEXT processInput() call when pending command is detected
+                'z' => {
+                    self.pending_cmd.set('z');
                 },
 
                 // Goto operations (gg, G)

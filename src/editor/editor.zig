@@ -185,6 +185,11 @@ pub const Editor = struct {
     pending_text_object: PendingTextObject,
     cmd_buffer: CommandBuffer,
 
+    // Viewport commands - set when ready for backend execution
+    // Separate from pending_cmd to allow immediate execution during keymap strings
+    viewport_movement: ?u8 = null, // H/M/L - move cursor to viewport top/middle/bottom
+    viewport_adjustment: ?u8 = null, // zz/zt/zb - adjust viewport to center/top/bottom current line
+
     // Keymap recursion protection (Neovim E223: recursive mapping)
     // Tracks depth to prevent infinite loops from self-referencing mappings
     mapping_depth: usize = 0,
@@ -526,6 +531,20 @@ pub const Editor = struct {
                     }
                 }
 
+                // Handle pending 'z' commands (viewport adjustment)
+                // Note: These require viewport info from backend, handled specially
+                if (pending == 'z') {
+                    switch (char) {
+                        'z', 't', 'b' => {
+                            // zz, zt, zb - command is COMPLETE, signal backend
+                            self.viewport_adjustment = char; // 'z'=center, 't'=top, 'b'=bottom
+                            self.pending_cmd.clear();
+                            return; // Backend will execute via adjustViewport()
+                        },
+                        else => {},
+                    }
+                }
+
                 // Handle pending 'y' commands (yank)
                 if (pending == 'y') {
                     switch (char) {
@@ -670,10 +689,16 @@ pub const Editor = struct {
                     movement.moveToFileEnd(&self.buffer);
                 },
 
-                // Viewport-relative movement (H, M, L)
+                // Viewport adjustment (zz, zt, zb)
                 // Note: These require viewport info from backend, handled specially
+                'z' => {
+                    self.pending_cmd.set('z');
+                },
+
+                // Viewport-relative movement (H, M, L)
+                // Set immediate flag for backend (not pending - single character commands)
                 'H', 'M', 'L' => {
-                    self.pending_cmd.set(char);
+                    self.viewport_movement = char;
                 },
 
                 // Paste operations
@@ -1129,9 +1154,8 @@ pub const Editor = struct {
     /// Handle viewport-relative movement (H, M, L)
     /// Terminal backend calls this with actual viewport position/height
     pub fn moveToViewportPosition(self: *Editor, command: u8, viewport_top: usize, viewport_height: usize) void {
-        // CRITICAL: Clear pending command FIRST using defer to ensure it's cleared even on error
-        // This prevents infinite error loops if movement functions panic
-        defer self.pending_cmd.clear();
+        // CRITICAL: Clear viewport_movement flag after executing
+        defer self.viewport_movement = null;
 
         switch (command) {
             'H' => movement.moveToViewportTop(&self.buffer, viewport_top),
@@ -1141,14 +1165,32 @@ pub const Editor = struct {
         }
     }
 
-    /// Check if there's a pending viewport command (H, M, L)
+    /// Check if there's a viewport movement command ready (H, M, L)
     pub fn hasPendingViewportCommand(self: *const Editor) ?u8 {
-        if (self.pending_cmd.get()) |cmd| {
-            if (cmd == 'H' or cmd == 'M' or cmd == 'L') {
-                return cmd;
-            }
-        }
-        return null;
+        return self.viewport_movement;
+    }
+
+    /// Adjust viewport position (zz, zt, zb)
+    /// Terminal backend calls this with actual viewport/buffer info
+    /// Returns the new viewport_top position
+    pub fn adjustViewport(self: *Editor, command: u8, viewport_height: usize, buffer_line_count: usize) usize {
+        // CRITICAL: Clear viewport_adjustment after executing
+        defer self.viewport_adjustment = null;
+
+        const cursor_row = self.buffer.cursor.row;
+
+        return switch (command) {
+            'z' => movement.centerLineInViewport(cursor_row, viewport_height, buffer_line_count), // zz
+            't' => movement.moveLineToViewportTop(cursor_row, buffer_line_count, viewport_height), // zt
+            'b' => movement.moveLineToViewportBottom(cursor_row, viewport_height, buffer_line_count), // zb
+            else => 0,
+        };
+    }
+
+    /// Check if there's a pending viewport adjustment command (zz, zt, zb)
+    /// Returns 'z' for zz, 't' for zt, 'b' for zb (only when command is COMPLETE)
+    pub fn hasPendingViewportAdjustment(self: *const Editor) ?u8 {
+        return self.viewport_adjustment;
     }
 
     /// Convert byte offset to (line, col) position

@@ -209,6 +209,29 @@ pub const TerminalBackend = struct {
                         }
                     }
 
+                    // 8. CRITICAL: If a viewport adjustment command (zz/zt/zb) is COMPLETE, adjust viewport
+                    // viewport_adjustment is only set when BOTH characters have been pressed
+                    // This prevents premature execution after first 'z'
+                    if (self.editor.mode_manager.isNormal()) {
+                        if (self.editor.hasPendingViewportAdjustment()) |cmd| {
+                            const text_rows = if (self.display.terminal_rows > 1)
+                                self.display.terminal_rows - 1
+                            else
+                                1;
+
+                            const buffer_line_count = self.editor.buffer.lineCount();
+                            const new_viewport_top = self.editor.adjustViewport(
+                                cmd,
+                                text_rows,
+                                buffer_line_count
+                            );
+
+                            // Update display viewport
+                            self.display.viewport_top = new_viewport_top;
+                            // needs_render already true from line 116, no need to set again
+                        }
+                    }
+
                     // Continue to next sequence in buffer
                 },
             }
