@@ -6,6 +6,7 @@ const highlights = @import("../../editor/config/highlights.zig");
 const OptionsManager = @import("../../editor/config/options.zig").OptionsManager;
 const Display = @import("../../backends/terminal/display/display.zig").Display;
 const Editor = @import("../../editor/editor.zig").Editor;
+const EventEmitter = @import("event_emitter.zig").EventEmitter;
 
 // Import shared Hermes C API
 const c_api = @import("c_api.zig");
@@ -23,6 +24,7 @@ pub const motion_api = @import("motion_api.zig");
 pub const keymap_api = @import("keymap_api.zig");
 pub const filetype_api = @import("filetype_api.zig");
 pub const buffer_api = @import("buffer_api.zig");
+pub const event_api = @import("event_api.zig");
 pub const loader = @import("loader.zig");
 
 /// Context struct for host functions
@@ -35,6 +37,7 @@ pub const JSIContext = struct {
 var global_config_ctx: ?*config_api.ConfigContext = null;
 var global_motion_ctx: ?*motion_api.MotionContext = null;
 var global_keymap_ctx: ?*keymap_api.KeymapContext = null;
+var global_event_emitter: ?*EventEmitter = null;
 var global_allocator: ?std.mem.Allocator = null;
 
 /// Initialize JSI runtime and register all host functions
@@ -147,6 +150,20 @@ pub fn initJSI(
     global_keymap_ctx = keymap_ctx;
     keymap_api.register(runtime, keymap_ctx);
 
+    // Register event API (vim.on, vim.off, vim.emit) - Only for Editor (Phase 4 autocommands)
+    // EditorContext doesn't need events (headless debug mode)
+    if (T == *Editor) {
+        const emitter = allocator.create(EventEmitter) catch @panic("Failed to allocate EventEmitter");
+        emitter.* = EventEmitter.init(allocator, runtime);
+        global_event_emitter = emitter;
+
+        // Store in Editor for use by native code (buffer operations, mode changes)
+        editor_or_context.event_emitter = emitter;
+
+        // Register vim.on(), vim.off(), vim.emit() JavaScript API
+        event_api.register(runtime, emitter);
+    }
+
     // JSI functions registered (silent mode)
 }
 
@@ -173,6 +190,13 @@ pub fn deinitJSI() void {
     if (global_keymap_ctx) |ctx| {
         ctx.deinit(); // KeymapContext has its own deinit that frees itself
         global_keymap_ctx = null;
+    }
+    if (global_event_emitter) |emitter| {
+        emitter.deinit(); // Clean up all event listeners
+        if (global_allocator) |alloc| {
+            alloc.destroy(emitter);
+        }
+        global_event_emitter = null;
     }
     // Clean up filetype context (no deinit needed, just free the struct)
     filetype_api.deinit();

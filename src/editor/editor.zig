@@ -17,6 +17,7 @@ const TextObjectType = text_objects.TextObjectType;
 const OptionsManager = @import("config/options.zig").OptionsManager;
 const KeymapManager = @import("keymap/keymap.zig").KeymapManager;
 const Loader = @import("treesitter/loader.zig").Loader;
+const EventEmitter = @import("../system/jsi/event_emitter.zig").EventEmitter;
 
 /// Pending command for multi-key sequences (like dd, dw)
 const PendingCommand = struct {
@@ -176,6 +177,10 @@ pub const Editor = struct {
     // Options (optional - null for headless mode without config)
     options_manager: ?*OptionsManager = null,
 
+    // Event emitter for autocommands (initialized when JSI runtime created)
+    // Null until JSI runtime is available (terminal backend sets this during JSI setup)
+    event_emitter: ?*EventEmitter = null,
+
     // Cursor rendering override (for animated cursor plugins)
     cursor_render_override: CursorRenderOverride = .{},
 
@@ -232,6 +237,10 @@ pub const Editor = struct {
     }
 
     pub fn deinit(self: *Editor) void {
+        // NOTE: EventEmitter cleanup is handled by deinitJSI() in jsi_api.zig
+        // since JSI owns the EventEmitter's lifecycle (created in initJSI)
+        // Do NOT clean it up here to avoid double-free
+
         self.buffer.deinit();
         self.register_mgr.deinit();
         self.keymap_mgr.deinit();
@@ -255,6 +264,12 @@ pub const Editor = struct {
             self.buffer.filetype = null;
             self.logger.debug("No filetype detected for {s}", .{path}) catch {};
         }
+
+        // Trigger autocommands (Phase 4 - autocommand support)
+        // BufRead: After reading buffer into memory
+        // BufEnter: After entering buffer
+        self.triggerAutocommand("BufRead", .{});
+        self.triggerAutocommand("BufEnter", .{});
     }
 
     /// Execute a string of keys through the editor
@@ -300,6 +315,9 @@ pub const Editor = struct {
     /// Transactions are ONLY used for bracketed paste operations in backend.zig
     fn enterInsertMode(self: *Editor) void {
         self.mode_manager.enterInsert();
+
+        // Trigger InsertEnter autocommand (Phase 4)
+        self.triggerAutocommand("InsertEnter", .{});
     }
 
     /// Handle input in Normal mode
@@ -920,6 +938,10 @@ pub const Editor = struct {
             if (self.buffer.active_transaction != null) {
                 try self.buffer.commitTransaction();
             }
+
+            // Trigger InsertLeave autocommand (Phase 4) BEFORE mode change
+            self.triggerAutocommand("InsertLeave", .{});
+
             self.keymap_mgr.clearPending(); // Clear pending state on mode change
             self.mode_manager.enterNormal();
             return;
@@ -1237,6 +1259,50 @@ pub const Editor = struct {
         const col = offset - line_start;
 
         return Position{ .line = line_num, .col = col };
+    }
+
+    /// Trigger an autocommand event
+    /// Converts Zig values to JSI and emits to JavaScript listeners
+    ///
+    /// Usage:
+    ///   editor.triggerAutocommand("BufEnter", .{@as(usize, 0)});
+    ///   editor.triggerAutocommand("InsertLeave", .{});
+    pub fn triggerAutocommand(self: *Editor, event_name: []const u8, args: anytype) void {
+        const emitter = self.event_emitter orelse return; // No JSI runtime yet
+
+        // Get runtime from EventEmitter
+        const runtime = emitter.runtime;
+        const c = @import("../system/jsi/c_api.zig").c;
+
+        // Convert args to JSI values
+        var jsi_args: std.ArrayList(*c.OVHermesValue) = .empty;
+        defer jsi_args.deinit(self.allocator);
+
+        inline for (args) |arg| {
+            const ArgType = @TypeOf(arg);
+            const val = switch (ArgType) {
+                usize => c.hermes_value_create_number(runtime, @floatFromInt(arg)),
+                []const u8 => c.hermes_value_create_string(runtime, arg.ptr, arg.len),
+                else => @compileError("Unsupported autocommand argument type: " ++ @typeName(ArgType)),
+            };
+
+            if (val) |v| {
+                jsi_args.append(self.allocator, v) catch continue;
+            }
+        }
+
+        // Cast to C-style pointer for emit
+        const c_args: []const *c.OVHermesValue = @ptrCast(jsi_args.items);
+
+        // Emit event
+        emitter.emit(event_name, c_args) catch |err| {
+            self.logger.err("Failed to emit autocommand '{s}': {}", .{ event_name, err }) catch {};
+        };
+
+        // Clean up JSI values
+        for (jsi_args.items) |val| {
+            c.hermes_value_destroy(val);
+        }
     }
 };
 

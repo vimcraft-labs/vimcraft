@@ -321,6 +321,123 @@ pub fn build(b: *std.Build) void {
     exe.addObjectFile(b.path("vendor/libuv/build/libuv.a"));
 
     // ============================================================================
+    // Tree-sitter (Incremental Syntax Parsing)
+    // ============================================================================
+    // Tree-sitter core library for parsing and querying syntax trees
+    // Provides foundation for Phase 5 (Helix-style syntax highlighting)
+    // Uses go-enry for language detection (697 languages) + tree-sitter parsers
+    //
+    // Architecture:
+    // - Core Library: Parsing engine + query system (compiled from C sources)
+    // - Language Parsers: Separate repos (tree-sitter-rust, etc.) added later
+    // - Query Files: highlights.scm for each language (loaded at runtime)
+    exe.addIncludePath(b.path("vendor/tree-sitter/lib/include"));
+    exe.addIncludePath(b.path("vendor/tree-sitter/lib/src"));
+
+    // Language parser include paths (for tree_sitter/parser.h in each parser)
+    exe.addIncludePath(b.path("vendor/tree-sitter-c/src"));
+    exe.addIncludePath(b.path("vendor/tree-sitter-zig/src"));
+    exe.addIncludePath(b.path("vendor/tree-sitter-javascript/src"));
+    exe.addIncludePath(b.path("vendor/tree-sitter-typescript/typescript/src"));
+    exe.addIncludePath(b.path("vendor/tree-sitter-typescript/tsx/src"));
+    exe.addIncludePath(b.path("vendor/tree-sitter-markdown/tree-sitter-markdown/src"));
+    exe.addIncludePath(b.path("vendor/tree-sitter-markdown/tree-sitter-markdown-inline/src"));
+
+    // Add all C source files from tree-sitter lib (excluding lib.c for amalgamated builds)
+    exe.addCSourceFiles(.{
+        .root = b.path("vendor/tree-sitter/lib/src"),
+        .files = &.{
+            "alloc.c",
+            "get_changed_ranges.c",
+            "language.c",
+            "lexer.c",
+            "node.c",
+            "parser.c",
+            "point.c",
+            "query.c",
+            "stack.c",
+            "subtree.c",
+            "tree_cursor.c",
+            "tree.c",
+            "wasm_store.c",
+        },
+        .flags = &.{"-std=c11"},
+    });
+
+    // POSIX compatibility macros (required by tree-sitter on Unix-like systems)
+    exe.root_module.addCMacro("_POSIX_C_SOURCE", "200112L");
+    exe.root_module.addCMacro("_DEFAULT_SOURCE", "");
+    exe.root_module.addCMacro("_DARWIN_C_SOURCE", "");
+
+    // ============================================================================
+    // Tree-sitter Language Parsers (Bundled: C, Zig, JS/TS, Markdown)
+    // ============================================================================
+    // Bundled parsers (7 total from 5 submodules):
+    // - C (tree-sitter-c)
+    // - Zig (tree-sitter-zig)
+    // - JavaScript (tree-sitter-javascript)
+    // - TypeScript + TSX (tree-sitter-typescript)
+    // - Markdown + Markdown Inline (tree-sitter-markdown)
+
+    // C parser
+    exe.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-c/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+
+    // Zig parser
+    exe.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-zig/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+
+    // JavaScript parser (has external scanner)
+    exe.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-javascript/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    exe.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-javascript/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+
+    // TypeScript parsers (typescript + tsx, both have scanners)
+    exe.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/typescript/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    exe.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/typescript/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+    exe.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/tsx/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    exe.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/tsx/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+
+    // Markdown parsers (markdown + markdown_inline, both have scanners)
+    exe.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    exe.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+    exe.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown-inline/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    exe.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown-inline/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+
+    // ============================================================================
     // OpenSSL (Linux only - for WebSocket SHA1 hashing)
     // ============================================================================
     // macOS uses CommonCrypto, Linux uses OpenSSL
@@ -456,6 +573,91 @@ pub fn build(b: *std.Build) void {
     // Link directly to our vendored libuv to avoid Homebrew conflicts
     bench.addObjectFile(b.path("vendor/libuv/build/libuv.a"));
 
+    // Tree-sitter for benchmarks
+    bench.addIncludePath(b.path("vendor/tree-sitter/lib/include"));
+    bench.addIncludePath(b.path("vendor/tree-sitter/lib/src"));
+
+    // Language parser include paths (for tree_sitter/parser.h in each parser)
+    bench.addIncludePath(b.path("vendor/tree-sitter-c/src"));
+    bench.addIncludePath(b.path("vendor/tree-sitter-zig/src"));
+    bench.addIncludePath(b.path("vendor/tree-sitter-javascript/src"));
+    bench.addIncludePath(b.path("vendor/tree-sitter-typescript/typescript/src"));
+    bench.addIncludePath(b.path("vendor/tree-sitter-typescript/tsx/src"));
+    bench.addIncludePath(b.path("vendor/tree-sitter-markdown/tree-sitter-markdown/src"));
+    bench.addIncludePath(b.path("vendor/tree-sitter-markdown/tree-sitter-markdown-inline/src"));
+    bench.addCSourceFiles(.{
+        .root = b.path("vendor/tree-sitter/lib/src"),
+        .files = &.{
+            "alloc.c",
+            "get_changed_ranges.c",
+            "language.c",
+            "lexer.c",
+            "node.c",
+            "parser.c",
+            "point.c",
+            "query.c",
+            "stack.c",
+            "subtree.c",
+            "tree_cursor.c",
+            "tree.c",
+            "wasm_store.c",
+        },
+        .flags = &.{"-std=c11"},
+    });
+    bench.root_module.addCMacro("_POSIX_C_SOURCE", "200112L");
+    bench.root_module.addCMacro("_DEFAULT_SOURCE", "");
+    bench.root_module.addCMacro("_DARWIN_C_SOURCE", "");
+
+    // Tree-sitter Language Parsers (same as main exe)
+    bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-c/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-zig/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-javascript/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-javascript/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+    bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/typescript/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/typescript/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+    bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/tsx/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/tsx/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+    bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+    bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown-inline/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown-inline/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+
     // OpenSSL for Linux (WebSocket SHA1 hashing) - all Linux builds
     if (is_linux) {
         const lib_dir = switch (target.result.cpu.arch) {
@@ -579,6 +781,91 @@ pub fn build(b: *std.Build) void {
     unit_tests.linkSystemLibrary("enry");
     unit_tests.addRPath(b.path(enry_lib_path));
 
+    // Tree-sitter for tests
+    unit_tests.addIncludePath(b.path("vendor/tree-sitter/lib/include"));
+    unit_tests.addIncludePath(b.path("vendor/tree-sitter/lib/src"));
+
+    // Language parser include paths (for tree_sitter/parser.h in each parser)
+    unit_tests.addIncludePath(b.path("vendor/tree-sitter-c/src"));
+    unit_tests.addIncludePath(b.path("vendor/tree-sitter-zig/src"));
+    unit_tests.addIncludePath(b.path("vendor/tree-sitter-javascript/src"));
+    unit_tests.addIncludePath(b.path("vendor/tree-sitter-typescript/typescript/src"));
+    unit_tests.addIncludePath(b.path("vendor/tree-sitter-typescript/tsx/src"));
+    unit_tests.addIncludePath(b.path("vendor/tree-sitter-markdown/tree-sitter-markdown/src"));
+    unit_tests.addIncludePath(b.path("vendor/tree-sitter-markdown/tree-sitter-markdown-inline/src"));
+    unit_tests.addCSourceFiles(.{
+        .root = b.path("vendor/tree-sitter/lib/src"),
+        .files = &.{
+            "alloc.c",
+            "get_changed_ranges.c",
+            "language.c",
+            "lexer.c",
+            "node.c",
+            "parser.c",
+            "point.c",
+            "query.c",
+            "stack.c",
+            "subtree.c",
+            "tree_cursor.c",
+            "tree.c",
+            "wasm_store.c",
+        },
+        .flags = &.{"-std=c11"},
+    });
+    unit_tests.root_module.addCMacro("_POSIX_C_SOURCE", "200112L");
+    unit_tests.root_module.addCMacro("_DEFAULT_SOURCE", "");
+    unit_tests.root_module.addCMacro("_DARWIN_C_SOURCE", "");
+
+    // Tree-sitter Language Parsers (same as main exe)
+    unit_tests.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-c/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    unit_tests.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-zig/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    unit_tests.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-javascript/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    unit_tests.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-javascript/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+    unit_tests.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/typescript/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    unit_tests.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/typescript/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+    unit_tests.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/tsx/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    unit_tests.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/tsx/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+    unit_tests.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    unit_tests.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+    unit_tests.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown-inline/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    unit_tests.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown-inline/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+
     // OpenSSL for Linux (WebSocket SHA1 hashing) - all Linux builds
     if (is_linux) {
         const lib_dir = switch (target.result.cpu.arch) {
@@ -684,6 +971,91 @@ pub fn build(b: *std.Build) void {
     // Set RPATH for finding Hermes libraries at runtime
     jsi_bench.addRPath(b.path("vendor/hermes/build/API/hermes"));
     jsi_bench.addRPath(b.path("vendor/hermes/build/jsi"));
+
+    // Tree-sitter for JSI benchmark
+    jsi_bench.addIncludePath(b.path("vendor/tree-sitter/lib/include"));
+    jsi_bench.addIncludePath(b.path("vendor/tree-sitter/lib/src"));
+
+    // Language parser include paths (for tree_sitter/parser.h in each parser)
+    jsi_bench.addIncludePath(b.path("vendor/tree-sitter-c/src"));
+    jsi_bench.addIncludePath(b.path("vendor/tree-sitter-zig/src"));
+    jsi_bench.addIncludePath(b.path("vendor/tree-sitter-javascript/src"));
+    jsi_bench.addIncludePath(b.path("vendor/tree-sitter-typescript/typescript/src"));
+    jsi_bench.addIncludePath(b.path("vendor/tree-sitter-typescript/tsx/src"));
+    jsi_bench.addIncludePath(b.path("vendor/tree-sitter-markdown/tree-sitter-markdown/src"));
+    jsi_bench.addIncludePath(b.path("vendor/tree-sitter-markdown/tree-sitter-markdown-inline/src"));
+    jsi_bench.addCSourceFiles(.{
+        .root = b.path("vendor/tree-sitter/lib/src"),
+        .files = &.{
+            "alloc.c",
+            "get_changed_ranges.c",
+            "language.c",
+            "lexer.c",
+            "node.c",
+            "parser.c",
+            "point.c",
+            "query.c",
+            "stack.c",
+            "subtree.c",
+            "tree_cursor.c",
+            "tree.c",
+            "wasm_store.c",
+        },
+        .flags = &.{"-std=c11"},
+    });
+    jsi_bench.root_module.addCMacro("_POSIX_C_SOURCE", "200112L");
+    jsi_bench.root_module.addCMacro("_DEFAULT_SOURCE", "");
+    jsi_bench.root_module.addCMacro("_DARWIN_C_SOURCE", "");
+
+    // Tree-sitter Language Parsers (same as main exe)
+    jsi_bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-c/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    jsi_bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-zig/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    jsi_bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-javascript/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    jsi_bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-javascript/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+    jsi_bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/typescript/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    jsi_bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/typescript/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+    jsi_bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/tsx/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    jsi_bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-typescript/tsx/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+    jsi_bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    jsi_bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
+    jsi_bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown-inline/src/parser.c"),
+        .flags = &.{"-std=c11"},
+    });
+    jsi_bench.addCSourceFile(.{
+        .file = b.path("vendor/tree-sitter-markdown/tree-sitter-markdown-inline/src/scanner.c"),
+        .flags = &.{"-std=c11"},
+    });
 
     b.installArtifact(jsi_bench);
 

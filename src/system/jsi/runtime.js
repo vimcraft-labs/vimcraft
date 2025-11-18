@@ -482,3 +482,14 @@ Object.freeze(vim.filetype);
 vim.buffer = vimBuffer;
 
 Object.freeze(vim.buffer);
+
+// Event API - Expose vimEventEmitter methods on vim object
+// Allows plugins to use vim.on('BufWritePre', callback) syntax
+// Direct HostObject method forwarding (zero-copy JSI)
+if (typeof vimEventEmitter !== 'undefined') {
+  vim.on = vimEventEmitter.on;
+  vim.off = vimEventEmitter.off;
+  vim.emit = vimEventEmitter.emit;
+  vim.removeAllListeners = vimEventEmitter.removeAllListeners;
+  vim.listenerCount = vimEventEmitter.listenerCount;
+}
