@@ -10,3 +10,6 @@
 [submodule "vendor/libuv"]
 	path = vendor/libuv
 	url = https://github.com/libuv/libuv.git
+[submodule "vendor/go-enry"]
+	path = vendor/go-enry
+	url = https://github.com/go-enry/go-enry.git
