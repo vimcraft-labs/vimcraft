@@ -196,9 +196,12 @@ See [Implementation Roadmap](./roadmap/implementation-roadmap.md) for complete d
 | [Neovim Analysis](./architecture/neovim-analysis.md) | Architecture | Deep Neovim analysis |
 | [Neovim Analysis Summary](./research/neovim-analysis-summary.md) | Research | Executive summary |
 | [Neovim Mimic Summary](./research/neovim-mimic-summary.md) | Research | Compatibility work done |
+| [Keymap Timeout Integration](./development/keymap-timeout-integration.md) | Development | Phase 4.5 timeout implementation |
 | [Phase 3: Text Editing](./roadmap/phase-3-text-editing.md) | Roadmap | Next milestone |
 | [Phase 4: Plugin System](./roadmap/phase-4-plugin-system.md) | Roadmap | Future milestone |
 | [Phase 5+: Advanced](./roadmap/phase-5-advanced.md) | Roadmap | Long-term goals |
+| [PTY Testing Guide](./development/pty-testing.md) | Development | Testing with pseudoterminals |
+| [Terminal Backend Debugging](./development/terminal-backend-debugging.md) | Development | Debugging rendering issues |
 | [Testing Guide](./development/testing.md) | Development | How to test |
 | [TypeScript Guide](./guides/typescript-setup.md) | Guides | TypeScript setup |
 | [TypeScript Types](./api/typescript-types.md) | API | Type definitions |

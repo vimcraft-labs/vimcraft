@@ -70,6 +70,17 @@ All APIs are fully typed with TypeScript for excellent IDE support.
 - Callback functions
 - Examples for common use cases
 
+### [vim.filetype Reference](./vim-filetype.md) ✨ NEW
+**Purpose**: Filetype detection API documentation
+**Read if**: You need to detect file types for syntax highlighting or LSP
+**Key topics**:
+- vim.filetype.match() - Detect filetype from filename or buffer
+- Four-tier detection system (extension → filename → glob → shebang)
+- 1,437+ compile-time Neovim mappings
+- Neovim compatibility
+- Performance characteristics
+- Coverage for 100+ languages
+
 ### [TypeScript Types](./typescript-types.md)
 **Purpose**: Guide to using @vimcraft/types package
 **Read if**: You want IDE autocomplete and type checking
@@ -147,6 +158,29 @@ vim.api.nvim_win_set_cursor(0, [1, 0]);
 
 See: [vim.api Reference](./vim-api.md)
 
+### "I want to detect file types for syntax highlighting"
+
+```typescript
+// Use vim.filetype.match for comprehensive filetype detection
+const filetype = vim.filetype.match({ filename: "main.rs" });
+console.log(filetype); // "rust"
+
+// Detect from current buffer
+const currentFiletype = vim.filetype.match({ buf: 0 });
+if (currentFiletype) {
+  vim.bo.filetype = currentFiletype;
+}
+
+// Route to language-specific handlers
+if (filetype === "rust") {
+  setupRustAnalyzer();
+} else if (filetype === "javascript" || filetype === "typescript") {
+  setupTSServer();
+}
+```
+
+See: [vim.filetype Reference](./vim-filetype.md)
+
 ---
 
 ## 📊 API Tiers (Priority)
@@ -155,6 +189,7 @@ See: [vim.api Reference](./vim-api.md)
 Already available or Phase 3-4:
 - vim.opt.* (basic options)
 - vim.highlight()
+- vim.filetype.match() (1,437+ compile-time mappings)
 - vim.api.nvim_buf_get_lines()
 - vim.api.nvim_buf_set_lines()
 - vim.g/b/w/t/v/env variables

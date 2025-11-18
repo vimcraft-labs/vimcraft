@@ -60,6 +60,37 @@ Welcome to Vimcraft development! This guide will help you set up your developmen
 - Review process
 - Community guidelines
 
+### [PTY Testing Guide](./pty-testing.md)
+**Purpose**: Testing with pseudoterminals
+**Read if**: You're testing terminal I/O, ANSI output, or user-facing bugs
+**Key topics**:
+- PTY test architecture
+- Writing PTY tests
+- Hybrid testing approach (PTY + Debug Protocol)
+- Terminal rendering verification
+- Regression test workflow
+
+### [Terminal Backend Debugging](./terminal-backend-debugging.md)
+**Purpose**: Debugging terminal rendering issues
+**Read if**: You're fixing rendering bugs or investigating display issues
+**Key topics**:
+- Debug protocol integration
+- Layer inspection workflow
+- Common rendering bug patterns
+- Live state introspection
+- Performance profiling
+
+### [Keymap Timeout Integration (Phase 4.5)](./keymap-timeout-integration.md)
+**Purpose**: Implementation guide for setTimeout-based keymap timeouts
+**Read if**: You're implementing Phase 4.5 timeout behavior
+**Key topics**:
+- Current pending state infrastructure (Phase 4)
+- setTimeout integration points
+- Timer management and cancellation
+- Timeout behavior specification (Neovim compatible)
+- JSI bridge requirements
+- Test strategy for timeout behavior
+
 ---
 
 ## 🚀 Quick Start (15 Minutes)
