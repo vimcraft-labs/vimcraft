@@ -9,6 +9,7 @@ const YankHighlight = @import("../../backends/terminal/visual/yank_highlight.zig
 const Logger = @import("../../editor/log.zig").Logger;
 const OptionsManager = @import("../../editor/config/options.zig").OptionsManager;
 const KeymapManager = @import("../../editor/keymap/keymap.zig").KeymapManager;
+const Loader = @import("../../editor/treesitter/loader.zig").Loader;
 const movement = @import("../../editor/movement/movement.zig");
 const Position = @import("../../backends/terminal/visual/visual.zig").Position;
 const yank = @import("../../editor/buffer/yank.zig");
@@ -110,6 +111,7 @@ pub const EditorContext = struct {
     logger: Logger,
     options_manager: ?*OptionsManager = null,
     keymap_mgr: KeymapManager,
+    ts_loader: Loader,
 
     // Internal state
     pending_cmd: PendingCommand,
@@ -131,6 +133,9 @@ pub const EditorContext = struct {
         var keymap_mgr = KeymapManager.init(allocator);
         errdefer keymap_mgr.deinit();
 
+        var ts_loader = try Loader.init(allocator);
+        errdefer ts_loader.deinit();
+
         // Note: Display won't actually render since we never call flush() in headless mode
 
         return EditorContext{
@@ -148,6 +153,7 @@ pub const EditorContext = struct {
             .yank_highlight = YankHighlight{},
             .logger = Logger.init(allocator),
             .keymap_mgr = keymap_mgr,
+            .ts_loader = ts_loader,
             .pending_cmd = PendingCommand{},
             .pending_register = PendingRegister{},
             .cmd_buffer = CommandBuffer.init(allocator),
@@ -159,6 +165,7 @@ pub const EditorContext = struct {
         self.display.deinit();
         self.register_mgr.deinit();
         self.keymap_mgr.deinit();
+        self.ts_loader.deinit();
         self.cmd_buffer.deinit();
         self.logger.deinit();
     }

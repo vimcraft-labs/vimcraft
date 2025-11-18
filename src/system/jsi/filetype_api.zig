@@ -4,10 +4,23 @@
 const std = @import("std");
 const Editor = @import("../../editor/editor.zig").Editor;
 const helpers = @import("helpers.zig");
+const Loader = @import("../../editor/treesitter/loader.zig").Loader;
+const Buffer = @import("../../editor/buffer/buffer.zig").Buffer;
 
 // Import shared Hermes C API
 const c_api = @import("c_api.zig");
 const c = c_api.c;
+
+/// Context struct that works with both Editor and EditorContext
+/// Both types have ts_loader and buffer fields
+const FiletypeContext = struct {
+    ts_loader: *Loader,
+    buffer: *Buffer,
+};
+
+/// Global context (allocated on heap, cleaned up in jsi_api.deinitJSI())
+var global_filetype_ctx: ?*FiletypeContext = null;
+var global_allocator: ?std.mem.Allocator = null;
 
 /// Zig host function: vim_filetype_match(opts) -> string | null
 /// Detects filetype from filename or buffer
@@ -29,7 +42,7 @@ export fn vim_filetype_match(
         return c.hermes_value_create_null(runtime);
     }
 
-    const editor: *Editor = @ptrCast(@alignCast(context.?));
+    const ctx: *FiletypeContext = @ptrCast(@alignCast(context.?));
     const opts = args[0] orelse return c.hermes_value_create_null(runtime);
 
     // Check if opts is an object
@@ -48,7 +61,7 @@ export fn vim_filetype_match(
         };
 
         // Detect filetype from filename
-        const filetype = editor.ts_loader.detectFiletype(filename, null);
+        const filetype = ctx.ts_loader.detectFiletype(filename, null);
         c.hermes_value_destroy(filename_prop);
 
         if (filetype) |ft| {
@@ -74,23 +87,23 @@ export fn vim_filetype_match(
         }
 
         // Get buffer path
-        const path = editor.buffer.filepath orelse {
+        const path = ctx.buffer.filepath orelse {
             // No file path set
             return c.hermes_value_create_null(runtime);
         };
 
         // Get first line of buffer for shebang detection
         var first_line: ?[]const u8 = null;
-        if (editor.buffer.content.items.len > 0) {
+        if (ctx.buffer.content.items.len > 0) {
             // Find end of first line
-            const content = editor.buffer.content.items;
+            const content = ctx.buffer.content.items;
             var end: usize = 0;
             while (end < content.len and content[end] != '\n') : (end += 1) {}
             first_line = content[0..end];
         }
 
         // Detect filetype
-        const filetype = editor.ts_loader.detectFiletype(path, first_line);
+        const filetype = ctx.ts_loader.detectFiletype(path, first_line);
 
         if (filetype) |ft| {
             // Return filetype string
@@ -106,11 +119,35 @@ export fn vim_filetype_match(
 }
 
 /// Register filetype API functions with runtime
-pub fn register(runtime: *c.OVHermesRuntime, editor: *Editor) void {
+/// Works with both *Editor and *EditorContext (both have ts_loader and buffer fields)
+/// Note: Allocator must be passed in from jsi_api.initJSI()
+pub fn register(runtime: *c.OVHermesRuntime, editor_or_context: anytype, allocator: std.mem.Allocator) void {
+    // Allocate FiletypeContext on heap (cleaned up in jsi_api.deinitJSI())
+    const ctx = allocator.create(FiletypeContext) catch @panic("Failed to allocate FiletypeContext");
+    ctx.* = FiletypeContext{
+        .ts_loader = &editor_or_context.ts_loader,
+        .buffer = &editor_or_context.buffer,
+    };
+
+    // Store in globals for cleanup
+    global_filetype_ctx = ctx;
+    global_allocator = allocator;
+
     c.hermes_register_host_function(
         runtime,
         "vim_filetype_match",
         vim_filetype_match,
-        @ptrCast(editor),
+        @ptrCast(ctx),
     );
+}
+
+/// Clean up filetype API resources
+pub fn deinit() void {
+    if (global_filetype_ctx) |ctx| {
+        if (global_allocator) |alloc| {
+            alloc.destroy(ctx);
+        }
+        global_filetype_ctx = null;
+    }
+    global_allocator = null;
 }

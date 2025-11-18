@@ -432,3 +432,14 @@ vim.keymap = {
 };
 
 Object.freeze(vim.keymap);
+
+// vim.filetype API - Filetype detection (Neovim compatible)
+// Uses comprehensive database of 1,437+ compile-time mappings from Neovim
+vim.filetype = {
+  // vim.filetype.match(opts)
+  // opts: { filename: string } or { buf: number }
+  // returns: string (filetype like "rust", "javascript") or null (unknown)
+  match: vim_filetype_match
+};
+
+Object.freeze(vim.filetype);

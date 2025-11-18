@@ -97,11 +97,11 @@ pub fn initJSI(
     const T = @TypeOf(editor_or_context);
     if (T == *Editor) {
         cursor_api.register(runtime, editor_or_context);
-
-        // Register filetype API (vim.filetype.match)
-        // Only register for Editor since it needs access to ts_loader
-        filetype_api.register(runtime, editor_or_context);
     }
+
+    // Register filetype API (vim.filetype.match)
+    // Both Editor and EditorContext have ts_loader, so register for both
+    filetype_api.register(runtime, editor_or_context, allocator);
 
     // Register layer API (createLayer, renderVirtualText, setLayerOpacity, etc.)
     layer_api.register(runtime, display);
@@ -168,6 +168,8 @@ pub fn deinitJSI() void {
         ctx.deinit(); // KeymapContext has its own deinit that frees itself
         global_keymap_ctx = null;
     }
+    // Clean up filetype context (no deinit needed, just free the struct)
+    filetype_api.deinit();
     global_allocator = null;
 }
 
