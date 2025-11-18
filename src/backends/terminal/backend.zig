@@ -683,11 +683,22 @@ pub const TerminalBackend = struct {
             &listchars,
         );
 
-        // Set cursor shape based on mode
-        if (self.editor.mode_manager.isInsert()) {
-            try self.display.setCursorBar(); // Thin bar in insert mode
-        } else {
-            try self.display.setCursorBlock(); // Block in normal/command mode
+        // Set cursor shape ONLY when mode changes (prevent flickering during rapid input)
+        // PERFORMANCE FIX: Sending cursor shape codes on every render (10+ times/sec when holding a key)
+        // causes terminal flickering between "bright" and "faded" cursor states
+        // Solution: Track last cursor shape and only send codes when it actually changes
+        const desired_shape: @TypeOf(self.display.last_cursor_shape) = if (self.editor.mode_manager.isInsert())
+            .bar
+        else
+            .block;
+
+        if (self.display.last_cursor_shape != desired_shape) {
+            switch (desired_shape) {
+                .bar => try self.display.setCursorBar(),
+                .block => try self.display.setCursorBlock(),
+                .underline => try self.display.setCursorUnderline(),
+            }
+            self.display.last_cursor_shape = desired_shape;
         }
 
         try self.display.flush();

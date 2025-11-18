@@ -63,6 +63,10 @@ pub const Display = struct {
     // Plugins can use this to overlay arbitrary text on the screen
     virtual_text: VirtualTextRenderer,
 
+    // Cursor shape state (prevent redundant escape codes during rapid input)
+    // Only send cursor shape codes when mode changes to prevent flickering
+    last_cursor_shape: enum { block, bar, underline } = .block,
+
     pub fn init(allocator: std.mem.Allocator) !Display {
         const grid = try ScreenGrid.init(allocator, 80, 24);
         const gutter_mgr = gutter.GutterManager.init(allocator);
@@ -248,7 +252,7 @@ pub const Display = struct {
             // Check if line number column already exists
             if (self.gutter_manager.getColumn("line_numbers")) |col| {
                 col.renderer = renderer;
-                col.enabled = true;  // Ensure it's enabled
+                col.enabled = true; // Ensure it's enabled
             } else {
                 // Register new line number column
                 try self.gutter_manager.registerColumn("line_numbers", renderer);
@@ -263,7 +267,7 @@ pub const Display = struct {
                         2; // Default: handles files up to 99 lines, updated on first render
                     col.cached_width = initial_width;
                     col.cache_key = self.cached_line_count;
-                    col.enabled = true;  // Ensure it's enabled
+                    col.enabled = true; // Ensure it's enabled
                 }
             }
         } else {
@@ -357,10 +361,6 @@ pub const Display = struct {
 
         // Update gutter cache (Neovim optimization: invalidate on line count change)
         self.updateGutterCache(buffer);
-
-        // Hide cursor during render
-        try self.hideCursor();
-        defer self.showCursor() catch {};
 
         // Adjust viewport to keep cursor visible
         self.adjustViewport(buffer);
