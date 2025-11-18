@@ -104,6 +104,9 @@ pub const EditOps = struct {
             };
         }
 
+        // Invalidate external ArrayBuffers before modification
+        buffer.incrementVersion();
+
         const cursor_before = buffer.cursor;
 
         // Save deleted text

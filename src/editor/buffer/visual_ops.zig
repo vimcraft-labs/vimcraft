@@ -38,6 +38,9 @@ pub fn deleteVisualSelection(
 
 /// Delete character-wise selection
 fn deleteCharWise(buffer: *Buffer, start: Position, end: Position) !void {
+    // Invalidate external ArrayBuffers before modification
+    buffer.incrementVersion();
+
     const cursor_before = buffer.cursor;
 
     // Calculate byte offsets
@@ -100,6 +103,9 @@ fn deleteCharWise(buffer: *Buffer, start: Position, end: Position) !void {
 
 /// Delete line-wise selection
 fn deleteLineWise(buffer: *Buffer, start_line: usize, end_line: usize) !void {
+    // Invalidate external ArrayBuffers before modification
+    buffer.incrementVersion();
+
     const cursor_before = buffer.cursor;
 
     // Calculate byte offsets for entire lines
@@ -145,6 +151,9 @@ fn deleteLineWise(buffer: *Buffer, start_line: usize, end_line: usize) !void {
 
 /// Delete block-wise (rectangular) selection
 fn deleteBlockWise(buffer: *Buffer, start: Position, end: Position) !void {
+    // Invalidate external ArrayBuffers before modification
+    buffer.incrementVersion();
+
     const cursor_before = buffer.cursor;
 
     // Normalize column range

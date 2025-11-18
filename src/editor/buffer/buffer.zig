@@ -68,6 +68,10 @@ pub const Buffer = struct {
     // Transaction grouping (for paste operations)
     active_transaction: ?Transaction = null,
 
+    // Version tracking for ArrayBuffer safety
+    // Incremented on any modification - used to detect use-after-free in JavaScript
+    version: u64 = 0,
+
     pub fn init(allocator: std.mem.Allocator) Buffer {
         return .{
             .allocator = allocator,
@@ -108,6 +112,9 @@ pub const Buffer = struct {
 
     /// Load file from path
     pub fn loadFile(self: *Buffer, path: []const u8) !void {
+        // Invalidate external ArrayBuffers before modification
+        self.incrementVersion();
+
         const file = try std.fs.cwd().openFile(path, .{});
         defer file.close();
 
@@ -234,6 +241,13 @@ pub const Buffer = struct {
 
     // ===== Text Modification Functions =====
 
+    /// Increment buffer version (invalidates external ArrayBuffers)
+    /// Call this BEFORE any modification to buffer content
+    /// Public so edit/paste/visual_ops modules can call it
+    pub fn incrementVersion(self: *Buffer) void {
+        self.version +%= 1; // Wrapping add (u64 overflow is fine)
+    }
+
     /// Start a transaction for grouping multiple changes
     pub fn beginTransaction(self: *Buffer) void {
         if (self.active_transaction == null) {
@@ -313,6 +327,9 @@ pub const Buffer = struct {
 
     /// Insert character at cursor position
     pub fn insertChar(self: *Buffer, char: u8) !void {
+        // Invalidate external ArrayBuffers before modification
+        self.incrementVersion();
+
         // During transactions, use tracked offset (line_starts may be stale)
         // Otherwise, calculate from cursor position
         const offset = if (self.active_transaction) |trans|
@@ -375,6 +392,9 @@ pub const Buffer = struct {
         const offset = self.getCursorOffset();
         if (offset >= self.content.items.len) return; // Nothing to delete
 
+        // Invalidate external ArrayBuffers before modification
+        self.incrementVersion();
+
         const cursor_before = self.cursor;
         const deleted_char = self.content.items[offset];
 
@@ -409,6 +429,9 @@ pub const Buffer = struct {
     /// Delete character before cursor (backspace)
     pub fn deleteCharBefore(self: *Buffer) !void {
         if (self.cursor.col == 0 and self.cursor.row == 0) return; // Nothing to delete
+
+        // Invalidate external ArrayBuffers before modification
+        self.incrementVersion();
 
         const cursor_before = self.cursor;
 
@@ -447,6 +470,9 @@ pub const Buffer = struct {
     pub fn undo(self: *Buffer) !void {
         const change = self.undo_stack.pop() orelse return; // Nothing to undo
 
+        // Invalidate external ArrayBuffers before modification
+        self.incrementVersion();
+
         // Reverse the change
         if (change.inserted_text.len > 0) {
             // Remove inserted text
@@ -474,6 +500,9 @@ pub const Buffer = struct {
     pub fn redo(self: *Buffer) !void {
         const change = self.redo_stack.pop() orelse return; // Nothing to redo
 
+        // Invalidate external ArrayBuffers before modification
+        self.incrementVersion();
+
         // Reapply the change
         if (change.deleted_text.len > 0) {
             // Remove text again
@@ -500,6 +529,9 @@ pub const Buffer = struct {
     /// Delete entire line (dd)
     pub fn deleteLine(self: *Buffer) !void {
         if (self.lineCount() == 0) return;
+
+        // Invalidate external ArrayBuffers before modification
+        self.incrementVersion();
 
         const cursor_before = self.cursor;
         const line_num = self.cursor.row;
@@ -553,6 +585,10 @@ pub const Buffer = struct {
     /// Delete word forward (dw)
     pub fn deleteWord(self: *Buffer) !void {
         const line = self.getLine(self.cursor.row) orelse return;
+
+        // Invalidate external ArrayBuffers before modification
+        self.incrementVersion();
+
         const cursor_before = self.cursor;
         const start_offset = self.getCursorOffset();
 

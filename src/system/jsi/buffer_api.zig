@@ -1,6 +1,23 @@
 /// Buffer API Module
-/// Exposes buffer content via ArrayBuffer
+/// Exposes buffer content via ArrayBuffer (zero-copy, but use-after-free risk)
 /// Works with current ArrayList-based buffer (will upgrade to Rope later)
+///
+/// ⚠️  SAFETY: Version tracking is implemented and exposed via getChangedTick()
+/// - Buffer has version: u64 field, incremented on ALL modifications
+/// - JavaScript CAN check version via vim.buffer.getChangedTick()
+/// - ArrayBuffers become invalid on any buffer modification (insert/delete/undo/redo/paste/loadFile)
+/// - USE-AFTER-FREE is still possible if JavaScript ignores changedtick checks
+///
+/// Safe usage pattern (Neovim-compatible):
+///   const ab = vim.buffer.getContent();
+///   const tick = vim.buffer.getChangedTick();
+///   // ... later ...
+///   if (vim.buffer.getChangedTick() === tick) { /* safe to use ab */ }
+///
+/// Future enhancements:
+/// - Add version context to finalizers for owned ArrayBuffers
+/// - Implement detach-on-reallocation for automatic invalidation
+/// - Add runtime validation via Proxy wrappers in JavaScript
 const std = @import("std");
 const Buffer = @import("../../editor/buffer/buffer.zig").Buffer;
 const helpers = @import("helpers.zig");
@@ -18,12 +35,23 @@ const c = c_api.c;
 ///   const text = new TextDecoder().decode(view); // Convert to string if needed
 ///
 /// ⚠️  IMPORTANT: This is a SNAPSHOT! ArrayBuffer is invalidated when:
-///    - Buffer is modified (insert/delete)
+///    - Buffer is modified (insert/delete/undo/redo)
 ///    - Buffer is reallocated (grows beyond capacity)
-///    - Buffer version changes
+///    - Buffer version changes (buffer.version incremented on ANY modification)
 ///
-/// Safe pattern:
-///   const snapshot = new Uint8Array(vim.buffer.getContent()).slice(); // Copy immediately
+/// ⚠️  SAFETY: Version tracking available via getChangedTick() - JavaScript CAN detect staleness!
+///    - Use-after-free is POSSIBLE if you IGNORE changedtick checks
+///    - Always capture tick when getting ArrayBuffer, validate before use
+///
+/// Safe patterns:
+///   // Option 1: Check version before use (Neovim-compatible)
+///   const ab = vim.buffer.getContent();
+///   const tick = vim.buffer.getChangedTick();
+///   // ... later ...
+///   if (vim.buffer.getChangedTick() === tick) { /* safe to use ab */ }
+///
+///   // Option 2: Immediate copy (slower but safe)
+///   const snapshot = new Uint8Array(vim.buffer.getContent()).slice();
 pub export fn getBufferContent(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
@@ -51,19 +79,22 @@ pub export fn getBufferContent(
     );
 }
 
-/// vim.buffer.getContentCopy() -> string
-/// Returns buffer content as string (copy)
-/// (Identical to getContent() for now, kept for API compatibility)
+/// vim.buffer.getContentCopy() -> ArrayBuffer
+/// ⚠️ DEPRECATED: Misleading name - doesn't actually copy, returns same External ArrayBuffer
+/// This function is identical to getContent() but kept for legacy compatibility
+/// TODO: Remove in future version - use getContent() instead
 ///
-/// JavaScript usage:
-///   const content = vim.buffer.getContentCopy();  // string
+/// JavaScript usage (DEPRECATED):
+///   const ab = vim.buffer.getContentCopy();      // ArrayBuffer (misleading name!)
+///   const view = new Uint8Array(ab);             // View into native memory
 pub export fn getBufferContentCopy(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
     count: usize,
 ) callconv(.c) ?*c.OVHermesValue {
-    // For now, identical to getContent() since both return strings
+    // ⚠️ MISLEADING: This doesn't copy, it's identical to getContent()
+    // Kept only for backwards compatibility with legacy code
     return getBufferContent(runtime, context, args, count);
 }
 
@@ -137,6 +168,42 @@ pub export fn getBufferLineCount(
     return c.hermes_value_create_number(rt, @floatFromInt(buffer.lineCount()));
 }
 
+/// vim.buffer.getChangedTick() -> number
+/// Returns buffer modification counter (Neovim-compatible)
+///
+/// This is a monotonically increasing counter that increments on EVERY buffer modification.
+/// Use it to detect when cached data (like ArrayBuffers) has become stale.
+///
+/// JavaScript usage:
+///   const ab = vim.buffer.getContent();
+///   const tick = vim.buffer.getChangedTick();    // Capture current tick
+///
+///   // ... later ...
+///   if (vim.buffer.getChangedTick() === tick) {
+///     // Safe: buffer hasn't changed, ArrayBuffer still valid
+///   } else {
+///     // Unsafe: buffer changed, ArrayBuffer is stale, get new one
+///   }
+///
+/// Neovim compatibility:
+///   This is equivalent to nvim_buf_get_changedtick() and b:changedtick
+///
+/// See: https://neovim.io/doc/user/api.html#nvim_buf_get_changedtick()
+pub export fn getBufferChangedTick(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = args;
+    _ = count;
+
+    const rt = runtime orelse return null;
+    const buffer: *Buffer = @ptrCast(@alignCast(context.?));
+
+    return c.hermes_value_create_number(rt, @floatFromInt(buffer.version));
+}
+
 // ============================================================================
 // HostObject Implementation (Zero-Copy JSI)
 // ============================================================================
@@ -151,6 +218,8 @@ pub export fn bufferHostObjectGet(
     const name = std.mem.span(prop_name);
 
     // Use StaticStringMap for O(1) property dispatch
+    // Note: getContentCopy removed from HostObject interface (misleading name)
+    // It's still available via legacy registration for backwards compatibility
     const PropertyMap = std.StaticStringMap(*const fn (
         ?*c.OVHermesRuntime,
         ?*anyopaque,
@@ -158,10 +227,10 @@ pub export fn bufferHostObjectGet(
         usize,
     ) callconv(.c) ?*c.OVHermesValue).initComptime(.{
         .{ "getContent", getBufferContent },
-        .{ "getContentCopy", getBufferContentCopy },
         .{ "getLineContent", getLineContent },
         .{ "getLength", getBufferLength },
         .{ "getLineCount", getBufferLineCount },
+        .{ "getChangedTick", getBufferChangedTick },
     });
 
     const func = PropertyMap.get(name) orelse return null;
@@ -171,6 +240,7 @@ pub export fn bufferHostObjectGet(
 }
 
 /// vim.buffer HostObject enumerator - returns array of method names
+/// Note: getContentCopy deliberately excluded (deprecated, misleading name)
 pub export fn bufferHostObjectEnumerator(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
@@ -180,10 +250,10 @@ pub export fn bufferHostObjectEnumerator(
 
     const method_names = [_][]const u8{
         "getContent",
-        "getContentCopy",
         "getLineContent",
         "getLength",
         "getLineCount",
+        "getChangedTick",
     };
 
     const arr = c.hermes_array_create(rt, method_names.len) orelse return null;
@@ -203,6 +273,7 @@ pub export fn bufferHostObjectEnumerator(
 
 /// Register buffer API as HostObject (zero-copy ArrayBuffer access)
 /// JavaScript usage: vim.buffer.getContent(), vim.buffer.getLineContent(5)
+/// Note: getContentCopy deliberately NOT exposed (misleading name, deprecated)
 pub fn register(runtime: *c.OVHermesRuntime, buffer: *Buffer) void {
     c.hermes_register_host_object(
         runtime,
@@ -215,7 +286,8 @@ pub fn register(runtime: *c.OVHermesRuntime, buffer: *Buffer) void {
 }
 
 /// Legacy registration (backwards compatibility)
-/// TODO: Remove after all examples/tests updated
+/// ⚠️ DEPRECATED: getBufferContentCopy has misleading name (doesn't copy)
+/// TODO: Remove after all examples/tests updated to use HostObject API
 pub fn registerLegacy(runtime: *c.OVHermesRuntime, buffer: *Buffer) void {
     c.hermes_register_host_function(
         runtime,
@@ -226,7 +298,7 @@ pub fn registerLegacy(runtime: *c.OVHermesRuntime, buffer: *Buffer) void {
     c.hermes_register_host_function(
         runtime,
         "getBufferContentCopy",
-        getBufferContentCopy,
+        getBufferContentCopy, // ⚠️ DEPRECATED: Misleading name
         @ptrCast(buffer),
     );
     c.hermes_register_host_function(

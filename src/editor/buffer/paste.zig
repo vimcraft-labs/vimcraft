@@ -72,6 +72,9 @@ fn pasteCharWiseBefore(buffer: *Buffer, reg: *const YankReg) !Cursor {
 fn pasteSingleLineAfter(buffer: *Buffer, text: []const u8, cursor_before: Cursor) !Cursor {
     if (text.len == 0) return cursor_before;
 
+    // Invalidate external ArrayBuffers before modification
+    buffer.incrementVersion();
+
     // Calculate insertion offset (after cursor)
     var insert_offset = buffer.getCursorOffset();
 
@@ -113,6 +116,9 @@ fn pasteSingleLineAfter(buffer: *Buffer, text: []const u8, cursor_before: Cursor
 fn pasteSingleLineBefore(buffer: *Buffer, text: []const u8, cursor_before: Cursor) !Cursor {
     if (text.len == 0) return cursor_before;
 
+    // Invalidate external ArrayBuffers before modification
+    buffer.incrementVersion();
+
     // Calculate insertion offset (at cursor)
     const insert_offset = buffer.getCursorOffset();
 
@@ -147,6 +153,9 @@ fn pasteSingleLineBefore(buffer: *Buffer, text: []const u8, cursor_before: Curso
 /// Paste multi-line character-wise text after cursor
 fn pasteMultiLineCharWiseAfter(buffer: *Buffer, lines: []const []const u8, cursor_before: Cursor) !Cursor {
     if (lines.len == 0) return cursor_before;
+
+    // Invalidate external ArrayBuffers before modification
+    buffer.incrementVersion();
 
     // Get current line
     const current_line = buffer.getLine(buffer.cursor.row) orelse return cursor_before;
@@ -211,6 +220,9 @@ fn pasteMultiLineCharWiseAfter(buffer: *Buffer, lines: []const []const u8, curso
 fn pasteMultiLineCharWiseBefore(buffer: *Buffer, lines: []const []const u8, cursor_before: Cursor) !Cursor {
     if (lines.len == 0) return cursor_before;
 
+    // Invalidate external ArrayBuffers before modification
+    buffer.incrementVersion();
+
     // Calculate insertion offset (at cursor)
     const insert_offset = buffer.getCursorOffset();
 
@@ -271,6 +283,9 @@ fn pasteMultiLineCharWiseBefore(buffer: *Buffer, lines: []const []const u8, curs
 fn pasteLineWiseAfter(buffer: *Buffer, reg: *const YankReg) !Cursor {
     if (reg.lines.items.len == 0) return buffer.cursor;
 
+    // Invalidate external ArrayBuffers before modification
+    buffer.incrementVersion();
+
     const cursor_before = buffer.cursor;
 
     // Move to end of current line
@@ -329,6 +344,9 @@ fn pasteLineWiseAfter(buffer: *Buffer, reg: *const YankReg) !Cursor {
 /// Line-wise paste inserts complete lines ABOVE the current line
 fn pasteLineWiseBefore(buffer: *Buffer, reg: *const YankReg) !Cursor {
     if (reg.lines.items.len == 0) return buffer.cursor;
+
+    // Invalidate external ArrayBuffers before modification
+    buffer.incrementVersion();
 
     const cursor_before = buffer.cursor;
 
@@ -389,6 +407,9 @@ fn pasteLineWiseBefore(buffer: *Buffer, reg: *const YankReg) !Cursor {
 /// Inserts rectangular block of text starting one column after cursor
 fn pasteBlockWiseAfter(buffer: *Buffer, reg: *const YankReg) !Cursor {
     if (reg.lines.items.len == 0) return buffer.cursor;
+
+    // Invalidate external ArrayBuffers before modification
+    buffer.incrementVersion();
 
     const cursor_before = buffer.cursor;
     const start_row = cursor_before.row;
@@ -461,6 +482,9 @@ fn pasteBlockWiseAfter(buffer: *Buffer, reg: *const YankReg) !Cursor {
 /// Inserts rectangular block of text starting at cursor column
 fn pasteBlockWiseBefore(buffer: *Buffer, reg: *const YankReg) !Cursor {
     if (reg.lines.items.len == 0) return buffer.cursor;
+
+    // Invalidate external ArrayBuffers before modification
+    buffer.incrementVersion();
 
     const cursor_before = buffer.cursor;
     const start_row = cursor_before.row;
