@@ -1,6 +1,7 @@
 // Vimcraft TypeScript Type Definitions
-// Version: 0.3.0 - Neovim-Compatible API
+// Version: 0.5.0 - Neovim-Compatible API with camelCase vim.opt
 // Based on Neovim 0.12.0 API analysis
+// Updated: 65 vim.opt options with JavaScript camelCase naming
 
 // ============================================================================
 // Type Aliases & Utility Types
@@ -137,98 +138,72 @@ export interface VimOptions {
   signColumn?: 'yes' | 'no' | 'auto' | 'number';
   colorColumn?: string;
   scrollOff?: number;
-  sidescrollOff?: number;
+  sideScrollOff?: number;
   lastStatus?: 0 | 1 | 2 | 3;
   showCmd?: boolean;
   showMode?: boolean;
+  ruler?: boolean;
   wrap?: boolean;
   lineBreak?: boolean;
   list?: boolean;
-  listChars?: Record<string, string>;
-  fillChars?: Record<string, string>;
-  conceallevel?: 0 | 1 | 2 | 3;
-  concealCursor?: string;
+  listChars?: string;
+  concealLevel?: 0 | 1 | 2 | 3;
+  spell?: boolean;
+  foldColumn?: string;
+  termGuiColors?: boolean;
+  background?: 'light' | 'dark';
+  showMatch?: boolean;
 
-  // === Indentation Options ===
+  // === Editing Options ===
   tabStop?: number;
   shiftWidth?: number;
   expandTab?: boolean;
   smartIndent?: boolean;
   autoIndent?: boolean;
-  copyIndent?: boolean;
-  preserveIndent?: boolean;
-  shiftRound?: boolean;
+  textWidth?: number;
+  softTabStop?: number;
+  smartTab?: boolean;
+  backspace?: string;
+  formatOptions?: string;
+  completeOpt?: string;
+  virtualEdit?: string;
+  modifiable?: boolean;
+  readOnly?: boolean;
 
   // === Search Options ===
   ignoreCase?: boolean;
   smartCase?: boolean;
   hlSearch?: boolean;
   incSearch?: boolean;
-  magic?: boolean;
+  wrapScan?: boolean;
 
-  // === Edit Options ===
-  mouse?: 'a' | 'n' | 'v' | 'i' | 'c' | '';
-  timeoutLen?: number;
-  backspace?: string;
-  matchPairs?: string;
-  undoFile?: boolean;
+  // === Behavior Options ===
+  mouse?: string;
+  clipboard?: string;
   undoLevels?: number;
-  swapFile?: boolean;
+  timeout?: boolean;
+  timeoutLen?: number;
+  updateTime?: number;
+  hidden?: boolean;
   backup?: boolean;
   writeBackup?: boolean;
-
-  // === Window Options ===
-  splitBelow?: boolean;
+  swapFile?: boolean;
+  undoFile?: boolean;
+  undoDir?: string;
   splitRight?: boolean;
-  equalalways?: boolean;
-  splitkeep?: 'cursor' | 'screen' | 'topline';
-
-  // === File Options ===
+  splitBelow?: boolean;
   autoRead?: boolean;
   autoWrite?: boolean;
-  autoWriteAll?: boolean;
-  fileEncoding?: string;
-  fileFormat?: 'unix' | 'dos' | 'mac';
-  modifiable?: boolean;
-  readonly?: boolean;
+  confirm?: boolean;
 
-  // === Completion Options ===
+  // === UI Options ===
+  cmdHeight?: number;
+  pumHeight?: number;
+  winBlend?: number;
+  pumBlend?: number;
+  showTabLine?: 0 | 1 | 2;
   wildMenu?: boolean;
   wildMode?: string;
-  completeOpt?: string;
-  pumHeight?: number;
-  pumBlend?: number;
-
-  // === Performance Options ===
-  lazyRedraw?: boolean;
-  updateTime?: number;
-  timeoutLen?: number;
-  ttimeoutLen?: number;
-  redrawTime?: number;
-
-  // === Folding Options ===
-  foldenable?: boolean;
-  foldmethod?: 'manual' | 'indent' | 'expr' | 'marker' | 'syntax' | 'diff';
-  foldlevel?: number;
-  foldlevelStart?: number;
-  foldnestMax?: number;
-  foldminLines?: number;
-
-  // === Terminal Options ===
-  termguicolors?: boolean;
-
-  // === Spelling Options ===
-  spell?: boolean;
-  spellLang?: string;
-
-  // === Misc Options ===
-  clipboard?: string;
-  hidden?: boolean;
-  confirm?: boolean;
-  visualbell?: boolean;
-  errorbells?: boolean;
-  title?: boolean;
-  titlestring?: string;
 }
 
 // ============================================================================

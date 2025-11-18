@@ -48,8 +48,9 @@ pub const OptionValue = union(OptionType) {
 
 /// Option metadata (name, type, default, scope)
 pub const OptionMeta = struct {
-    name: []const u8,
-    short_name: ?[]const u8 = null,
+    name: []const u8, // Vim-style name (lowercase, e.g., "tabstop")
+    short_name: ?[]const u8 = null, // Vim short name (e.g., "ts")
+    js_name: []const u8, // JavaScript camelCase name (e.g., "tabStop")
     type: OptionType,
     default: OptionValue,
     scope: Scope,

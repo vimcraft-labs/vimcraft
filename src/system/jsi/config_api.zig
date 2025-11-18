@@ -131,25 +131,20 @@ export fn getOption(
     @memcpy(name_buf[0..name_len], name_ptr[0..name_len]);
     const name = name_buf[0..name_len];
 
-    // Convert name to lowercase for metadata lookup
-    var lower_name_buf: [256]u8 = undefined;
-    if (name_len >= lower_name_buf.len) return c.hermes_value_create_undefined(runtime);
-    for (name, 0..) |char, i| {
-        lower_name_buf[i] = std.ascii.toLower(char);
-    }
-    const lower_name = lower_name_buf[0..name_len];
-
-    // Try to get set value, fall back to default from metadata
-    const opt_value = blk: {
-        if (ctx.options_manager.get(lower_name)) |value| {
-            break :blk value;
-        }
-        // Not set - check if it's a defined option and return default
-        if (option_defs.getOptionMeta(lower_name)) |meta| {
-            break :blk meta.default;
-        }
+    // Look up option metadata (supports Vim name, short name, or JavaScript camelCase)
+    const meta = option_defs.getOptionMeta(name) orelse {
         // Unknown option
         return c.hermes_value_create_undefined(runtime);
+    };
+
+    // Try to get set value, fall back to default from metadata
+    // Use Vim name (meta.name) for storage key
+    const opt_value = blk: {
+        if (ctx.options_manager.get(meta.name)) |value| {
+            break :blk value;
+        }
+        // Not set - return default
+        break :blk meta.default;
     };
 
     // Convert OptionValue to Hermes value
@@ -194,16 +189,8 @@ export fn setOption(
     @memcpy(name_buf[0..name_len], name_ptr[0..name_len]);
     const name = name_buf[0..name_len];
 
-    // Convert name to lowercase for lookup (support both camelCase and lowercase)
-    var lower_name_buf: [256]u8 = undefined;
-    if (name_len >= lower_name_buf.len) return c.hermes_value_create_undefined(runtime);
-    for (name, 0..) |char, i| {
-        lower_name_buf[i] = std.ascii.toLower(char);
-    }
-    const lower_name = lower_name_buf[0..name_len];
-
-    // Look up option metadata (use lowercase for lookup)
-    const meta = option_defs.getOptionMeta(lower_name) orelse {
+    // Look up option metadata (supports Vim name, short name, or JavaScript camelCase)
+    const meta = option_defs.getOptionMeta(name) orelse {
         // Unknown option - ignore silently (Vim behavior)
         return c.hermes_value_create_undefined(runtime);
     };
@@ -243,13 +230,13 @@ export fn setOption(
         return c.hermes_value_create_undefined(runtime);
     }
 
-    // Store in OptionsManager (using lowercase name for consistency)
-    ctx.options_manager.set(lower_name, opt_value) catch {
+    // Store in OptionsManager (using Vim name for consistency)
+    ctx.options_manager.set(meta.name, opt_value) catch {
         return c.hermes_value_create_undefined(runtime);
     };
 
     // Apply side effects for specific options
-    applySideEffects(ctx, lower_name, opt_value);
+    applySideEffects(ctx, meta.name, opt_value);
 
     // Mark editor state as dirty to trigger render
     if (ctx.js_state_dirty) |dirty| {
@@ -292,13 +279,11 @@ export fn getOptionWithScope(
     @memcpy(name_buf[0..name_len], name_ptr[0..name_len]);
     const name = name_buf[0..name_len];
 
-    // Convert name to lowercase for metadata lookup
-    var lower_name_buf: [256]u8 = undefined;
-    if (name_len >= lower_name_buf.len) return c.hermes_value_create_undefined(runtime);
-    for (name, 0..) |char, i| {
-        lower_name_buf[i] = std.ascii.toLower(char);
-    }
-    const lower_name = lower_name_buf[0..name_len];
+    // Look up option metadata (supports Vim name, short name, or JavaScript camelCase)
+    const meta = option_defs.getOptionMeta(name) orelse {
+        // Unknown option
+        return c.hermes_value_create_undefined(runtime);
+    };
 
     // Arg 1: scope (string: 'global', 'local', 'force_local')
     if (args[1] == null or !c.hermes_value_is_string(args[1])) {
@@ -320,16 +305,13 @@ export fn getOptionWithScope(
         .local; // Default to local
 
     // Try to get set value with scope, fall back to default from metadata
+    // Use Vim name (meta.name) for storage key
     const opt_value = blk: {
-        if (ctx.options_manager.getWithScope(lower_name, scope)) |value| {
+        if (ctx.options_manager.getWithScope(meta.name, scope)) |value| {
             break :blk value;
         }
-        // Not set - check if it's a defined option and return default
-        if (option_defs.getOptionMeta(lower_name)) |meta| {
-            break :blk meta.default;
-        }
-        // Unknown option
-        return c.hermes_value_create_undefined(runtime);
+        // Not set - return default
+        break :blk meta.default;
     };
 
     // Convert OptionValue to Hermes value
@@ -372,16 +354,8 @@ export fn setOptionWithScope(
     @memcpy(name_buf[0..name_len], name_ptr[0..name_len]);
     const name = name_buf[0..name_len];
 
-    // Convert name to lowercase
-    var lower_name_buf: [256]u8 = undefined;
-    if (name_len >= lower_name_buf.len) return c.hermes_value_create_undefined(runtime);
-    for (name, 0..) |char, i| {
-        lower_name_buf[i] = std.ascii.toLower(char);
-    }
-    const lower_name = lower_name_buf[0..name_len];
-
-    // Look up option metadata
-    const meta = option_defs.getOptionMeta(lower_name) orelse {
+    // Look up option metadata (supports Vim name, short name, or JavaScript camelCase)
+    const meta = option_defs.getOptionMeta(name) orelse {
         return c.hermes_value_create_undefined(runtime);
     };
 
@@ -436,14 +410,14 @@ export fn setOptionWithScope(
     else
         .local;
 
-    // Store with scope
-    ctx.options_manager.setWithScope(lower_name, opt_value, scope) catch {
+    // Store with scope (using Vim name for consistency)
+    ctx.options_manager.setWithScope(meta.name, opt_value, scope) catch {
         return c.hermes_value_create_undefined(runtime);
     };
 
     // Apply side effects (only for global scope changes for now)
     if (scope == .global) {
-        applySideEffects(ctx, lower_name, opt_value);
+        applySideEffects(ctx, meta.name, opt_value);
     }
 
     // Mark editor state as dirty to trigger render
