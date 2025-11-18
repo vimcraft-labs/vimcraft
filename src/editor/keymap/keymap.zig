@@ -97,15 +97,41 @@ const MapKey = struct {
     }
 };
 
+/// Result of looking up a key mapping (Helix-style)
+/// This enables stateful pending keys without needing a typeahead buffer
+pub const LookupResult = union(enum) {
+    /// Full match found - execute this mapping
+    matched: *const KeymapEntry,
+
+    /// Partial match - need more keys (e.g., "j" when "jk" is mapped)
+    /// Caller should wait for next key OR timeout
+    pending,
+
+    /// No match found - fall through to built-in commands
+    not_found,
+};
+
 /// Keymap Manager - stores and retrieves key mappings
+/// Uses Helix-style stateful pending keys (no typeahead buffer needed)
 pub const KeymapManager = struct {
     allocator: std.mem.Allocator,
     mappings: std.StringHashMap(KeymapEntry),
+
+    /// Pending keys accumulated from partial matches (Helix-style)
+    /// Example: User types "j" when "jk" is mapped → pending_keys = "j"
+    /// When user types "k" next → pending_keys + "k" = "jk" → matched!
+    ///
+    /// NOTE: This is cleared on:
+    /// - Full match found (mapping executed)
+    /// - No prefix match (not_found)
+    /// - ESC pressed (cancellation)
+    pending_keys: std.ArrayList(u8),
 
     pub fn init(allocator: std.mem.Allocator) KeymapManager {
         return .{
             .allocator = allocator,
             .mappings = std.StringHashMap(KeymapEntry).init(allocator),
+            .pending_keys = std.ArrayList(u8){},
         };
     }
 
@@ -118,6 +144,12 @@ pub const KeymapManager = struct {
             val.deinit(self.allocator);
         }
         self.mappings.deinit();
+        self.pending_keys.deinit(self.allocator);
+    }
+
+    /// Clear pending keys (called on ESC, mode change, or after match)
+    pub fn clearPending(self: *KeymapManager) void {
+        self.pending_keys.clearRetainingCapacity();
     }
 
     /// Set a key mapping
@@ -185,17 +217,45 @@ pub const KeymapManager = struct {
         return self.mappings.getPtr(key);
     }
 
-    /// Lookup mapping for current input in given mode
+    /// Lookup mapping for current input in given mode (Helix-style stateful approach)
+    /// This accumulates pending keys across calls until match or timeout
+    ///
     /// Neovim precedence: buffer-local first, then global
-    /// Returns null if no mapping found
-    pub fn lookup(self: *KeymapManager, mode: Mode, input: []const u8, current_buffer_id: usize) !?*const KeymapEntry {
-        // First, try buffer-local mapping (Neovim precedence)
-        if (try self.get(mode, input, current_buffer_id)) |entry| {
-            return entry;
+    ///
+    /// Returns:
+    /// - .matched: Full mapping found, execute it (pending_keys cleared)
+    /// - .pending: Partial match, wait for more keys (input accumulated in pending_keys)
+    /// - .not_found: No match, fall through to built-in (pending_keys cleared)
+    ///
+    /// NOTE: setTimeout timeout integration happens in Phase 4.5
+    /// For now, caller should handle ESC to cancel pending state
+    pub fn lookup(self: *KeymapManager, mode: Mode, input: []const u8, current_buffer_id: usize) !LookupResult {
+        // Concatenate pending_keys with new input to form full input string
+        // Track whether we allocated so we can free properly
+        const full_input_allocated = self.pending_keys.items.len > 0;
+        const full_input = if (full_input_allocated)
+            try std.mem.concat(self.allocator, u8, &[_][]const u8{ self.pending_keys.items, input })
+        else
+            input;
+        defer if (full_input_allocated) self.allocator.free(full_input);
+
+        // Try to find full match (buffer-local first, then global - Neovim precedence)
+        if (try self.get(mode, full_input, current_buffer_id) orelse try self.get(mode, full_input, null)) |entry| {
+            // Full match found - clear pending and return
+            self.clearPending();
+            return .{ .matched = entry };
         }
 
-        // Fallback to global mapping
-        return try self.get(mode, input, null);
+        // No full match - check if input is prefix of longer mapping
+        if (self.hasPrefix(mode, full_input, current_buffer_id)) {
+            // Partial match - accumulate input and return pending
+            try self.pending_keys.appendSlice(self.allocator, input);
+            return .pending;
+        }
+
+        // No match and no prefix - clear pending and return not_found
+        self.clearPending();
+        return .not_found;
     }
 
     /// Check if input is a PREFIX of any mapping (for timeout support)
@@ -374,13 +434,17 @@ test "KeymapManager: buffer-local overrides global (Neovim precedence)" {
     try mgr.set(.normal, "H", .{ .keys = buffer_keys }, .{ .buffer = true }, 0);
 
     // Lookup should return buffer-local mapping (Neovim precedence)
-    const entry = try mgr.lookup(.normal, "H", 0);
-    try std.testing.expect(entry != null);
-    try std.testing.expect(entry.?.buffer_id != null);
-    try std.testing.expectEqual(@as(usize, 0), entry.?.buffer_id.?);
-    switch (entry.?.rhs) {
-        .keys => |k| try std.testing.expectEqualStrings("buffer_cmd", k),
-        .callback => try std.testing.expect(false),
+    const result = try mgr.lookup(.normal, "H", 0);
+    switch (result) {
+        .matched => |entry| {
+            try std.testing.expect(entry.buffer_id != null);
+            try std.testing.expectEqual(@as(usize, 0), entry.buffer_id.?);
+            switch (entry.rhs) {
+                .keys => |k| try std.testing.expectEqualStrings("buffer_cmd", k),
+                .callback => try std.testing.expect(false),
+            }
+        },
+        .pending, .not_found => try std.testing.expect(false), // Should match
     }
 
     // Global mapping still exists
@@ -402,12 +466,16 @@ test "KeymapManager: fallback to global when no buffer-local exists" {
     try mgr.set(.normal, "K", .{ .keys = global_keys }, .{}, null);
 
     // Lookup should fallback to global mapping
-    const entry = try mgr.lookup(.normal, "K", 0);
-    try std.testing.expect(entry != null);
-    try std.testing.expect(entry.?.buffer_id == null); // Global
-    switch (entry.?.rhs) {
-        .keys => |k| try std.testing.expectEqualStrings("global_cmd", k),
-        .callback => try std.testing.expect(false),
+    const result = try mgr.lookup(.normal, "K", 0);
+    switch (result) {
+        .matched => |entry| {
+            try std.testing.expect(entry.buffer_id == null); // Global
+            switch (entry.rhs) {
+                .keys => |k| try std.testing.expectEqualStrings("global_cmd", k),
+                .callback => try std.testing.expect(false),
+            }
+        },
+        .pending, .not_found => try std.testing.expect(false), // Should match
     }
 }
 
@@ -421,15 +489,29 @@ test "KeymapManager: hasPrefix detects ambiguous mappings (j vs jk)" {
     try mgr.set(.normal, "jk", .{ .keys = keys }, .{}, null);
 
     // "j" alone is NOT a full mapping, but IS a prefix of "jk"
-    const has_full = try mgr.lookup(.normal, "j", 0);
-    try std.testing.expect(has_full == null); // No complete mapping for "j"
+    const result_j = try mgr.lookup(.normal, "j", 0);
+    switch (result_j) {
+        .pending => {}, // Expected - "j" is prefix of "jk"
+        .matched, .not_found => try std.testing.expect(false), // Should be pending
+    }
 
     const has_partial = mgr.hasPrefix(.normal, "j", 0);
     try std.testing.expect(has_partial == true); // "j" is prefix of "jk"
 
+    // Clear pending state before next lookup (stateful accumulation)
+    mgr.clearPending();
+
     // "jk" is a complete mapping, not a prefix of anything longer
-    const has_full_jk = try mgr.lookup(.normal, "jk", 0);
-    try std.testing.expect(has_full_jk != null); // Complete mapping exists
+    const result_jk = try mgr.lookup(.normal, "jk", 0);
+    switch (result_jk) {
+        .matched => |entry| {
+            switch (entry.rhs) {
+                .keys => |k| try std.testing.expectEqualStrings("gg", k),
+                .callback => try std.testing.expect(false),
+            }
+        },
+        .pending, .not_found => try std.testing.expect(false), // Should match
+    }
 
     const has_partial_jk = mgr.hasPrefix(.normal, "jk", 0);
     try std.testing.expect(has_partial_jk == false); // "jk" is NOT a prefix (it's complete)

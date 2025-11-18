@@ -273,6 +273,12 @@ pub const Editor = struct {
 
     /// Handle input in Normal mode
     fn handleNormalMode(self: *Editor, input: []const u8) !void {
+        // ESC cancels pending keymap state (Step 4: ESC cancellation)
+        if (input.len == 1 and input[0] == 27) { // ESC
+            self.keymap_mgr.clearPending();
+            // Note: Also clears other pending states below
+        }
+
         // CRITICAL: Check for custom keymaps FIRST (before any other processing)
         // This allows users to override built-in keys (e.g., H → Hzz)
 
@@ -281,41 +287,87 @@ pub const Editor = struct {
 
         // Only check mappings if not at max depth
         if (self.mapping_depth < max_map_depth) {
+            // Save pending keys BEFORE lookup (lookup clears them on .not_found)
+            const had_pending_keys = self.keymap_mgr.pending_keys.items.len > 0;
+            const first_pending_key = if (had_pending_keys) self.keymap_mgr.pending_keys.items[0] else 0;
+
             // For now, Vimcraft has single-buffer support (buffer_id = 0)
-            if (self.keymap_mgr.lookup(.normal, input, 0) catch null) |mapping| {
-                // Found a mapping! Execute it
-                switch (mapping.rhs) {
-                    .keys => |keys| {
-                        // String mapping: execute keys recursively
+            const lookup_result = self.keymap_mgr.lookup(.normal, input, 0) catch {
+                // Error during lookup - clear pending and continue to built-in
+                self.keymap_mgr.clearPending();
+                return error.KeymapLookupError;
+            };
 
-                        // For noremap, skip mapping lookup by temporarily setting depth to max
-                        // This prevents further mapping expansion (executes keys literally)
-                        // NOTE: Vimcraft uses depth manipulation instead of Neovim's tb_noremap buffer
-                        // Limitation: Cannot express partial remapping (REMAP_SKIP). This is acceptable
-                        // given our immediate-execution model (no typeahead buffer).
-                        if (mapping.opts.noremap) {
-                            const saved_depth = self.mapping_depth;
-                            self.mapping_depth = max_map_depth; // Prevent further lookups
-                            errdefer self.mapping_depth = saved_depth; // Restore on error only
+            switch (lookup_result) {
+                .matched => |mapping| {
+                    // Found a full mapping! Execute it
+                    switch (mapping.rhs) {
+                        .keys => |keys| {
+                            // String mapping: execute keys recursively
 
-                            try self.executeKeys(keys);
-                            self.mapping_depth = saved_depth; // Explicit restore on success
-                        } else {
-                            // Increment depth before recursive call
-                            self.mapping_depth += 1;
-                            errdefer self.mapping_depth -= 1; // Restore on error only
+                            // For noremap, skip mapping lookup by temporarily setting depth to max
+                            // This prevents further mapping expansion (executes keys literally)
+                            // NOTE: Vimcraft uses depth manipulation instead of Neovim's tb_noremap buffer
+                            // Limitation: Cannot express partial remapping (REMAP_SKIP). This is acceptable
+                            // given our immediate-execution model (no typeahead buffer).
+                            if (mapping.opts.noremap) {
+                                const saved_depth = self.mapping_depth;
+                                self.mapping_depth = max_map_depth; // Prevent further lookups
+                                errdefer self.mapping_depth = saved_depth; // Restore on error only
 
-                            try self.executeKeys(keys);
-                            self.mapping_depth -= 1; // Explicit decrement on success
-                        }
+                                try self.executeKeys(keys);
+                                self.mapping_depth = saved_depth; // Explicit restore on success
+                            } else {
+                                // Increment depth before recursive call
+                                self.mapping_depth += 1;
+                                errdefer self.mapping_depth -= 1; // Restore on error only
+
+                                try self.executeKeys(keys);
+                                self.mapping_depth -= 1; // Explicit decrement on success
+                            }
+                            return;
+                        },
+                        .callback => |_| {
+                            // Callback mappings not yet implemented - return error instead of silent failure
+                            self.logger.err("Callback mappings not yet implemented (vim.keymap.set with function)", .{}) catch {};
+                            return error.CallbackNotImplemented;
+                        },
+                    }
+                },
+                .pending => {
+                    // Partial match - waiting for more keys
+                    // NOTE: setTimeout timeout integration happens in Phase 4.5
+                    // For now, just return and wait for next key
+                    // User can press ESC to cancel (Step 4)
+                    return;
+                },
+                .not_found => {
+                    // No mapping found
+                    // If we HAD pending keys (saved before lookup cleared them),
+                    // execute first key as literal, then process new input
+                    if (had_pending_keys) {
+                        // Note: pending_keys already cleared by lookup(), so use saved value
+
+                        // Execute first pending key as literal (bypass keymap lookup)
+                        // Use noremap technique: temporarily set depth to max to skip keymap
+                        const saved_depth = self.mapping_depth;
+                        self.mapping_depth = max_map_depth;
+                        errdefer self.mapping_depth = saved_depth;
+
+                        var first_key_buf: [1]u8 = .{first_pending_key};
+                        try self.handleNormalMode(&first_key_buf);
+
+                        // Restore depth
+                        self.mapping_depth = saved_depth;
+
+                        // Now process new input through normal flow (including keymap lookup)
+                        try self.handleNormalMode(input);
+
+                        // Don't fall through - we've already processed both keys
                         return;
-                    },
-                    .callback => |_| {
-                        // Callback mappings not yet implemented - return error instead of silent failure
-                        self.logger.err("Callback mappings not yet implemented (vim.keymap.set with function)", .{}) catch {};
-                        return error.CallbackNotImplemented;
-                    },
-                }
+                    }
+                    // No pending keys - fall through to built-in commands
+                },
             }
         } else if (self.mapping_depth > max_map_depth) {
             // Max depth exceeded (but allow exactly max_map_depth for noremap)
@@ -746,12 +798,78 @@ pub const Editor = struct {
 
     /// Handle input in Insert mode
     fn handleInsertMode(self: *Editor, input: []const u8) !void {
+        // Check for custom keymaps FIRST (before built-in commands)
+        // This allows mappings like "jk" → ESC
+        const max_map_depth = 1000;
+
+        if (self.mapping_depth < max_map_depth) {
+            // Save pending keys BEFORE lookup (lookup clears them on .not_found)
+            const had_pending_keys = self.keymap_mgr.pending_keys.items.len > 0;
+            const first_pending_key = if (had_pending_keys) self.keymap_mgr.pending_keys.items[0] else 0;
+
+            const lookup_result = self.keymap_mgr.lookup(.insert, input, 0) catch {
+                self.keymap_mgr.clearPending();
+                return error.KeymapLookupError;
+            };
+
+            switch (lookup_result) {
+                .matched => |mapping| {
+                    switch (mapping.rhs) {
+                        .keys => |keys| {
+                            if (mapping.opts.noremap) {
+                                const saved_depth = self.mapping_depth;
+                                self.mapping_depth = max_map_depth;
+                                errdefer self.mapping_depth = saved_depth;
+
+                                try self.executeKeys(keys);
+                                self.mapping_depth = saved_depth;
+                            } else {
+                                self.mapping_depth += 1;
+                                errdefer self.mapping_depth -= 1;
+
+                                try self.executeKeys(keys);
+                                self.mapping_depth -= 1;
+                            }
+                            return;
+                        },
+                        .callback => |_| {
+                            self.logger.err("Callback mappings not yet implemented", .{}) catch {};
+                            return error.CallbackNotImplemented;
+                        },
+                    }
+                },
+                .pending => {
+                    // Waiting for more keys
+                    return;
+                },
+                .not_found => {
+                    // Execute first pending key as literal, then process new input
+                    if (had_pending_keys) {
+                        const saved_depth = self.mapping_depth;
+                        self.mapping_depth = max_map_depth;
+                        errdefer self.mapping_depth = saved_depth;
+
+                        var first_key_buf: [1]u8 = .{first_pending_key};
+                        try self.handleInsertMode(&first_key_buf);
+
+                        self.mapping_depth = saved_depth;
+
+                        try self.handleInsertMode(input);
+                        return;
+                    }
+                    // No pending keys - fall through to built-in
+                },
+            }
+        }
+
+        // Built-in insert mode commands
         if (input.len == 1 and input[0] == 27) { // ESC
             // IMPORTANT: Bracketed paste in backend.zig manages transactions
             // Regular typing has NO transaction, so only commit if one exists
             if (self.buffer.active_transaction != null) {
                 try self.buffer.commitTransaction();
             }
+            self.keymap_mgr.clearPending(); // Clear pending state on mode change
             self.mode_manager.enterNormal();
             return;
         }
@@ -1424,4 +1542,94 @@ test "Keymap: depth restored correctly after mapping error (errdefer fix)" {
     // This should work (depth not corrupted by previous error)
     try editor.executeKeys("J");
     try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
+}
+
+test "Keymap: pending key loss bug - j then x (when jk is mapped)" {
+    const allocator = std.testing.allocator;
+
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    // Setup buffer with 3 lines
+    try editor.buffer.content.appendSlice(allocator, "line 1\nline 2\nline 3\n");
+    try editor.buffer.buildLineIndex();
+    editor.buffer.cursor = .{ .row = 0, .col = 0 }; // Start at line 1
+
+    // Map jk → gg (move to file start) - global mapping
+    const keys = try allocator.dupe(u8, "gg");
+    try editor.keymap_mgr.set(.normal, "jk", .{ .keys = keys }, .{ .noremap = true }, null);
+
+    // Type "j" → enters pending state, does NOT execute yet
+    try editor.executeKeys("j");
+
+    // Verify: cursor STILL at line 1 (pending state, "j" not executed yet)
+    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
+
+    // Type "x" → sequence breaks, should execute "j" (down) then "x" (delete char)
+    try editor.executeKeys("x");
+
+    // After fix:
+    // - "j" should execute as literal → move down to line 2 (row 1)
+    // - "x" should execute → delete character at cursor
+    try std.testing.expectEqual(@as(usize, 1), editor.buffer.cursor.row);
+
+    // Verify 'x' executed by checking first char was deleted from line 2
+    const line = editor.buffer.getLine(1).?;
+    try std.testing.expectEqualStrings("ine 2\n", line); // 'l' deleted
+}
+
+test "Keymap: pending key loss bug - j then jkl (multiple keys)" {
+    const allocator = std.testing.allocator;
+
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    // Setup buffer with 5 lines
+    try editor.buffer.content.appendSlice(allocator, "line 1\nline 2\nline 3\nline 4\nline 5\n");
+    try editor.buffer.buildLineIndex();
+    editor.buffer.cursor = .{ .row = 0, .col = 0 };
+
+    // Map jk → gg (move to file start) - global mapping
+    const keys = try allocator.dupe(u8, "gg");
+    try editor.keymap_mgr.set(.normal, "jk", .{ .keys = keys }, .{ .noremap = true }, null);
+
+    // Type "j" → enters pending state, does NOT execute yet
+    try editor.executeKeys("j");
+    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
+
+    // Type "jkl" → sequence breaks on second "j", all keys should execute
+    try editor.executeKeys("jkl");
+
+    // Expected behavior:
+    // - First pending "j" executes as literal → move down to line 2 (row 1)
+    // - Second "j" from input starts NEW pending state (because "jk" exists)
+    // - "k" completes "jk" mapping → executes "gg" → cursor to row 0
+    // - "l" executes as literal → move right
+    //
+    // Final state: cursor at row 0, col 1
+    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 1), editor.buffer.cursor.col);
+}
+
+test "Keymap: pending sequence completed successfully (jk → gg)" {
+    const allocator = std.testing.allocator;
+
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    // Setup buffer
+    try editor.buffer.content.appendSlice(allocator, "line 1\nline 2\nline 3\n");
+    try editor.buffer.buildLineIndex();
+    editor.buffer.cursor = .{ .row = 2, .col = 0 }; // Start at line 3
+
+    // Map jk → gg - global mapping
+    const keys = try allocator.dupe(u8, "gg");
+    try editor.keymap_mgr.set(.normal, "jk", .{ .keys = keys }, .{ .noremap = true }, null);
+
+    // Type "jk" → should execute gg (move to file start)
+    try editor.executeKeys("jk");
+
+    // Verify: cursor at file start (mapping executed)
+    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.col);
 }

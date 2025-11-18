@@ -8,6 +8,7 @@ const VisualState = @import("../../backends/terminal/visual/visual.zig").VisualS
 const YankHighlight = @import("../../backends/terminal/visual/yank_highlight.zig").YankHighlight;
 const Logger = @import("../../editor/log.zig").Logger;
 const OptionsManager = @import("../../editor/config/options.zig").OptionsManager;
+const KeymapManager = @import("../../editor/keymap/keymap.zig").KeymapManager;
 const movement = @import("../../editor/movement/movement.zig");
 const Position = @import("../../backends/terminal/visual/visual.zig").Position;
 const yank = @import("../../editor/buffer/yank.zig");
@@ -108,11 +109,13 @@ pub const EditorContext = struct {
     yank_highlight: YankHighlight,
     logger: Logger,
     options_manager: ?*OptionsManager = null,
+    keymap_mgr: KeymapManager,
 
     // Internal state
     pending_cmd: PendingCommand,
     pending_register: PendingRegister,
     cmd_buffer: CommandBuffer,
+    mapping_depth: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) !EditorContext {
         var buffer = Buffer.init(allocator);
@@ -120,6 +123,9 @@ pub const EditorContext = struct {
 
         var display = try Display.init(allocator);
         errdefer display.deinit();
+
+        var keymap_mgr = KeymapManager.init(allocator);
+        errdefer keymap_mgr.deinit();
 
         // Note: Display won't actually render since we never call flush() in headless mode
 
@@ -137,6 +143,7 @@ pub const EditorContext = struct {
             },
             .yank_highlight = YankHighlight{},
             .logger = Logger.init(allocator),
+            .keymap_mgr = keymap_mgr,
             .pending_cmd = PendingCommand{},
             .pending_register = PendingRegister{},
             .cmd_buffer = CommandBuffer.init(allocator),
@@ -147,6 +154,7 @@ pub const EditorContext = struct {
         self.buffer.deinit();
         self.display.deinit();
         self.register_mgr.deinit();
+        self.keymap_mgr.deinit();
         self.cmd_buffer.deinit();
         self.logger.deinit();
     }
@@ -492,7 +500,56 @@ pub const EditorContext = struct {
     }
 
     /// Handle input in Insert mode
-    fn handleInsertMode(self: *EditorContext, input: []const u8) !void {
+    fn handleInsertMode(self: *EditorContext, input: []const u8) anyerror!void {
+        // Check for custom keymaps FIRST (before built-in commands)
+        // This allows mappings like "jk" → ESC
+        const max_map_depth = 1000;
+
+        if (self.mapping_depth < max_map_depth) {
+            const had_pending_keys = self.keymap_mgr.pending_keys.items.len > 0;
+            const first_pending_key = if (had_pending_keys) self.keymap_mgr.pending_keys.items[0] else 0;
+
+            const lookup_result = self.keymap_mgr.lookup(.insert, input, 0) catch {
+                self.keymap_mgr.clearPending();
+                return error.KeymapLookupError;
+            };
+
+            switch (lookup_result) {
+                .matched => |mapping| {
+                    // Execute mapping
+                    const saved_depth = self.mapping_depth;
+                    self.mapping_depth += 1;
+                    errdefer self.mapping_depth = saved_depth;
+
+                    try self.executeKeys(mapping.rhs.keys);
+
+                    self.mapping_depth = saved_depth;
+                    return;
+                },
+                .pending => {
+                    // Waiting for more keys
+                    return;
+                },
+                .not_found => {
+                    // FIX: Execute first pending key as literal, then new input
+                    if (had_pending_keys) {
+                        const saved_depth = self.mapping_depth;
+                        self.mapping_depth = max_map_depth;
+                        errdefer self.mapping_depth = saved_depth;
+
+                        var first_key_buf: [1]u8 = .{first_pending_key};
+                        try self.handleInsertMode(&first_key_buf);
+
+                        self.mapping_depth = saved_depth;
+                        try self.handleInsertMode(input);
+                        return;
+                    }
+                    // Fall through to built-in insert mode commands
+                },
+            }
+        }
+
+        // Built-in insert mode commands (when no keymap match)
         if (input.len == 1 and input[0] == 27) { // ESC
             self.mode_manager.enterNormal();
             return;

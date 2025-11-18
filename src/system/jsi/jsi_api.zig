@@ -119,16 +119,14 @@ pub fn initJSI(
     }
 
     // Register keymap API (vim.keymap.set/del)
-    // Only register for Editor (not EditorContext)
-    if (T == *Editor) {
-        const keymap_ctx = keymap_api.KeymapContext.init(
-            allocator,
-            &editor_or_context.keymap_mgr,
-            runtime,
-        ) catch @panic("Failed to allocate KeymapContext");
-        global_keymap_ctx = keymap_ctx;
-        keymap_api.register(runtime, keymap_ctx);
-    }
+    // Now register for both Editor and EditorContext (both have keymap_mgr)
+    const keymap_ctx = keymap_api.KeymapContext.init(
+        allocator,
+        &editor_or_context.keymap_mgr,
+        runtime,
+    ) catch @panic("Failed to allocate KeymapContext");
+    global_keymap_ctx = keymap_ctx;
+    keymap_api.register(runtime, keymap_ctx);
 
     // JSI functions registered (silent mode)
 }
