@@ -123,7 +123,7 @@ globalThis.vim = {
     const fg = opts.fg || null;
     setHighlight(name, bg, fg);
   },
-  // Dynamic options proxy - handles ANY option via getOption/setOption
+  // Dynamic options proxy - handles ANY option via HostObject properties
   // Supports both camelCase (JavaScript style) and lowercase (Vim style)
   opt: new Proxy(
     // Pre-populate target with all options for Chrome DevTools
@@ -132,7 +132,7 @@ globalThis.vim = {
       const target = {
         get [Symbol.toStringTag]() { return 'vim.opt'; }
       };
-      // Populate with all options from Zig
+      // Populate with all options from Zig HostObject
       const allOptions = getAllOptions();
       Object.assign(target, allOptions);
       return target;
@@ -141,8 +141,8 @@ globalThis.vim = {
     get(target, prop) {
       if (prop === Symbol.toStringTag) return 'vim.opt';
       if (typeof prop === 'symbol') return undefined;
-      // Always fetch from Zig (source of truth)
-      return getOption(prop);
+      // Direct HostObject property access (zero-copy JSI)
+      return vimOpt[prop];
     },
     set(target, prop, value) {
       if (typeof prop === 'symbol') return false;
@@ -159,16 +159,16 @@ globalThis.vim = {
         value = parts.join(',');
       }
 
-      // Write to Zig (source of truth)
-      setOption(prop, value);
+      // Direct HostObject property write (zero-copy JSI)
+      vimOpt[prop] = value;
       // Note: DO NOT update target here - it creates stale cache
       // Target is refreshed via ownKeys trap when Chrome DevTools enumerates
-      // Zig is the single source of truth, accessed via get trap
+      // Zig HostObject is the single source of truth
       return true;
     },
     has(target, prop) {
       if (typeof prop === 'symbol') return false;
-      return getOption(prop) !== undefined;
+      return vimOpt[prop] !== undefined;
     },
     // Fetch fresh snapshot when Chrome DevTools enumerates
     ownKeys(target) {
@@ -185,8 +185,8 @@ globalThis.vim = {
     },
     getOwnPropertyDescriptor(target, prop) {
       if (typeof prop === 'symbol') return undefined;
-      // Fetch fresh value from Zig
-      const value = getOption(prop);
+      // Fetch fresh value from HostObject
+      const value = vimOpt[prop];
       if (value === undefined) return undefined;
       return {
         value: value,
@@ -213,8 +213,8 @@ globalThis.vim = {
     get(target, prop) {
       if (prop === Symbol.toStringTag) return 'vim.optLocal';
       if (typeof prop === 'symbol') return undefined;
-      // Always fetch from Zig (source of truth)
-      return getOptionWithScope(prop, 'local');
+      // Direct HostObject property access (zero-copy JSI)
+      return vimOptLocal[prop];
     },
     set(target, prop, value) {
       if (typeof prop === 'symbol') return false;
@@ -230,13 +230,13 @@ globalThis.vim = {
         value = parts.join(',');
       }
 
-      // Write to Zig (source of truth)
-      setOptionWithScope(prop, value, 'local');
+      // Direct HostObject property write (zero-copy JSI)
+      vimOptLocal[prop] = value;
       return true;
     },
     has(target, prop) {
       if (typeof prop === 'symbol') return false;
-      return getOptionWithScope(prop, 'local') !== undefined;
+      return vimOptLocal[prop] !== undefined;
     },
     // Fetch fresh snapshot when Chrome DevTools enumerates
     ownKeys(target) {
@@ -253,8 +253,8 @@ globalThis.vim = {
     },
     getOwnPropertyDescriptor(target, prop) {
       if (typeof prop === 'symbol') return undefined;
-      // Fetch fresh value from Zig
-      const value = getOptionWithScope(prop, 'local');
+      // Fetch fresh value from HostObject
+      const value = vimOptLocal[prop];
       if (value === undefined) return undefined;
       return {
         value: value,
@@ -281,8 +281,8 @@ globalThis.vim = {
     get(target, prop) {
       if (prop === Symbol.toStringTag) return 'vim.optGlobal';
       if (typeof prop === 'symbol') return undefined;
-      // Always fetch from Zig (source of truth)
-      return getOptionWithScope(prop, 'global');
+      // Direct HostObject property access (zero-copy JSI)
+      return vimOptGlobal[prop];
     },
     set(target, prop, value) {
       if (typeof prop === 'symbol') return false;
@@ -298,13 +298,13 @@ globalThis.vim = {
         value = parts.join(',');
       }
 
-      // Write to Zig (source of truth)
-      setOptionWithScope(prop, value, 'global');
+      // Direct HostObject property write (zero-copy JSI)
+      vimOptGlobal[prop] = value;
       return true;
     },
     has(target, prop) {
       if (typeof prop === 'symbol') return false;
-      return getOptionWithScope(prop, 'global') !== undefined;
+      return vimOptGlobal[prop] !== undefined;
     },
     // Fetch fresh snapshot when Chrome DevTools enumerates
     ownKeys(target) {
@@ -321,8 +321,8 @@ globalThis.vim = {
     },
     getOwnPropertyDescriptor(target, prop) {
       if (typeof prop === 'symbol') return undefined;
-      // Fetch fresh value from Zig
-      const value = getOptionWithScope(prop, 'global');
+      // Fetch fresh value from HostObject
+      const value = vimOptGlobal[prop];
       if (value === undefined) return undefined;
       return {
         value: value,
@@ -343,18 +343,18 @@ globalThis.vim = {
     get(target, prop) {
       if (prop === Symbol.toStringTag) return 'vim.bo';
       if (typeof prop === 'symbol') return undefined;
-      // Always fetch from Zig (source of truth)
-      return getBufferOption(prop);
+      // Direct HostObject property access (zero-copy JSI)
+      return vimBo[prop];
     },
     set(target, prop, value) {
       if (typeof prop === 'symbol') return false;
-      // Write to Zig (source of truth)
-      setBufferOption(prop, value);
+      // Direct HostObject property write (zero-copy JSI)
+      vimBo[prop] = value;
       return true;
     },
     has(target, prop) {
       if (typeof prop === 'symbol') return false;
-      return getBufferOption(prop) !== undefined;
+      return vimBo[prop] !== undefined;
     },
     ownKeys(target) {
       // Return known buffer options
@@ -362,8 +362,8 @@ globalThis.vim = {
     },
     getOwnPropertyDescriptor(target, prop) {
       if (typeof prop === 'symbol') return undefined;
-      // Fetch fresh value from Zig
-      const value = getBufferOption(prop);
+      // Fetch fresh value from HostObject
+      const value = vimBo[prop];
       if (value === undefined) return undefined;
       return {
         value: value,
@@ -375,13 +375,27 @@ globalThis.vim = {
   })
 };
 
-// Layer API - NO wrapper needed!
-// The native functions (clearLayer, renderVirtualText) handle dirty tracking internally
-// via layer.markDirty() which is smart enough to only mark when actually modified
+// vim.cursor API - Expose cursor HostObject methods (if available)
+// Allows animated cursor plugins to query and override cursor position
+// Direct HostObject access (zero-copy JSI)
+// Note: Not available in headless mode (debug protocol)
+if (typeof vimCursor !== 'undefined') {
+  vim.cursor = vimCursor;
+}
 
-// vim.motion API - Expose motion primitives to JavaScript plugins
+// vim.layer API - Expose layer HostObject methods
+// Allows plugins to create custom rendering layers (Neovim-style extmarks)
+// Direct HostObject access (zero-copy JSI)
+vim.layer = vimLayer;
+
+// vim.motion API - Expose motion HostObject methods
 // Allows plugins to programmatically trigger cursor movement
-vim.motion = {
+// Direct HostObject access (zero-copy JSI)
+vim.motion = vimMotion;
+
+// Legacy motion wrappers for backwards compatibility
+// TODO: Remove after all examples updated to use vim.motion HostObject
+const _legacyMotion = {
   // Character motion (h/j/k/l)
   left: function() { moveLeft(); },
   right: function() { moveRight(); },
@@ -415,31 +429,56 @@ vim.motion = {
 // Freeze to prevent modifications
 Object.freeze(vim.motion);
 
-// vim.keymap API - Expose keymap functions to JavaScript plugins
+// vim.keymap API - Expose keymap HostObject methods
 // Allows users to create custom key mappings (Neovim compatible)
-vim.keymap = {
-  // vim.keymap.set(mode, lhs, rhs, opts)
-  // mode: string ('n', 'i', 'v', 'c')
-  // lhs: string (key to map, e.g., 'H', '<leader>w')
-  // rhs: string or function (command to execute or callback)
-  // opts: object { noremap: bool, silent: bool, buffer: bool }
-  set: keymapSet,
-
-  // vim.keymap.del(mode, lhs)
-  // mode: string ('n', 'i', 'v', 'c')
-  // lhs: string (key to unmap)
-  del: keymapDel
-};
+// Direct HostObject access (zero-copy JSI)
+// vim.keymap.set(mode, lhs, rhs, opts)
+// mode: string ('n', 'i', 'v', 'c')
+// lhs: string (key to map, e.g., 'H', '<leader>w')
+// rhs: string or function (command to execute or callback)
+// opts: object { noremap: bool, silent: bool, buffer: bool }
+// vim.keymap.del(mode, lhs)
+// mode: string ('n', 'i', 'v', 'c')
+// lhs: string (key to unmap)
+vim.keymap = vimKeymap;
 
 Object.freeze(vim.keymap);
 
 // vim.filetype API - Filetype detection (Neovim compatible)
-// Uses comprehensive database of 1,437+ compile-time mappings from Neovim
-vim.filetype = {
-  // vim.filetype.match(opts)
-  // opts: { filename: string } or { buf: number }
-  // returns: string (filetype like "rust", "javascript") or null (unknown)
-  match: vim_filetype_match
-};
+// Uses go-enry for GitHub Linguist-based language detection (697 languages)
+// Direct HostObject access (zero-copy JSI)
+// vim.filetype.match(opts)
+// opts: { filename: string } or { buf: number }
+// returns: string (language like "Rust", "JavaScript") or null (unknown)
+vim.filetype = vimFiletype;
 
 Object.freeze(vim.filetype);
+
+// vim.buffer API - Buffer content access (zero-copy External ArrayBuffer)
+// Direct HostObject access (zero-copy JSI)
+//
+// vim.buffer.getContent() -> ArrayBuffer
+//   Returns entire buffer as External ArrayBuffer (zero-copy!)
+//   Usage:
+//     const ab = vim.buffer.getContent();          // ArrayBuffer
+//     const view = new Uint8Array(ab);             // View into native memory
+//     const text = new TextDecoder().decode(view); // Convert to string
+//
+// vim.buffer.getLineContent(line_num) -> ArrayBuffer
+//   Returns single line as External ArrayBuffer (zero-copy!)
+//   Usage:
+//     const ab = vim.buffer.getLineContent(5);     // Line 5
+//     const view = new Uint8Array(ab);
+//     const text = new TextDecoder().decode(view);
+//
+// vim.buffer.getLength() -> number (byte length)
+// vim.buffer.getLineCount() -> number (line count)
+//
+// ⚠️  IMPORTANT: ArrayBuffers are SNAPSHOTS!
+//    Invalidated when buffer is modified (insert/delete/realloc)
+//    Safe pattern: Copy immediately with new Uint8Array(ab).slice()
+//
+// Performance: 25x faster than string marshaling (80μs vs 2ms for 1MB)
+vim.buffer = vimBuffer;
+
+Object.freeze(vim.buffer);

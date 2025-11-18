@@ -1273,6 +1273,7 @@ comptime {
     _ = @import("backends/terminal/display/cursorline_test.zig");
     _ = @import("editor/config/highlights_test.zig");
     _ = @import("editor/editor_test.zig");
+    _ = @import("system/jsi/jsi_tests.zig");
 }
 
 // ============================================================================

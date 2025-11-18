@@ -573,49 +573,263 @@ vim.keymap.set('n', 'K', () => {
 
 This is the **proper solution**, not a workaround.
 
-### Filetype Data Generation (Compile-Time)
+### Filetype Detection (go-enry Integration)
 
-**System**: Automatic extraction of 1,400+ filetype mappings from Neovim at build time.
+**System**: Runtime language detection using go-enry (GitHub Linguist C library, 697 languages).
+
+**Why go-enry over Neovim's filetype.lua**:
+- ✅ **Content-based detection** (handles `.h` disambiguation, shebangs, modelines)
+- ✅ **Industry standard** (same engine powering GitHub.com language detection)
+- ✅ **2x faster** than Ruby Linguist, 697 languages vs Neovim's 1,437 patterns
+- ✅ **Bayesian classifier** for ambiguous files (`.rs` → Rust vs RenderScript)
+- ✅ **No build-time generation** (simpler build process)
 
 **Architecture**:
-- Generator: `scripts/generate_filetype_data.zig` (pure Zig, no external dependencies)
-- Source: `vendor/neovim/runtime/lua/vim/filetype.lua` (tracked as build input)
-- Output: `.zig-cache/*/filetype_data.zig` (compile-time initialized StaticStringMap)
-- Integration: `src/editor/treesitter/loader.zig` imports generated data
+- C Library: `vendor/go-enry/.shared/darwin/libenry.dylib` (10MB, built from Go)
+- C FFI: `src/system/enry/c_api.zig` (GoString/GoSlice type mappings)
+- Zig Wrapper: `src/system/enry/enry.zig` (high-level API)
+- Integration: `src/editor/treesitter/loader.zig` calls `enry.detectLanguage()`
 
-**Build Flow**:
+**Detection Strategies** (in order):
+1. Extension → `.rs` → Rust
+2. Filename → `Makefile` → Makefile
+3. Shebang → `#!/usr/bin/env python` → Python
+4. Modeline → `# vim: set ft=python:` → Python
+5. Content heuristics → Disambiguates C vs C++ for `.h` files
+6. Bayesian classifier → Final fallback for ambiguous cases
+
+**Build Integration**:
+```zig
+// build.zig (lines 289-299)
+exe.addLibraryPath(b.path("vendor/go-enry/.shared/darwin"));
+exe.linkSystemLibrary("enry");
+exe.addRPath(b.path("vendor/go-enry/.shared/darwin"));
 ```
-1. build.zig compiles scripts/generate_filetype_data.zig
-2. Run generator with vendor/neovim/runtime/lua/vim/filetype.lua as input
-3. Parse Lua tables (extension = {...}, filename = {...})
-4. Generate Zig code with std.StaticStringMap.initComptime()
-5. Write to .zig-cache/*/filetype_data.zig
-6. Main build imports generated file
+
+**Runtime Path** (macOS):
+```bash
+DYLD_LIBRARY_PATH=vendor/go-enry/.shared/darwin:vendor/hermes/build/API/hermes:vendor/hermes/build/jsi
 ```
+
+**Known Issues**:
+- Memory leaks (allocated language strings not freed - minor, only once per file open)
+- TODO: Use arena allocator or cache results (documented in loader.zig:126)
+
+**Testing**:
+- Unit tests: `zig build test` → Verifies .c, Makefile, .rs detection
+- Stack traces confirm integration: c_api.zig → enry.zig → loader.zig → vim_filetype_match
+
+**Code Locations**:
+- C FFI: src/system/enry/c_api.zig:1-83
+- Zig wrapper: src/system/enry/enry.zig:1-53
+- Integration: src/editor/treesitter/loader.zig:119-128
+- Build config: build.zig:289-299
+
+### JSI HostObject Architecture (Zero-Copy Plugin API)
+
+**Status**: ✅ Complete (January 2025) - 7 major APIs migrated, 3-5x performance gain
+
+**Architecture**: React Native-inspired zero-copy property access pattern for JavaScript↔Zig communication.
 
 **Performance**:
-- First build: ~62ms to generate data
-- Cached builds: 0ms (Zig tracks file hashes)
-- Runtime: O(1) lookup, zero allocation, compile-time initialization
+- Property access: ~168 ns/call (6M ops/sec)
+- **3-5x faster** than legacy function-based JSI
+- Zero serialization overhead
+- O(1) property dispatch via StaticStringMap
 
-**Regeneration Triggers**:
-- Neovim's filetype.lua changes (automatic via `addFileInput()`)
-- Generator script changes
-- Clean build (`rm -rf .zig-cache`)
+#### HostObject Pattern Overview
 
-**Output Stats**:
-- 1,066 extension mappings (`.rs` → `rust`)
-- 371 filename mappings (`Makefile` → `make`)
-- Total: 1,437 compile-time filetype rules
+**Flow**:
+```
+JavaScript → Proxy → C++ CustomHostObject → Zig HostObject Getter → Implementation
+```
 
-**Why Zig Generator**:
-- ✅ No Python dependency
-- ✅ Integrated with build system
-- ✅ Fast (compiles to native code)
-- ✅ Type-safe output generation
-- ✅ Single toolchain (Zig only)
+**Key Components**:
 
-**Code Location**: See build.zig:143-174 for integration details.
+1. **JavaScript Proxy** (`runtime.js`) - Chrome DevTools support, special handling
+2. **C++ CustomHostObject** (`hermes_c_api.cpp`) - JSI↔Zig bridge
+3. **Zig HostObject Getter** (`*_api.zig`) - O(1) dispatch via StaticStringMap
+4. **Zig Implementation** - Core functionality
+
+#### Migrated APIs (7 total, 11 HostObjects)
+
+**1. vim.motion** (motion_api.zig)
+- 13 cursor movement primitives
+- Use case: Smooth cursor animations (smear-cursor)
+
+**2. vim.opt/optLocal/optGlobal/bo** (config_api.zig)
+- 80+ Vim options with dynamic property access
+- Auto-scoped (opt), explicit local (optLocal), explicit global (optGlobal)
+- Buffer properties (bo) - filetype, etc.
+
+**3. vim.cursor** (cursor_api.zig)
+- getPosition(), setRenderPosition(), clearRenderPosition()
+- Use case: Animated cursor plugins
+
+**4. vim.layer** (layer_api.zig)
+- 9 methods for virtual text rendering
+- Use case: Neovim-style extmarks (diagnostics, inline hints)
+
+**5. vim.keymap** (keymap_api.zig)
+- set(), del() - Custom key mappings
+- Neovim-compatible: mode, lhs, rhs, opts
+
+**6. vim.filetype** (filetype_api.zig)
+- match() - Language detection via go-enry (697 languages)
+- Returns GitHub Linguist language names ("Rust", "JavaScript")
+
+**7. vim.buffer** (buffer_api.zig) - NEW!
+- getContent() → ArrayBuffer (zero-copy snapshot)
+- getLineContent(n) → ArrayBuffer (line view)
+- getLength(), getLineCount()
+- Use case: Zero-copy buffer content access from JavaScript
+
+#### Implementation Pattern
+
+**Step 1: Zig HostObject Getter** (O(1) property dispatch):
+```zig
+pub export fn vimOptHostObjectGet(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    prop_name: [*c]const u8,
+) callconv(.c) ?*c.OVHermesValue {
+    const name = std.mem.span(prop_name);
+
+    // O(1) dispatch via StaticStringMap
+    const PropertyMap = std.StaticStringMap(...).initComptime(.{
+        .{ "method1", method1Function },
+        .{ "method2", method2Function },
+    });
+
+    const func = PropertyMap.get(name) orelse return null;
+    return c.hermes_create_function(runtime, prop_name, func, context);
+}
+```
+
+**Step 2: JavaScript Proxy Wrapper** (special handling):
+```javascript
+vim.opt = new Proxy(
+    { get [Symbol.toStringTag]() { return 'vim.opt'; } },
+    {
+        get(target, prop) {
+            if (prop === Symbol.toStringTag) return 'vim.opt';
+            if (typeof prop === 'symbol') return undefined;
+            return vimOpt[prop]; // Direct HostObject access (zero-copy)
+        },
+        set(target, prop, value) {
+            if (typeof prop === 'symbol') return false;
+            vimOpt[prop] = value; // Direct HostObject write
+            return true;
+        },
+        ownKeys(target) {
+            // Fetch fresh snapshot for Chrome DevTools
+            const allOptions = getAllOptions();
+            for (const key of Object.keys(target)) delete target[key];
+            Object.assign(target, allOptions);
+            return Object.keys(target);
+        }
+    }
+);
+```
+
+**Step 3: Registration**:
+```zig
+pub fn register(runtime: *c.OVHermesRuntime, context: *Context) void {
+    c.hermes_register_host_object(
+        runtime,
+        "vimOpt",
+        vimOptHostObjectGet,
+        vimOptHostObjectSet, // or null for read-only
+        vimOptHostObjectEnumerator,
+        @ptrCast(context),
+    );
+}
+```
+
+#### Rope Data Structure (Future Buffer Optimization)
+
+**Location**: `src/editor/buffer/rope.zig`
+
+**Purpose**: Tree-based string for O(log n) edits (vs ArrayList's O(n))
+
+**Performance**:
+| Operation | ArrayList | Rope |
+|-----------|-----------|------|
+| Insert/Delete | O(n) | O(log n) |
+| Concat | O(n) | O(1) |
+| Index | O(1) | O(log n) |
+
+**Structure**:
+- Internal nodes: Concatenation (left + right subtrees)
+- Leaf nodes: String slices (512 bytes for cache locality)
+- Self-balancing: Weight heuristic (left subtree byte count)
+
+**Status**: Implementation complete ✅, buffer migration pending (Phase 6)
+
+**Future**: When buffer migrates to Rope, ArrayBuffer can expose Rope leaf nodes directly (true zero-copy, no snapshot semantics).
+
+#### API Migration Path
+
+**Legacy (Phase 1-3)**:
+```javascript
+setOption("number", true);
+moveLeft();
+getCursorPosition();
+```
+
+**HostObject (Phase 4+)**:
+```javascript
+vim.opt.number = true;
+vim.motion.left();
+vim.cursor.getPosition();
+```
+
+**Backwards Compatibility**: Dual registration maintained during transition.
+
+**Timeline**:
+- Phase 4 (Current): Both APIs supported
+- Phase 5 (TBD): Deprecation warnings for legacy
+- Phase 6 (TBD): Legacy removal
+
+#### Documentation
+
+- **API Reference**: [docs/api/vim-api-reference.md](docs/api/vim-api-reference.md) - Complete API documentation
+- **Migration Guide**: [docs/api/vim-api-migration-guide.md](docs/api/vim-api-migration-guide.md) - Legacy→HostObject migration
+- **Architecture Details**: [docs/architecture/jsi-hostobject-architecture.md](docs/architecture/jsi-hostobject-architecture.md) - Deep dive
+- **Migration Summary**: [docs/architecture/jsi-hostobject-migration-summary.md](docs/architecture/jsi-hostobject-migration-summary.md) - Metrics and lessons learned
+
+#### Performance Benchmarks
+
+**Property Lookup** (1M iterations):
+```
+Time per lookup: 168 ns
+Operations/sec: 6M ops/sec
+Speedup vs legacy: 3-5x
+```
+
+**Code Location**: `src/system/jsi/tests/benchmark.zig`
+
+#### Common Pitfalls
+
+1. **Hot loops**: Cache property values, don't call JSI 1000x
+   ```javascript
+   // ❌ Inefficient (1000 JSI calls)
+   for (let i = 0; i < 1000; i++) {
+     process(vim.opt.tabstop);
+   }
+
+   // ✅ Efficient (1 JSI call)
+   const tabstop = vim.opt.tabstop;
+   for (let i = 0; i < 1000; i++) {
+     process(tabstop);
+   }
+   ```
+
+2. **Calling convention**: Use `.c` not `.C` (Zig 0.13+)
+
+3. **Function visibility**: Use `pub export fn` not `export fn` (Zig+C visibility)
+
+4. **ArrayBuffer snapshots**: Buffer modifications invalidate ArrayBuffers (TODO: version tracking)
 
 ## Build Commands
 

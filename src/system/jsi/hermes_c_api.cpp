@@ -53,6 +53,45 @@ struct OVHermesString {
 };
 
 //
+// ExternalMutableBuffer - Wraps native memory for zero-copy ArrayBuffer
+// React Native pattern: Used for realtime camera frames, large buffers
+//
+
+class ExternalMutableBuffer : public jsi::MutableBuffer {
+private:
+    uint8_t* data_;
+    size_t size_;
+    OVHermesArrayBufferFinalizer finalizer_;
+    void* finalizer_ctx_;
+
+public:
+    ExternalMutableBuffer(
+        uint8_t* data,
+        size_t size,
+        OVHermesArrayBufferFinalizer finalizer,
+        void* finalizer_ctx
+    ) : data_(data),
+        size_(size),
+        finalizer_(finalizer),
+        finalizer_ctx_(finalizer_ctx) {}
+
+    ~ExternalMutableBuffer() override {
+        // Call finalizer when JavaScript garbage collects the ArrayBuffer
+        if (finalizer_) {
+            finalizer_(data_, finalizer_ctx_);
+        }
+    }
+
+    size_t size() const override {
+        return size_;
+    }
+
+    uint8_t* data() override {
+        return data_;
+    }
+};
+
+//
 // Helper: Wrap host function callback
 //
 
@@ -299,6 +338,281 @@ void hermes_register_host_function(
 }
 
 //
+// HostObject Support (for zero-copy JSI)
+//
+
+// CustomHostObject implementation - wraps Zig callbacks into JSI HostObject
+class CustomHostObject : public HostObject {
+private:
+    // Callback signatures matching Zig functions
+    using GetterCallback = OVHermesValue* (*)(
+        OVHermesRuntime* runtime,
+        void* context,
+        const char* prop_name
+    );
+
+    using SetterCallback = OVHermesValue* (*)(
+        OVHermesRuntime* runtime,
+        void* context,
+        const char* prop_name,
+        OVHermesValue* value
+    );
+
+    using EnumeratorCallback = OVHermesValue* (*)(
+        OVHermesRuntime* runtime,
+        void* context
+    );
+
+    OVHermesRuntime* runtime_;
+    GetterCallback getter_;
+    SetterCallback setter_;
+    EnumeratorCallback enumerator_;
+    void* context_;
+    std::string name_;
+
+public:
+    CustomHostObject(
+        OVHermesRuntime* runtime,
+        const std::string& name,
+        GetterCallback getter,
+        SetterCallback setter,
+        EnumeratorCallback enumerator,
+        void* context
+    ) : runtime_(runtime),
+        getter_(getter),
+        setter_(setter),
+        enumerator_(enumerator),
+        context_(context),
+        name_(name) {}
+
+    ~CustomHostObject() override {
+        // Destructor may be called on arbitrary thread by GC
+        // Ensure thread-safe cleanup if needed
+    }
+
+    Value get(Runtime& rt, const PropNameID& name) override {
+        if (!getter_) {
+            return Value::undefined();
+        }
+
+        try {
+            std::string prop_name = name.utf8(rt);
+
+            // Call Zig getter callback
+            OVHermesValue* result = getter_(runtime_, context_, prop_name.c_str());
+
+            if (result) {
+                Value ret(rt, result->value);
+                delete result;
+                return ret;
+            } else {
+                return Value::undefined();
+            }
+        } catch (...) {
+            return Value::undefined();
+        }
+    }
+
+    void set(Runtime& rt, const PropNameID& name, const Value& value) override {
+        if (!setter_) {
+            // Property is read-only
+            return;
+        }
+
+        try {
+            std::string prop_name = name.utf8(rt);
+            OVHermesValue value_wrapper(Value(rt, value));
+
+            // Call Zig setter callback
+            OVHermesValue* result = setter_(runtime_, context_, prop_name.c_str(), &value_wrapper);
+
+            if (result) {
+                delete result;
+            }
+        } catch (...) {
+            // Silently ignore errors
+        }
+    }
+
+    std::vector<PropNameID> getPropertyNames(Runtime& rt) override {
+        std::vector<PropNameID> props;
+
+        if (!enumerator_) {
+            return props;
+        }
+
+        try {
+            // Call Zig enumerator callback to get array of property names
+            OVHermesValue* result = enumerator_(runtime_, context_);
+
+            if (result && result->value.isObject()) {
+                Object obj = result->value.asObject(rt);
+
+                if (obj.isArray(rt)) {
+                    Array arr = obj.getArray(rt);
+                    size_t len = arr.size(rt);
+
+                    for (size_t i = 0; i < len; i++) {
+                        Value val = arr.getValueAtIndex(rt, i);
+                        if (val.isString()) {
+                            std::string prop = val.getString(rt).utf8(rt);
+                            props.push_back(PropNameID::forUtf8(rt, prop));
+                        }
+                    }
+                }
+
+                delete result;
+            }
+        } catch (...) {
+            // Return empty array on error
+        }
+
+        return props;
+    }
+};
+
+// C API for creating function values (used by HostObject getter)
+OVHermesValue* hermes_create_function(
+    OVHermesRuntime* runtime,
+    const char* name,
+    OVHermesHostFunction callback,
+    void* context
+) {
+    if (!runtime || !name || !callback) return nullptr;
+
+    try {
+        std::string func_name(name);
+
+        // Store context in global map (same as hermes_register_host_function)
+        g_host_function_contexts[func_name] = OVHostFunctionContext{
+            .runtime = runtime,
+            .callback = callback,
+            .user_context = context
+        };
+
+        // Create JSI Function object (not registered globally)
+        auto hostFunc = Function::createFromHostFunction(
+            *runtime->runtime,
+            PropNameID::forAscii(*runtime->runtime, name),
+            0,
+            [func_name = func_name](Runtime& rt, const Value& thisVal, const Value* args, size_t count) -> Value {
+                auto it = g_host_function_contexts.find(func_name);
+                if (it == g_host_function_contexts.end()) {
+                    return Value::undefined();
+                }
+
+                auto& ctx = it->second;
+
+                // Convert args to OVHermesValue pointers
+                std::vector<OVHermesValue*> arg_wrappers;
+                arg_wrappers.reserve(count);
+
+                for (size_t i = 0; i < count; i++) {
+                    arg_wrappers.push_back(new OVHermesValue(Value(rt, args[i])));
+                }
+
+                // Call user callback
+                OVHermesValue* result = ctx.callback(
+                    ctx.runtime,
+                    ctx.user_context,
+                    arg_wrappers.data(),
+                    count
+                );
+
+                // Clean up arg wrappers
+                for (auto* wrapper : arg_wrappers) {
+                    delete wrapper;
+                }
+
+                // Return result
+                if (result) {
+                    Value ret(rt, result->value);
+                    delete result;
+                    return ret;
+                } else {
+                    return Value::undefined();
+                }
+            }
+        );
+
+        return new OVHermesValue(Value(*runtime->runtime, std::move(hostFunc)));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+// C API for registering HostObject
+void hermes_register_host_object(
+    OVHermesRuntime* runtime,
+    const char* name,
+    OVHermesHostObjectGet getter,
+    OVHermesHostObjectSet setter,
+    OVHermesHostObjectEnumerator enumerator,
+    void* context
+) {
+    if (!runtime || !name || !getter) return;
+
+    try {
+        std::string obj_name(name);
+
+        // Create CustomHostObject
+        auto hostObject = std::make_shared<CustomHostObject>(
+            runtime,
+            obj_name,
+            getter,
+            setter,
+            enumerator,
+            context
+        );
+
+        // Register as global property
+        runtime->runtime->global().setProperty(
+            *runtime->runtime,
+            name,
+            Object::createFromHostObject(*runtime->runtime, hostObject)
+        );
+    } catch (...) {
+        // Silently fail
+    }
+}
+
+//
+// Array Operations (for HostObject enumerator)
+//
+
+OVHermesValue* hermes_array_create(OVHermesRuntime* runtime, size_t length) {
+    if (!runtime) return nullptr;
+
+    try {
+        Array arr = Array(*runtime->runtime, length);
+        return new OVHermesValue(Value(*runtime->runtime, std::move(arr)));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void hermes_array_set(
+    OVHermesRuntime* runtime,
+    OVHermesValue* array,
+    size_t index,
+    OVHermesValue* value
+) {
+    if (!runtime || !array || !value) return;
+
+    try {
+        if (!array->value.isObject()) return;
+
+        Object obj = array->value.asObject(*runtime->runtime);
+        if (!obj.isArray(*runtime->runtime)) return;
+
+        Array arr = obj.getArray(*runtime->runtime);
+        arr.setValueAtIndex(*runtime->runtime, index, Value(*runtime->runtime, value->value));
+    } catch (...) {
+        // Silently ignore errors
+    }
+}
+
+//
 // Value Operations
 //
 
@@ -497,6 +811,86 @@ OVHermesValue* hermes_value_create_object(OVHermesRuntime* runtime) {
         return new OVHermesValue(Value(*runtime->runtime, std::move(obj)));
     } catch (...) {
         return nullptr;
+    }
+}
+
+//
+// ArrayBuffer Support (Zero-Copy External Memory)
+//
+
+// Helper to access protected Runtime::createArrayBuffer method
+// This uses a standard C++ pattern to expose protected methods when needed
+namespace {
+    struct RuntimeHelper : public Runtime {
+        ArrayBuffer createArrayBufferPublic(std::shared_ptr<MutableBuffer> buffer) {
+            // Call protected createArrayBuffer method
+            return this->createArrayBuffer(std::move(buffer));
+        }
+    };
+}
+
+OVHermesValue* hermes_value_create_arraybuffer_external(
+    OVHermesRuntime* runtime,
+    void* data,
+    size_t size,
+    OVHermesArrayBufferFinalizer finalizer,
+    void* finalizer_ctx
+) {
+    if (!runtime || !data) return nullptr;
+
+    try {
+        // Create ExternalMutableBuffer wrapping native memory
+        auto buffer = std::make_shared<ExternalMutableBuffer>(
+            static_cast<uint8_t*>(data),
+            size,
+            finalizer,
+            finalizer_ctx
+        );
+
+        // Access protected createArrayBuffer via helper pattern
+        // This is zero-copy: JavaScript sees native memory directly
+        Runtime* rt_ptr = runtime->runtime.get();
+        auto arraybuffer = static_cast<RuntimeHelper*>(rt_ptr)->createArrayBufferPublic(std::move(buffer));
+
+        return new OVHermesValue(Value(*runtime->runtime, std::move(arraybuffer)));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+bool hermes_value_get_arraybuffer_data(
+    OVHermesRuntime* runtime,
+    OVHermesValue* arraybuffer,
+    void** out_data,
+    size_t* out_size
+) {
+    if (!runtime || !arraybuffer || !out_data || !out_size) {
+        return false;
+    }
+
+    try {
+        // Check if value is an object
+        if (!arraybuffer->value.isObject()) {
+            return false;
+        }
+
+        Object obj = arraybuffer->value.asObject(*runtime->runtime);
+
+        // Check if object is ArrayBuffer
+        if (!obj.isArrayBuffer(*runtime->runtime)) {
+            return false;
+        }
+
+        // Get ArrayBuffer
+        ArrayBuffer ab = obj.getArrayBuffer(*runtime->runtime);
+
+        // Get data pointer and size
+        *out_data = ab.data(*runtime->runtime);
+        *out_size = ab.size(*runtime->runtime);
+
+        return true;
+    } catch (...) {
+        return false;
     }
 }
 
