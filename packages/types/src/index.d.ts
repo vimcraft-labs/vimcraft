@@ -972,9 +972,23 @@ export interface Vim {
   /**
    * Buffer-local variables (b:)
    * @example
-   * vim.b.filetype = 'javascript';
+   * vim.b.my_var = 42;
    */
   b: Record<string, any>;
+
+  /**
+   * Buffer-local options (bo:)
+   * Neovim equivalent: vim.bo
+   * @example
+   * vim.bo.filetype = 'rust';
+   * const ft = vim.bo.filetype; // Get filetype
+   */
+  bo: {
+    /** Detected filetype (e.g., 'rust', 'javascript', 'python') */
+    filetype?: string;
+    // More buffer options can be added here in the future
+    [key: string]: any;
+  };
 
   /**
    * Window-local variables (w:)

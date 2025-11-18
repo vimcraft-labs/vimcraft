@@ -21,6 +21,7 @@ pub const cursor_api = @import("cursor_api.zig");
 pub const layer_api = @import("layer_api.zig");
 pub const motion_api = @import("motion_api.zig");
 pub const keymap_api = @import("keymap_api.zig");
+pub const filetype_api = @import("filetype_api.zig");
 pub const loader = @import("loader.zig");
 
 /// Context struct for host functions
@@ -64,6 +65,14 @@ pub fn initJSI(
         .allocator = allocator,
         .display = display, // Pass display for options that control display (e.g., vim.opt.number)
         .js_state_dirty = js_state_dirty_ptr,
+        .buffer = blk: {
+            const T = @TypeOf(editor_or_context);
+            if (T == *Editor) {
+                break :blk &editor_or_context.buffer;
+            } else {
+                break :blk &editor_or_context.buffer;
+            }
+        },
     };
 
     // Store for cleanup in deinitJSI()
@@ -88,6 +97,10 @@ pub fn initJSI(
     const T = @TypeOf(editor_or_context);
     if (T == *Editor) {
         cursor_api.register(runtime, editor_or_context);
+
+        // Register filetype API (vim.filetype.match)
+        // Only register for Editor since it needs access to ts_loader
+        filetype_api.register(runtime, editor_or_context);
     }
 
     // Register layer API (createLayer, renderVirtualText, setLayerOpacity, etc.)

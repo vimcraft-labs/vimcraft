@@ -58,6 +58,7 @@ pub const Buffer = struct {
     line_starts: std.ArrayList(usize), // Byte offsets where each line starts
     cursor: Cursor,
     filepath: ?[]const u8,
+    filetype: ?[]const u8 = null, // Detected filetype (e.g., "rust", "javascript")
     modified: bool,
 
     // Undo/redo
@@ -74,6 +75,7 @@ pub const Buffer = struct {
             .line_starts = .empty,
             .cursor = Cursor.init(),
             .filepath = null,
+            .filetype = null,
             .modified = false,
             .undo_stack = .empty,
             .redo_stack = .empty,

@@ -141,6 +141,39 @@ pub fn build(b: *std.Build) void {
     };
 
     // ============================================================================
+    // Filetype Data Generation (from Neovim)
+    // ============================================================================
+    // Generate src/editor/treesitter/filetype_data.zig from Neovim's filetype.lua
+    // Extracts 1,405+ filetype mappings at build time for compile-time initialization
+    const filetype_data = blk: {
+        // Build the generator executable
+        const generate_exe = b.addExecutable(.{
+            .name = "generate-filetype-data",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("scripts/generate_filetype_data.zig"),
+                .target = b.graph.host,
+                .optimize = .ReleaseFast,
+            }),
+        });
+
+        // Run the generator
+        const generate_run = b.addRunArtifact(generate_exe);
+
+        // Track Neovim's filetype.lua as input dependency
+        // When this file changes, Zig will automatically re-run the generator
+        generate_run.addFileInput(b.path("vendor/neovim/runtime/lua/vim/filetype.lua"));
+
+        // Capture generated Zig code from stdout
+        const wf = b.addWriteFiles();
+        const filetype_output = wf.addCopyFile(
+            generate_run.captureStdOut(),
+            "filetype_data.zig",
+        );
+
+        break :blk filetype_output;
+    };
+
+    // ============================================================================
     // C Library: libvterm (from Neovim) - DEFERRED
     // ============================================================================
     // NOTE: libvterm has dependencies on many Neovim internal headers
@@ -202,6 +235,12 @@ pub fn build(b: *std.Build) void {
     unicode_tables.addStepDependencies(&exe.step);
     exe.root_module.addAnonymousImport("unicode_tables", .{
         .root_source_file = unicode_tables,
+    });
+
+    // Add filetype_data dependency (must be generated before compilation)
+    filetype_data.addStepDependencies(&exe.step);
+    exe.root_module.addAnonymousImport("filetype_data", .{
+        .root_source_file = filetype_data,
     });
 
     // Add Ghostty's grapheme module with its dependencies
@@ -390,6 +429,12 @@ pub fn build(b: *std.Build) void {
     // Add uucode module
     bench.root_module.addImport("uucode", uucode_module);
 
+    // Add filetype_data dependency for benchmarks
+    filetype_data.addStepDependencies(&bench.step);
+    bench.root_module.addAnonymousImport("filetype_data", .{
+        .root_source_file = filetype_data,
+    });
+
     // Add C++ source files
     bench.addCSourceFile(.{
         .file = b.path("src/system/jsi/hermes_c_api.cpp"),
@@ -502,6 +547,12 @@ pub fn build(b: *std.Build) void {
     unicode_tables.addStepDependencies(&unit_tests.step);
     unit_tests.root_module.addAnonymousImport("unicode_tables", .{
         .root_source_file = unicode_tables,
+    });
+
+    // Add filetype_data dependency for tests
+    filetype_data.addStepDependencies(&unit_tests.step);
+    unit_tests.root_module.addAnonymousImport("filetype_data", .{
+        .root_source_file = filetype_data,
     });
 
     // Add ghostty_grapheme module for tests (same as main exe)

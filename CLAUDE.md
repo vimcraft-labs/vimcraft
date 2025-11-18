@@ -573,6 +573,50 @@ vim.keymap.set('n', 'K', () => {
 
 This is the **proper solution**, not a workaround.
 
+### Filetype Data Generation (Compile-Time)
+
+**System**: Automatic extraction of 1,400+ filetype mappings from Neovim at build time.
+
+**Architecture**:
+- Generator: `scripts/generate_filetype_data.zig` (pure Zig, no external dependencies)
+- Source: `vendor/neovim/runtime/lua/vim/filetype.lua` (tracked as build input)
+- Output: `.zig-cache/*/filetype_data.zig` (compile-time initialized StaticStringMap)
+- Integration: `src/editor/treesitter/loader.zig` imports generated data
+
+**Build Flow**:
+```
+1. build.zig compiles scripts/generate_filetype_data.zig
+2. Run generator with vendor/neovim/runtime/lua/vim/filetype.lua as input
+3. Parse Lua tables (extension = {...}, filename = {...})
+4. Generate Zig code with std.StaticStringMap.initComptime()
+5. Write to .zig-cache/*/filetype_data.zig
+6. Main build imports generated file
+```
+
+**Performance**:
+- First build: ~62ms to generate data
+- Cached builds: 0ms (Zig tracks file hashes)
+- Runtime: O(1) lookup, zero allocation, compile-time initialization
+
+**Regeneration Triggers**:
+- Neovim's filetype.lua changes (automatic via `addFileInput()`)
+- Generator script changes
+- Clean build (`rm -rf .zig-cache`)
+
+**Output Stats**:
+- 1,066 extension mappings (`.rs` → `rust`)
+- 371 filename mappings (`Makefile` → `make`)
+- Total: 1,437 compile-time filetype rules
+
+**Why Zig Generator**:
+- ✅ No Python dependency
+- ✅ Integrated with build system
+- ✅ Fast (compiles to native code)
+- ✅ Type-safe output generation
+- ✅ Single toolchain (Zig only)
+
+**Code Location**: See build.zig:143-174 for integration details.
+
 ## Build Commands
 
 ### Main Editor

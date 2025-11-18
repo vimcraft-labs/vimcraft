@@ -16,6 +16,7 @@ const TextObjectModifier = text_objects.TextObjectModifier;
 const TextObjectType = text_objects.TextObjectType;
 const OptionsManager = @import("config/options.zig").OptionsManager;
 const KeymapManager = @import("keymap/keymap.zig").KeymapManager;
+const Loader = @import("treesitter/loader.zig").Loader;
 
 /// Pending command for multi-key sequences (like dd, dw)
 const PendingCommand = struct {
@@ -166,6 +167,9 @@ pub const Editor = struct {
     yank_highlight: YankHighlight,
     keymap_mgr: KeymapManager,
 
+    // Tree-sitter filetype detection
+    ts_loader: Loader,
+
     // Logger (Core→Backend architecture: Core produces logs, backends consume them)
     logger: Logger,
 
@@ -202,6 +206,9 @@ pub const Editor = struct {
         var buffer = Buffer.init(allocator);
         errdefer buffer.deinit();
 
+        var ts_loader = try Loader.init(allocator);
+        errdefer ts_loader.deinit();
+
         return Editor{
             .allocator = allocator,
             .buffer = buffer,
@@ -215,6 +222,7 @@ pub const Editor = struct {
             },
             .yank_highlight = YankHighlight{},
             .keymap_mgr = KeymapManager.init(allocator),
+            .ts_loader = ts_loader,
             .logger = Logger.init(allocator),
             .pending_cmd = PendingCommand{},
             .pending_register = PendingRegister{},
@@ -227,8 +235,26 @@ pub const Editor = struct {
         self.buffer.deinit();
         self.register_mgr.deinit();
         self.keymap_mgr.deinit();
+        self.ts_loader.deinit();
         self.cmd_buffer.deinit();
         self.logger.deinit();
+    }
+
+    /// Load file and detect filetype
+    pub fn loadFile(self: *Editor, path: []const u8) !void {
+        try self.buffer.loadFile(path);
+
+        // Detect filetype using loader
+        const first_line = self.buffer.getLine(0);
+        const filetype = self.ts_loader.detectFiletype(path, first_line);
+
+        if (filetype) |ft| {
+            self.buffer.filetype = ft;
+            self.logger.info("Detected filetype: {s} for {s}", .{ ft, path }) catch {};
+        } else {
+            self.buffer.filetype = null;
+            self.logger.debug("No filetype detected for {s}", .{path}) catch {};
+        }
     }
 
     /// Execute a string of keys through the editor

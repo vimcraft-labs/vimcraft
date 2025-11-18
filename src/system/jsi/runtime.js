@@ -331,6 +331,47 @@ globalThis.vim = {
         writable: true
       };
     }
+  }),
+  // Buffer-local options (vim.bo)
+  // Neovim equivalent: vim.bo
+  // Provides access to buffer-specific properties like filetype
+  bo: new Proxy(
+    {
+      get [Symbol.toStringTag]() { return 'vim.bo'; }
+    },
+    {
+    get(target, prop) {
+      if (prop === Symbol.toStringTag) return 'vim.bo';
+      if (typeof prop === 'symbol') return undefined;
+      // Always fetch from Zig (source of truth)
+      return getBufferOption(prop);
+    },
+    set(target, prop, value) {
+      if (typeof prop === 'symbol') return false;
+      // Write to Zig (source of truth)
+      setBufferOption(prop, value);
+      return true;
+    },
+    has(target, prop) {
+      if (typeof prop === 'symbol') return false;
+      return getBufferOption(prop) !== undefined;
+    },
+    ownKeys(target) {
+      // Return known buffer options
+      return ['filetype'];
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (typeof prop === 'symbol') return undefined;
+      // Fetch fresh value from Zig
+      const value = getBufferOption(prop);
+      if (value === undefined) return undefined;
+      return {
+        value: value,
+        enumerable: true,
+        configurable: true,
+        writable: true
+      };
+    }
   })
 };
 
