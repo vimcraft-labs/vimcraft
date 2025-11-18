@@ -373,3 +373,21 @@ vim.motion = {
 
 // Freeze to prevent modifications
 Object.freeze(vim.motion);
+
+// vim.keymap API - Expose keymap functions to JavaScript plugins
+// Allows users to create custom key mappings (Neovim compatible)
+vim.keymap = {
+  // vim.keymap.set(mode, lhs, rhs, opts)
+  // mode: string ('n', 'i', 'v', 'c')
+  // lhs: string (key to map, e.g., 'H', '<leader>w')
+  // rhs: string or function (command to execute or callback)
+  // opts: object { noremap: bool, silent: bool, buffer: bool }
+  set: keymapSet,
+
+  // vim.keymap.del(mode, lhs)
+  // mode: string ('n', 'i', 'v', 'c')
+  // lhs: string (key to unmap)
+  del: keymapDel
+};
+
+Object.freeze(vim.keymap);

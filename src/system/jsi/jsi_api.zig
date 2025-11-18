@@ -20,6 +20,7 @@ pub const animation_api = @import("animation_api.zig");
 pub const cursor_api = @import("cursor_api.zig");
 pub const layer_api = @import("layer_api.zig");
 pub const motion_api = @import("motion_api.zig");
+pub const keymap_api = @import("keymap_api.zig");
 pub const loader = @import("loader.zig");
 
 /// Context struct for host functions
@@ -31,6 +32,7 @@ pub const JSIContext = struct {
 /// Global state for cleanup
 var global_config_ctx: ?*config_api.ConfigContext = null;
 var global_motion_ctx: ?*motion_api.MotionContext = null;
+var global_keymap_ctx: ?*keymap_api.KeymapContext = null;
 var global_allocator: ?std.mem.Allocator = null;
 
 /// Initialize JSI runtime and register all host functions
@@ -116,6 +118,18 @@ pub fn initJSI(
         motion_api.register(runtime, motion_ctx);
     }
 
+    // Register keymap API (vim.keymap.set/del)
+    // Only register for Editor (not EditorContext)
+    if (T == *Editor) {
+        const keymap_ctx = keymap_api.KeymapContext.init(
+            allocator,
+            &editor_or_context.keymap_mgr,
+            runtime,
+        ) catch @panic("Failed to allocate KeymapContext");
+        global_keymap_ctx = keymap_ctx;
+        keymap_api.register(runtime, keymap_ctx);
+    }
+
     // JSI functions registered (silent mode)
 }
 
@@ -138,6 +152,10 @@ pub fn deinitJSI() void {
             alloc.destroy(ctx);
         }
         global_motion_ctx = null;
+    }
+    if (global_keymap_ctx) |ctx| {
+        ctx.deinit(); // KeymapContext has its own deinit that frees itself
+        global_keymap_ctx = null;
     }
     global_allocator = null;
 }

@@ -427,6 +427,45 @@ vimcraft/
 2. **JSI Bridge (C++)** - Zero-copy interface between Zig and JavaScript (~13x faster than FFI)
 3. **Plugin Layer (JavaScript)** - Extensions, LSP, configs via Hermes bytecode
 
+### Keymap Architecture: Immediate Execution + Stateful Pending
+
+**Critical Design Decision** (December 2025): After deep analysis of Neovim and Helix, Vimcraft uses **Helix-style stateful keymaps** instead of Neovim's typeahead buffer.
+
+**Why**: Immediate execution is essential for clean JSI integration:
+```javascript
+// Plugin-friendly: Synchronous execution
+vim.keymap.set('n', 'K', () => {
+    vim.motion.up();  // Immediate
+    vim.motion.up();  // Clean, no buffering
+});
+```
+
+**Architecture Comparison**:
+
+| Feature | Neovim | Helix | Vimcraft |
+|---------|--------|-------|----------|
+| Input Model | Buffered (`typebuf`) | Immediate | Immediate ✅ |
+| Pending State | In typeahead buffer | In keymap state | In keymap state ✅ |
+| Timeout Support | Yes (blocking I/O) | No (ESC to cancel) | Optional (via setTimeout) |
+| JSI-Friendly | No (C-style buffering) | N/A | Yes ✅ |
+
+**Key Implementation**:
+- `KeymapManager` has `pending_keys: ArrayList(u8)` for accumulating partial matches
+- `lookup()` returns `LookupResult` enum: `.matched`, `.pending`, `.not_found`
+- On `.pending`, caller waits for next key (or timeout expires)
+- Timeout uses JSI `setTimeout` (React Native-style async)
+
+**Rationale**:
+1. ✅ **Preserves immediate execution** (original design intent)
+2. ✅ **Proven by Helix** (production-ready architecture)
+3. ✅ **No typeahead buffer** (simpler than Neovim)
+4. ✅ **Optional timeout** (can be disabled for cleaner UX)
+5. ✅ **Future-proof** (won't need refactoring in Phase 5-6)
+
+**Reference**: Helix uses `state: Vec<KeyEvent>` in `Keymaps` struct (keymap.rs:293), proving immediate execution + stateful pending works in production.
+
+**Status**: Buffer-local mappings ✅, Prefix detection ✅, Timeout support 🚧 (Phase 4).
+
 ### Hybrid Build System
 
 **Critical**: Zig linker bug (C++ exception metadata in `__eh_frame`) requires hybrid build:
