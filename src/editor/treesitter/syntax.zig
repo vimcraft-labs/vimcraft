@@ -112,8 +112,7 @@ pub const Syntax = struct {
                 self.allocator,
                 self.language_name,
                 self.language,
-            ) catch |err| {
-                std.debug.print("[SYNTAX] Query load FAILED for {s}: {any}\n", .{ self.language_name, err });
+            ) catch {
                 return SyntaxError.QueryLoadFailed;
             };
         }
@@ -124,8 +123,7 @@ pub const Syntax = struct {
             &self.query.?,
             self.tree,
             range,
-        ) catch |err| {
-            std.debug.print("[SYNTAX] Iterator creation FAILED: {any}\n", .{err});
+        ) catch {
             return SyntaxError.IteratorCreationFailed;
         };
         return iter;

@@ -160,8 +160,15 @@ fn updateBaseLayer(
 
             // Render text to base layer
             // Priority: Syntax highlighting > listchars > plain text
+            // Gracefully fall back to listchars/plain text if syntax highlighting fails
             const end_col = if (syntax_highlighter) |*sh| blk: {
-                break :blk try renderWithSyntaxHighlight(self, sh, row, gutter_width, remaining, text_byte_offset, list_enabled, listchars, lc_colors, fg_color, bg_color);
+                break :blk renderWithSyntaxHighlight(self, sh, row, gutter_width, remaining, text_byte_offset, list_enabled, listchars, lc_colors, fg_color, bg_color) catch {
+                    // Syntax highlighting failed (missing query file, etc.) - fall back to listchars or plain text
+                    break :blk if (list_enabled)
+                        try renderWithListChars(self, row, gutter_width, remaining, listchars, lc_colors, fg_color, bg_color)
+                    else
+                        self.base_layer.grid.setString(row, gutter_width, remaining, fg_color, bg_color);
+                };
             } else if (list_enabled)
                 try renderWithListChars(self, row, gutter_width, remaining, listchars, lc_colors, fg_color, bg_color)
             else

@@ -45,7 +45,6 @@ pub const EventEmitter = struct {
     pub fn on(self: *Self, event_name: []const u8, callback: *c.OVHermesValue) !void {
         // Verify callback is a function
         if (!c.hermes_value_is_function(self.runtime, callback)) {
-            std.debug.print("[EventEmitter] on('{s}'): callback is not a function\n", .{event_name});
             return error.NotAFunction;
         }
 
@@ -60,8 +59,6 @@ pub const EventEmitter = struct {
         // (JavaScript GC won't collect it while we hold the reference)
         const callback_clone = c.hermes_value_clone(self.runtime, callback) orelse return error.CloneFailed;
         try entry.value_ptr.append(self.allocator, callback_clone);
-
-        std.debug.print("[EventEmitter] Registered listener for '{s}' (total: {})\n", .{ event_name, entry.value_ptr.items.len });
     }
 
     /// Remove a specific callback for an event
@@ -76,8 +73,6 @@ pub const EventEmitter = struct {
 
         // TODO: Find and remove only matching callback
         // For now, remove all callbacks for this event
-        std.debug.print("[EventEmitter] Removing ALL listeners for '{s}' (TODO: selective removal)\n", .{event_name});
-
         for (list.items) |cb| {
             c.hermes_value_destroy(cb);
         }
@@ -89,8 +84,6 @@ pub const EventEmitter = struct {
     pub fn removeAllListeners(self: *Self, event_name: []const u8) void {
         const list = self.callbacks.getPtr(event_name) orelse return;
 
-        std.debug.print("[EventEmitter] Removing all listeners for '{s}' ({} total)\n", .{ event_name, list.items.len });
-
         for (list.items) |callback| {
             c.hermes_value_destroy(callback);
         }
@@ -101,7 +94,7 @@ pub const EventEmitter = struct {
     /// Emit an event with arguments
     /// Calls all registered callbacks for this event
     ///
-    /// Error handling: If a callback throws, log error and continue to next callback
+    /// Error handling: If a callback throws, continue to next callback
     /// (Don't let one bad callback break all others)
     pub fn emit(self: *Self, event_name: []const u8, args: []const *c.OVHermesValue) !void {
         const list = self.callbacks.get(event_name) orelse {
@@ -113,11 +106,8 @@ pub const EventEmitter = struct {
             return; // No listeners
         }
 
-        std.debug.print("[EventEmitter] Emitting '{s}' to {} listener(s) with {} arg(s)\n", .{ event_name, list.items.len, args.len });
-
         // Call each registered callback
-        var errors: usize = 0;
-        for (list.items, 0..) |callback, idx| {
+        for (list.items) |callback| {
             // Cast args to C-style pointer for C API
             const c_args: [*c]?*c.OVHermesValue = @ptrCast(@constCast(args.ptr));
             const result = c.hermes_call_function(
@@ -128,19 +118,12 @@ pub const EventEmitter = struct {
             );
 
             if (result == null) {
-                // Callback threw an error - log and continue
-                const err_msg = c.hermes_get_exception_message(self.runtime);
-                std.debug.print("[EventEmitter] Error in listener #{} for '{s}': {s}\n", .{ idx + 1, event_name, err_msg });
-                errors += 1;
+                // Callback threw an error - continue to next callback
                 continue;
             }
 
             // Clean up return value (we don't use it)
             c.hermes_value_destroy(result);
-        }
-
-        if (errors > 0) {
-            std.debug.print("[EventEmitter] '{s}': {}/{} callbacks succeeded\n", .{ event_name, list.items.len - errors, list.items.len });
         }
     }
 
@@ -166,8 +149,6 @@ pub const EventEmitter = struct {
     /// Remove all callbacks for all events
     /// Called on config reload to clean up old listeners
     pub fn removeAll(self: *Self) void {
-        std.debug.print("[EventEmitter] Removing ALL event listeners\n", .{});
-
         var iter = self.callbacks.valueIterator();
         while (iter.next()) |list| {
             // Destroy Hermes values (callbacks)
