@@ -1288,3 +1288,4 @@ pub const __RegisterManager = RegisterManager;
 pub const __paste = paste;
 pub const __highlights = highlights;
 pub const __ListChars = @import("editor/config/listchars.zig").ListChars;
+pub const __HighlightRegistry = @import("system/jsi/highlight_api.zig").HighlightRegistry;

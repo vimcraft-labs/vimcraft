@@ -506,7 +506,7 @@ pub const Server = struct {
                     ListChars{};
 
                 try self.editor.display.renderHeadless(
-                    &self.editor.buffer,
+                    self.editor,
                     self.editor.mode_manager.getModeString(),
                     self.highlight_config,
                     &self.editor.visual_state,
@@ -650,7 +650,7 @@ pub const Server = struct {
                     ListChars{};
 
                 try self.editor.display.renderHeadless(
-                    &self.editor.buffer,
+                    self.editor,
                     self.editor.mode_manager.getModeString(),
                     self.highlight_config,
                     &self.editor.visual_state,
@@ -1104,7 +1104,7 @@ pub const Server = struct {
 
                 // CRITICAL: Use headless render to update compositor WITHOUT stdout pollution
                 try self.editor.display.renderHeadless(
-                    &self.editor.buffer,
+                    self.editor,
                     self.editor.mode_manager.getModeString(),
                     self.highlight_config,
                     &self.editor.visual_state,

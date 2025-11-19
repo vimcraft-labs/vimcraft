@@ -51,15 +51,21 @@ pub const StyledHighlightIterator = struct {
         while (self.inner.next()) |highlight| {
             // Look up style in registry
             // registry.get() handles scope fallback and link resolution automatically
-            if (self.registry.get(highlight.capture_name)) |def| {
-                return StyledHighlight{
-                    .range = highlight.range,
-                    .style = def.style,
-                };
+            const style = self.registry.get(highlight.capture_name);
+
+            // Skip if style is default (no highlight found)
+            const has_color = style.fg != null or style.bg != null or style.sp != null;
+            const has_modifier = style.modifiers.bold or style.modifiers.italic or
+                style.modifiers.underline or style.modifiers.undercurl or style.modifiers.strikethrough;
+
+            if (!has_color and !has_modifier) {
+                continue; // Default style - skip this highlight
             }
 
-            // No style found - skip this highlight
-            // Renderer will use default terminal colors
+            return StyledHighlight{
+                .range = highlight.range,
+                .style = style,
+            };
         }
 
         return null;
@@ -151,7 +157,7 @@ test "SyntaxHighlighter: init" {
     defer registry.deinit();
 
     // Create highlighter
-    var highlighter = SyntaxHighlighter.init(allocator, &syntax, &registry);
+    const highlighter = SyntaxHighlighter.init(allocator, &syntax, &registry);
     // No deinit needed (doesn't own syntax or registry)
     _ = highlighter;
 }
@@ -208,7 +214,6 @@ test "SyntaxHighlighter: highlights returns styled iterator" {
     // Should yield at least one styled highlight (if registry has matching captures)
     // Note: This test may yield 0 if Zig query captures don't match our "@keyword" entry
     // That's OK - it tests the plumbing, not the specific theme
-    _ = count;
 }
 
 test "SyntaxHighlighter: handles missing styles gracefully" {
@@ -245,7 +250,6 @@ test "SyntaxHighlighter: handles missing styles gracefully" {
     }
 
     // count may be 0 (all highlights skipped) - that's OK, no crash
-    _ = count;
 }
 
 test "SyntaxHighlighter: applies theme styles correctly" {
@@ -309,5 +313,4 @@ test "SyntaxHighlighter: applies theme styles correctly" {
     // (JavaScript query should capture "function" keyword)
     // NOTE: May fail if JavaScript query doesn't use these exact capture names
     // That's OK - it's testing the integration, not the specific query
-    _ = found_styled;
 }

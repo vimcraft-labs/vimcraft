@@ -1,12 +1,17 @@
 const std = @import("std");
 const Display = @import("display.zig").Display;
 const Buffer = @import("../../../editor/buffer/buffer.zig").Buffer;
+const Editor = @import("../../../editor/editor.zig").Editor;
 const highlights = @import("../../../editor/config/highlights.zig");
 const VisualState = @import("../visual/visual.zig").VisualState;
 const YankHighlight = @import("../visual/yank_highlight.zig").YankHighlight;
 const Position = @import("../visual/visual.zig").Position;
 const char_width = @import("char_width.zig");
 const ListChars = @import("../../../editor/config/listchars.zig").ListChars;
+const SyntaxHighlighter = @import("../../../editor/treesitter/syntax_highlighter.zig").SyntaxHighlighter;
+const Range = @import("../../../editor/treesitter/highlight.zig").Range;
+const Style = @import("../../../system/jsi/highlight_api.zig").Style;
+const Color = @import("../../../system/jsi/highlight_api.zig").Color;
 
 // ============================================================================
 // PHASE 2.5: Layer-based Rendering Pipeline
@@ -16,9 +21,10 @@ const ListChars = @import("../../../editor/config/listchars.zig").ListChars;
 
 /// Update all layers from buffer state (Phase 2.5)
 /// This is the new rendering entry point that replaces updateGridFromBuffer
+/// Generic over Editor/EditorContext types (both have same fields)
 pub fn updateLayers(
     self: *Display,
-    buffer: *const Buffer,
+    editor: anytype,
     _: []const u8, // status - not used yet, will be for status layer
     config: *const highlights.HighlightConfig,
     visual_state: *const VisualState,
@@ -37,11 +43,11 @@ pub fn updateLayers(
     // Note: virtual_text_layer is managed by plugins via JSI
 
     // Update each layer in logical order (not z-order)
-    try updateBaseLayer(self, buffer, config, text_rows, list_enabled, listchars);
-    try updateGutterLayer(self, buffer, config, text_rows);
-    try updateSelectionLayer(self, buffer, visual_state, config, text_rows);
-    try updateYankLayer(self, buffer, yank_highlight, config, text_rows);
-    try updateCursorLayer(self, buffer, config, text_rows);
+    try updateBaseLayer(self, editor, config, text_rows, list_enabled, listchars);
+    try updateGutterLayer(self, &editor.buffer, config, text_rows);
+    try updateSelectionLayer(self, &editor.buffer, visual_state, config, text_rows);
+    try updateYankLayer(self, &editor.buffer, yank_highlight, config, text_rows);
+    try updateCursorLayer(self, &editor.buffer, config, text_rows);
 
     // Virtual text layer is updated by plugins, so skip it here
 }
@@ -82,14 +88,16 @@ fn computeListCharsColors(
 }
 
 /// Update base layer: Render buffer text content (z=0)
+/// Generic over Editor/EditorContext types (both have same fields)
 fn updateBaseLayer(
     self: *Display,
-    buffer: *const Buffer,
+    editor: anytype,
     config: *const highlights.HighlightConfig,
     text_rows: usize,
     list_enabled: bool,
     listchars: *const ListChars,
 ) !void {
+    const buffer = &editor.buffer;
     const gutter_width = self.gutter_manager.getTotalWidth();
 
     const fg_color = if (config.normal) |n| n.fg else null;
@@ -100,6 +108,20 @@ fn updateBaseLayer(
         computeListCharsColors(config, fg_color, bg_color)
     else
         undefined; // Won't be used if list_enabled = false
+
+    // Create syntax highlighter if tree-sitter syntax available
+    // Only Editor has .syntax field; EditorContext doesn't
+    var syntax_highlighter: ?SyntaxHighlighter = null;
+    if (@hasField(@TypeOf(editor.*), "syntax")) {
+        if (editor.syntax) |*syntax| {
+            // SAFETY: Syntax and HighlightRegistry outlive this function
+            syntax_highlighter = SyntaxHighlighter.init(
+                std.heap.page_allocator, // TODO: Pass allocator from Display
+                @constCast(syntax),
+                &editor.highlight_registry,
+            );
+        }
+    }
 
     var row: usize = 0;
     while (row < text_rows) : (row += 1) {
@@ -120,8 +142,15 @@ fn updateBaseLayer(
                 0;
             const remaining = line_without_newline[start_col..];
 
-            // Render text to base layer (with invisible character replacement if enabled)
-            const end_col = if (list_enabled)
+            // Calculate absolute byte offset in buffer for tree-sitter
+            const line_byte_offset = buffer.line_starts.items[line_num];
+            const text_byte_offset = line_byte_offset + start_col;
+
+            // Render text to base layer
+            // Priority: Syntax highlighting > listchars > plain text
+            const end_col = if (syntax_highlighter) |*sh|
+                try renderWithSyntaxHighlight(self, sh, row, gutter_width, remaining, text_byte_offset, list_enabled, listchars, lc_colors, fg_color, bg_color)
+            else if (list_enabled)
                 try renderWithListChars(self, row, gutter_width, remaining, listchars, lc_colors, fg_color, bg_color)
             else
                 self.base_layer.grid.setString(row, gutter_width, remaining, fg_color, bg_color);
@@ -359,6 +388,237 @@ fn updateYankLayer(
     }
 
     self.yank_layer.markDirty();
+}
+
+/// Convert tree-sitter Style.Color to terminal highlights.Color
+fn convertColor(ts_color: Color) highlights.Color {
+    return switch (ts_color) {
+        .rgb => |rgb| highlights.Color{ .r = rgb.r, .g = rgb.g, .b = rgb.b },
+        .indexed => |idx| highlights.Color{ .r = idx, .g = idx, .b = idx }, // TODO: Handle 256-color palette
+    };
+}
+
+/// Render text with syntax highlighting from tree-sitter
+///
+/// This function applies syntax highlighting to text using the SyntaxHighlighter.
+/// It queries tree-sitter for highlight ranges, builds a style map, then renders
+/// each character with the appropriate colors from the theme.
+///
+/// Integration with listchars:
+/// - If list_enabled=true, invisible characters (tabs, spaces) are replaced per listchars config
+/// - Syntax highlighting colors take precedence over listchars colors for non-whitespace
+/// - Listchars use Whitespace/SpecialKey highlight groups (separate from syntax theme)
+///
+/// Parameters:
+/// - self: Display instance
+/// - highlighter: SyntaxHighlighter with Syntax + HighlightRegistry
+/// - row: Screen row to render to (0-indexed)
+/// - start_col: Starting column (typically gutter_width)
+/// - text: UTF-8 encoded text to render (without trailing newline)
+/// - text_byte_offset: Byte offset of text in buffer (for tree-sitter range calculation)
+/// - list_enabled: Whether listchars replacement is enabled
+/// - listchars: Configuration for invisible character symbols
+/// - lc_colors: Pre-computed listchars colors
+/// - fg_color: Normal foreground color (fallback)
+/// - bg_color: Normal background color (fallback)
+///
+/// Returns: Final column position after rendering
+fn renderWithSyntaxHighlight(
+    self: *Display,
+    highlighter: *SyntaxHighlighter,
+    row: usize,
+    start_col: usize,
+    text: []const u8,
+    text_byte_offset: usize,
+    list_enabled: bool,
+    listchars: *const ListChars,
+    lc_colors: ListCharsColors,
+    fg_color: ?highlights.Color,
+    bg_color: ?highlights.Color,
+) !usize {
+    // Get syntax highlights for this text range
+    const range = Range{
+        .start_byte = @intCast(text_byte_offset),
+        .end_byte = @intCast(text_byte_offset + text.len),
+    };
+
+    var iter = try highlighter.highlights(range);
+    defer iter.deinit();
+
+    // Build highlight map (byte offset → Style)
+    // We use a simple array since we're only rendering one line at a time
+    var highlight_map = std.AutoHashMap(usize, Style).init(std.heap.page_allocator);
+    defer highlight_map.deinit();
+
+    while (iter.next()) |styled| {
+        // Convert absolute byte offset to text-relative offset
+        if (styled.range.start_byte >= text_byte_offset and
+            styled.range.start_byte < text_byte_offset + text.len)
+        {
+            const rel_offset = styled.range.start_byte - text_byte_offset;
+            try highlight_map.put(rel_offset, styled.style);
+        }
+    }
+
+    // Render text character by character with syntax colors
+    const ws_fg = lc_colors.ws_fg;
+    const ws_bg = lc_colors.ws_bg;
+    const sk_fg = lc_colors.sk_fg;
+    const sk_bg = lc_colors.sk_bg;
+    var col = start_col;
+    var byte_idx: usize = 0;
+    var last_non_space_col = start_col;
+
+    while (byte_idx < text.len and col < self.terminal_cols) {
+        const char_len = std.unicode.utf8ByteSequenceLength(text[byte_idx]) catch 1;
+        if (byte_idx + char_len > text.len) break;
+
+        const codepoint = std.unicode.utf8Decode(text[byte_idx .. byte_idx + char_len]) catch text[byte_idx];
+        var display_char = codepoint;
+
+        // Look up syntax highlight for this character
+        const syntax_style = highlight_map.get(byte_idx);
+
+        // Extract syntax colors (if available)
+        const syntax_fg = if (syntax_style) |style|
+            if (style.fg) |c| convertColor(c) else null
+        else
+            null;
+        const syntax_bg = if (syntax_style) |style|
+            if (style.bg) |c| convertColor(c) else null
+        else
+            null;
+
+        // Handle listchars replacements (same logic as renderWithListChars)
+        if (list_enabled) {
+            switch (codepoint) {
+                '\t' => {
+                    // Tab: render as multiple characters with Whitespace colors
+                    if (listchars.tab[0] != 0) {
+                        self.base_layer.grid.setCell(row, col, .{
+                            .char = listchars.tab[0],
+                            .fg = ws_fg,
+                            .bg = ws_bg,
+                        });
+                        col += 1;
+                        last_non_space_col = col;
+
+                        const tab_width: usize = char_width.getTabWidth();
+                        if (self.terminal_cols == 0 or tab_width == 0) {
+                            byte_idx += char_len;
+                            continue;
+                        }
+
+                        const chars_to_fill = tab_width - 1;
+                        if (listchars.tab[1] != 0) {
+                            var i: usize = 0;
+                            const middle_count = if (listchars.tab[2] != 0 and chars_to_fill > 0)
+                                chars_to_fill - 1
+                            else
+                                chars_to_fill;
+
+                            while (i < middle_count and col < self.terminal_cols) : (i += 1) {
+                                self.base_layer.grid.setCell(row, col, .{
+                                    .char = listchars.tab[1],
+                                    .fg = ws_fg,
+                                    .bg = ws_bg,
+                                });
+                                col += 1;
+                            }
+                        }
+
+                        if (listchars.tab[2] != 0 and col < self.terminal_cols) {
+                            self.base_layer.grid.setCell(row, col, .{
+                                .char = listchars.tab[2],
+                                .fg = ws_fg,
+                                .bg = ws_bg,
+                            });
+                            col += 1;
+                            last_non_space_col = col;
+                        }
+                    } else {
+                        // No tab replacement - use syntax colors
+                        self.base_layer.grid.setCell(row, col, .{
+                            .char = codepoint,
+                            .fg = syntax_fg orelse fg_color,
+                            .bg = syntax_bg orelse bg_color,
+                        });
+                        col += 1;
+                        last_non_space_col = col;
+                    }
+                    byte_idx += char_len;
+                    continue;
+                },
+                ' ' => {
+                    if (listchars.space != 0) {
+                        display_char = listchars.space;
+                    }
+                },
+                0xA0 => { // Non-breaking space
+                    if (listchars.nbsp != 0) {
+                        display_char = listchars.nbsp;
+                    }
+                },
+                else => {
+                    last_non_space_col = col + 1;
+                },
+            }
+        } else {
+            if (codepoint != ' ' and codepoint != '\t') {
+                last_non_space_col = col + 1;
+            }
+        }
+
+        // Determine final colors (priority: listchars > syntax > normal)
+        const use_ws_colors = list_enabled and ((codepoint == ' ' and listchars.space != 0) or
+            (codepoint == 0xA0 and listchars.nbsp != 0));
+
+        const final_fg = if (use_ws_colors)
+            ws_fg
+        else
+            syntax_fg orelse fg_color;
+
+        const final_bg = if (use_ws_colors)
+            ws_bg
+        else
+            syntax_bg orelse bg_color;
+
+        self.base_layer.grid.setCell(row, col, .{
+            .char = display_char,
+            .fg = final_fg,
+            .bg = final_bg,
+        });
+        col += 1;
+        byte_idx += char_len;
+    }
+
+    // Post-process: mark trailing spaces (same as renderWithListChars)
+    if (list_enabled and listchars.trail != 0) {
+        var trail_col = last_non_space_col;
+        while (trail_col < col) : (trail_col += 1) {
+            if (self.base_layer.grid.getCell(row, trail_col)) |cell| {
+                if (cell.char == ' ' or cell.char == listchars.space) {
+                    self.base_layer.grid.setCell(row, trail_col, .{
+                        .char = listchars.trail,
+                        .fg = sk_fg,
+                        .bg = sk_bg,
+                    });
+                }
+            }
+        }
+    }
+
+    // Render EOL character if configured
+    if (list_enabled and listchars.eol != 0 and col < self.terminal_cols) {
+        self.base_layer.grid.setCell(row, col, .{
+            .char = listchars.eol,
+            .fg = sk_fg,
+            .bg = sk_bg,
+        });
+        col += 1;
+    }
+
+    return col;
 }
 
 /// Render text with invisible character replacements (listchars)

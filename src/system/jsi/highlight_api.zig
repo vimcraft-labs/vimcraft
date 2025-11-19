@@ -218,7 +218,7 @@ pub const HighlightRegistry = struct {
     /// Resolves links and falls back to parent scopes:
     /// "@function" → "Function" → { fg: ... }
     /// "ui.text.focus" → "ui.text" → "ui" → default
-    pub fn get(self: *HighlightRegistry, scope: []const u8) Style {
+    pub fn get(self: *const HighlightRegistry, scope: []const u8) Style {
         var current = scope;
         var visited = std.StringHashMap(void).init(self.allocator);
         defer visited.deinit();

@@ -1,7 +1,8 @@
 // Vimcraft TypeScript Type Definitions
-// Version: 0.5.0 - Neovim-Compatible API with camelCase vim.opt
+// Version: 0.6.0 - Neovim-Compatible API with CommonJS Module System
 // Based on Neovim 0.12.0 API analysis
 // Updated: 65 vim.opt options with JavaScript camelCase naming
+// Phase 4: CommonJS require(), module.exports, Event Emitter
 
 // ============================================================================
 // Type Aliases & Utility Types
@@ -1094,6 +1095,53 @@ export interface Console {
 }
 
 // ============================================================================
+// CommonJS Module System
+// ============================================================================
+
+/**
+ * CommonJS module object
+ * Contains the module's exports and metadata
+ */
+export interface Module {
+  /**
+   * Module exports (what require() returns)
+   * Can be assigned directly: module.exports = {...}
+   * Or augmented: module.exports.foo = bar
+   */
+  exports: any;
+
+  /**
+   * Module identifier (absolute path)
+   * @readonly
+   */
+  id?: string;
+
+  /**
+   * Module filename (absolute path)
+   * @readonly
+   */
+  filename?: string;
+
+  /**
+   * Whether module is loaded
+   * @readonly
+   */
+  loaded?: boolean;
+
+  /**
+   * Parent module that required this module
+   * @readonly
+   */
+  parent?: Module | null;
+
+  /**
+   * Modules required by this module
+   * @readonly
+   */
+  children?: Module[];
+}
+
+// ============================================================================
 // Global Declarations
 // ============================================================================
 
@@ -1108,6 +1156,90 @@ declare global {
    * Global console object - for debugging via Chrome DevTools
    */
   var console: Console;
+
+  /**
+   * CommonJS module object
+   * Set module.exports to export values from your plugin
+   *
+   * @example
+   * // Export an object with functions
+   * module.exports = {
+   *   setup: function() { ... },
+   *   doSomething: function() { ... }
+   * };
+   *
+   * @example
+   * // Export a single function
+   * module.exports = function myPlugin() { ... };
+   */
+  var module: Module;
+
+  /**
+   * CommonJS exports object (alias to module.exports)
+   * You can augment it: exports.foo = bar
+   * Or reassign module.exports: module.exports = {...}
+   *
+   * Note: Reassigning exports itself (exports = {...}) won't work!
+   * Always use module.exports for full replacement.
+   *
+   * @example
+   * // This works (augment)
+   * exports.greet = function(name) { return 'Hello, ' + name; };
+   *
+   * @example
+   * // This works (replace via module.exports)
+   * module.exports = { greet: function(name) { ... } };
+   *
+   * @example
+   * // This DOESN'T work (reassigning exports)
+   * exports = { greet: function(name) { ... } }; // ❌ Wrong!
+   */
+  var exports: any;
+
+  /**
+   * CommonJS require function
+   * Loads and executes a JavaScript module, returning its exports
+   *
+   * Supports 3 resolution modes:
+   * 1. Relative paths: require('./utils.js') or require('../shared.js')
+   * 2. Absolute paths: require('/abs/path/to/module.js')
+   * 3. Plugin names: require('telescope') → searches plugin directories
+   *
+   * Plugin name resolution searches:
+   * - ~/.config/vimcraft/plugins/<name>.js
+   * - ~/.config/vimcraft/plugins/<name>/init.js
+   * - ~/.local/share/vimcraft/plugins/<name>.js
+   * - ~/.local/share/vimcraft/plugins/<name>/init.js
+   *
+   * Module caching:
+   * - Modules are cached by absolute path after first load
+   * - Second require() returns the cached exports (same object reference)
+   * - Circular dependencies are detected and return undefined
+   *
+   * @param path - Module path (relative, absolute, or plugin name)
+   * @returns The module's exports (whatever was assigned to module.exports)
+   *
+   * @example
+   * // Require a plugin by name
+   * const telescope = require('telescope');
+   * telescope.setup();
+   *
+   * @example
+   * // Require a local utility module
+   * const utils = require('./utils.js');
+   * utils.greet('Vimcraft');
+   *
+   * @example
+   * // Require with absolute path
+   * const plugin = require('/Users/me/.config/vimcraft/plugins/my-plugin.js');
+   *
+   * @example
+   * // Module caching demonstration
+   * const mod1 = require('./my-module.js');
+   * const mod2 = require('./my-module.js');
+   * console.log(mod1 === mod2); // true (same object)
+   */
+  function require(path: string): any;
 
   /**
    * Schedule a function to run after a delay

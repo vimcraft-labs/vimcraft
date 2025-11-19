@@ -509,6 +509,13 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
     });
     vimcraft_module_for_bench.addImport("uucode", uucode_module);
+    vimcraft_module_for_bench.addImport("animation", animation_module);
+    vimcraft_module_for_bench.addImport("ghostty_grapheme", ghostty_grapheme_mod);
+
+    // Add unicode_tables for vimcraft module
+    vimcraft_module_for_bench.addAnonymousImport("unicode_tables", .{
+        .root_source_file = unicode_tables,
+    });
 
     bench_root_module.addImport("vimcraft", vimcraft_module_for_bench);
 
@@ -516,6 +523,9 @@ pub fn build(b: *std.Build) void {
         .name = "vimc-bench",
         .root_module = bench_root_module,
     });
+
+    // Add unicode_tables build dependency
+    unicode_tables.addStepDependencies(&bench.step);
 
     // Link C and C++ for Hermes
     bench.linkLibC();

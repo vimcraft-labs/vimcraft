@@ -1,5 +1,6 @@
 const std = @import("std");
 const Buffer = @import("../../../editor/buffer/buffer.zig").Buffer;
+const Editor = @import("../../../editor/editor.zig").Editor;
 const debug_log = @import("../../debug/log.zig");
 const highlights = @import("../../../editor/config/highlights.zig");
 const ScreenGrid = @import("screen_grid.zig").ScreenGrid;
@@ -345,9 +346,10 @@ pub const Display = struct {
     /// Render buffer content to screen using grid-based rendering
     /// This is the main rendering function following Neovim's architecture
     /// If cursor_override is provided and active, it will be used instead of buffer.cursor for cursor positioning
+    /// Generic over Editor/EditorContext types (both have same fields)
     pub fn render(
         self: *Display,
-        buffer: *const Buffer,
+        editor: anytype,
         status: []const u8,
         config: *const highlights.HighlightConfig,
         visual_state: *const VisualState,
@@ -356,6 +358,8 @@ pub const Display = struct {
         list_enabled: bool,
         listchars: *const ListChars,
     ) !void {
+        const buffer = &editor.buffer;
+
         // Update terminal size (handles resize and ensures correct dimensions)
         try self.getTerminalSize();
 
@@ -398,7 +402,7 @@ pub const Display = struct {
 
         // PHASE 2.5: Multi-layer rendering pipeline (ACTIVATED!)
         // STEP 1: Update all layers from buffer state
-        try layer_renderer.updateLayers(self, buffer, status, config, visual_state, yank_highlight, list_enabled, listchars);
+        try layer_renderer.updateLayers(self, editor, status, config, visual_state, yank_highlight, list_enabled, listchars);
 
         // STEP 1.5: Apply virtual text overlay (Neovim-style extmarks)
         // Plugins render arbitrary text via virtual_text_layer
@@ -446,9 +450,10 @@ pub const Display = struct {
     /// Headless render: Update compositor state WITHOUT writing to stdout
     /// This is used by the debug protocol to update layer state for inspection
     /// while keeping stdout clean for JSON responses
+    /// Generic over Editor/EditorContext types (both have same fields)
     pub fn renderHeadless(
         self: *Display,
-        buffer: *const Buffer,
+        editor: anytype,
         status: []const u8,
         config: *const highlights.HighlightConfig,
         visual_state: *const VisualState,
@@ -456,6 +461,8 @@ pub const Display = struct {
         list_enabled: bool,
         listchars: *const ListChars,
     ) !void {
+        const buffer = &editor.buffer;
+
         // Update gutter cache (Neovim optimization: invalidate on line count change)
         self.updateGutterCache(buffer);
 
@@ -491,7 +498,7 @@ pub const Display = struct {
         char_width.clearCache();
 
         // STEP 1: Update all layers from buffer state
-        try layer_renderer.updateLayers(self, buffer, status, config, visual_state, yank_highlight, list_enabled, listchars);
+        try layer_renderer.updateLayers(self, editor, status, config, visual_state, yank_highlight, list_enabled, listchars);
 
         // STEP 1.5: Apply virtual text overlay (Neovim-style extmarks)
         self.virtual_text.applyToGrid(&self.virtual_text_layer.grid);

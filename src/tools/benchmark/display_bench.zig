@@ -8,6 +8,14 @@ const highlights = vimcraft.__highlights;
 const ListChars = vimcraft.__ListChars;
 const benchmark = @import("benchmark.zig");
 
+/// Minimal mock editor for benchmarking
+/// Contains only fields needed by render() (buffer and highlight_registry)
+const MockEditor = struct {
+    buffer: Buffer,
+    // No syntax field - benchmarks run without syntax highlighting
+    highlight_registry: vimcraft.__HighlightRegistry,
+};
+
 /// Create a test file with N lines
 fn createTestFile(path: []const u8, lines: usize) !void {
     const file = try std.fs.cwd().createFile(path, .{});
@@ -25,14 +33,14 @@ fn createTestFile(path: []const u8, lines: usize) !void {
 /// Benchmark: Render full screen
 fn benchRender(
     display: *Display,
-    buffer: *Buffer,
+    editor: *MockEditor,
     status: []const u8,
     config: *highlights.HighlightConfig,
     visual_state: *VisualState,
     yank_highlight: *YankHighlight,
 ) !void {
     const listchars = ListChars{};
-    try display.render(buffer, status, config, visual_state, yank_highlight, null, false, &listchars);
+    try display.render(editor, status, config, visual_state, yank_highlight, null, false, &listchars);
 }
 
 /// Run display rendering benchmarks
@@ -96,12 +104,15 @@ pub fn runDisplayBenchmarks(allocator: std.mem.Allocator) !void {
         defer buffer.deinit();
         try buffer.loadFile(small_file);
 
+        var registry = vimcraft.__HighlightRegistry.init(allocator);
+        defer registry.deinit();
+        var editor = MockEditor{ .buffer = buffer, .highlight_registry = registry };
         const result = try benchmark.benchmark(
             allocator,
             "Render small file (50 lines)",
             500,
             benchRender,
-            .{ &display, &buffer, status, &config, &visual_state, &yank_highlight },
+            .{ &display, &editor, status, &config, &visual_state, &yank_highlight },
         );
         try suite.add(result);
     }
@@ -111,12 +122,15 @@ pub fn runDisplayBenchmarks(allocator: std.mem.Allocator) !void {
         defer buffer.deinit();
         try buffer.loadFile(medium_file);
 
+        var registry = vimcraft.__HighlightRegistry.init(allocator);
+        defer registry.deinit();
+        var editor = MockEditor{ .buffer = buffer, .highlight_registry = registry };
         const result = try benchmark.benchmark(
             allocator,
             "Render medium file (500 lines)",
             200,
             benchRender,
-            .{ &display, &buffer, status, &config, &visual_state, &yank_highlight },
+            .{ &display, &editor, status, &config, &visual_state, &yank_highlight },
         );
         try suite.add(result);
     }
@@ -126,12 +140,15 @@ pub fn runDisplayBenchmarks(allocator: std.mem.Allocator) !void {
         defer buffer.deinit();
         try buffer.loadFile(large_file);
 
+        var registry = vimcraft.__HighlightRegistry.init(allocator);
+        defer registry.deinit();
+        var editor = MockEditor{ .buffer = buffer, .highlight_registry = registry };
         const result = try benchmark.benchmark(
             allocator,
             "Render large file (5000 lines)",
             100,
             benchRender,
-            .{ &display, &buffer, status, &config, &visual_state, &yank_highlight },
+            .{ &display, &editor, status, &config, &visual_state, &yank_highlight },
         );
         try suite.add(result);
     }
@@ -148,12 +165,15 @@ pub fn runDisplayBenchmarks(allocator: std.mem.Allocator) !void {
         buffer.cursor.row = 10;
         buffer.cursor.col = 20;
 
+        var registry = vimcraft.__HighlightRegistry.init(allocator);
+        defer registry.deinit();
+        var editor = MockEditor{ .buffer = buffer, .highlight_registry = registry };
         const result = try benchmark.benchmark(
             allocator,
             "Render with visual selection",
             200,
             benchRender,
-            .{ &display, &buffer, status, &config, &visual_state, &yank_highlight },
+            .{ &display, &editor, status, &config, &visual_state, &yank_highlight },
         );
         try suite.add(result);
 
@@ -166,6 +186,10 @@ pub fn runDisplayBenchmarks(allocator: std.mem.Allocator) !void {
         defer buffer.deinit();
         try buffer.loadFile(large_file);
 
+        var registry = vimcraft.__HighlightRegistry.init(allocator);
+        defer registry.deinit();
+        var editor = MockEditor{ .buffer = buffer, .highlight_registry = registry };
+
         // Test rendering at different viewport positions
         var scroll_test_count: usize = 0;
         const start = std.time.nanoTimestamp();
@@ -174,8 +198,8 @@ pub fn runDisplayBenchmarks(allocator: std.mem.Allocator) !void {
         while (scroll_test_count < 100) : (scroll_test_count += 1) {
             // Simulate scrolling by changing viewport
             display.viewport_top = scroll_test_count * 10;
-            buffer.cursor.row = display.viewport_top + 10;
-            try display.render(&buffer, status, &config, &visual_state, &yank_highlight, null, false, &listchars);
+            editor.buffer.cursor.row = display.viewport_top + 10;
+            try display.render(&editor, status, &config, &visual_state, &yank_highlight, null, false, &listchars);
         }
 
         const end = std.time.nanoTimestamp();

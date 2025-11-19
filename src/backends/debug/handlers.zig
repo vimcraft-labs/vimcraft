@@ -269,7 +269,7 @@ pub fn handleExecuteKeysWithRenderTrace(
     // Update layers from buffer state
     try layer_renderer.updateLayers(
         ctx.display,
-        &editor.buffer,
+        editor,
         editor.mode_manager.getModeString(),
         highlight_config,
         &editor.visual_state,

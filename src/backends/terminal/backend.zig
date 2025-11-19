@@ -673,7 +673,7 @@ pub const TerminalBackend = struct {
 
         // Render to display
         try self.display.render(
-            &self.editor.buffer,
+            self.editor,
             status,
             self.highlight_config,
             &self.editor.visual_state,

@@ -15,6 +15,12 @@ const OptionValue = options_mod.OptionValue;
 const c_api = @import("c_api.zig");
 const c = c_api.c;
 
+/// Module cache entry for require() system
+pub const ModuleEntry = struct {
+    exports: *c.OVHermesValue, // Cached module.exports
+    loading: bool, // True if currently executing (circular dependency detection)
+};
+
 /// Context for configuration API (passed to all config functions)
 pub const ConfigContext = struct {
     highlight_config: *highlights.HighlightConfig,
@@ -23,6 +29,11 @@ pub const ConfigContext = struct {
     display: ?*Display, // Optional - may be null in headless mode
     js_state_dirty: ?*bool = null, // Pointer to editor's dirty flag (null for EditorContext)
     buffer: ?*@import("../../editor/buffer/buffer.zig").Buffer = null, // Buffer for vim.bo access
+
+    // Module system (Phase 4 - CommonJS require())
+    module_cache: std.StringHashMap(ModuleEntry), // Cached modules by absolute path
+    current_file_path: ?[]const u8 = null, // Currently executing file (for relative requires)
+    runtime: ?*c.OVHermesRuntime = null, // Runtime for module execution
 };
 
 /// Zig host function: setHighlight(name, bg, fg)

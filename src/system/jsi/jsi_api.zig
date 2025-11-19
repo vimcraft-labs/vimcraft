@@ -26,6 +26,7 @@ pub const filetype_api = @import("filetype_api.zig");
 pub const buffer_api = @import("buffer_api.zig");
 pub const event_api = @import("event_api.zig");
 pub const highlight_api = @import("highlight_api.zig");
+pub const module_api = @import("module_api.zig");
 pub const loader = @import("loader.zig");
 
 /// Context struct for host functions
@@ -79,6 +80,10 @@ pub fn initJSI(
                 break :blk &editor_or_context.buffer;
             }
         },
+        // Module system (Phase 4)
+        .module_cache = std.StringHashMap(config_api.ModuleEntry).init(allocator),
+        .current_file_path = null,
+        .runtime = runtime,
     };
 
     // Store for cleanup in deinitJSI()
@@ -177,6 +182,9 @@ pub fn initJSI(
     global_highlight_ctx = hl_ctx;
     highlight_api.register(runtime, hl_ctx);
 
+    // Register module API (require() - Phase 4)
+    module_api.register(runtime, cfg_ctx);
+
     // JSI functions registered (silent mode)
 }
 
@@ -189,6 +197,13 @@ pub fn registerConsoleWithDebugger(runtime: *c.OVHermesRuntime, debugger_ptr: *a
 /// Clean up JSI resources (called before runtime destruction)
 pub fn deinitJSI() void {
     if (global_config_ctx) |ctx| {
+        // Clean up module cache (destroy cached Hermes values)
+        var iter = ctx.module_cache.iterator();
+        while (iter.next()) |entry| {
+            c.hermes_value_destroy(entry.value_ptr.exports);
+        }
+        ctx.module_cache.deinit();
+
         if (global_allocator) |alloc| {
             alloc.destroy(ctx);
         }
