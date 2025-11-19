@@ -59,6 +59,34 @@ Vimcraft follows a **four-layer architecture** inspired by Neovim but implemente
 - Buffer storage choices
 - API design choices
 
+### [JSI HostObject Design](./jsi-hostobject-design.md)
+**Purpose**: Deep dive into zero-copy property dispatch pattern
+**Read if**: You're implementing new APIs or understanding JSI internals
+**Key topics**:
+- HostObject vs HostFunction
+- Zero-copy dispatch mechanism
+- Performance characteristics
+- Implementation patterns
+
+### [JSI HostObject Migration](./jsi-hostobject-migration-summary.md)
+**Purpose**: Summary of migration from HostFunction to HostObject
+**Read if**: You want to understand the evolution of the API design
+**Key topics**:
+- Why we migrated
+- Performance improvements
+- Code changes made
+- Lessons learned
+
+### [JSI Gap Analysis](./jsi-gap-analysis.md) 🚨 **CRITICAL for Phase 4**
+**Purpose**: Identify missing JSI features needed for plugin system
+**Read if**: You're planning Phase 4 implementation
+**Key topics**:
+- React Native JSI vs Vimcraft comparison
+- Event emitters (CRITICAL - needed for autocommands)
+- Module system (CRITICAL - needed for plugins)
+- Error throwing and boundaries
+- Implementation priorities
+
 ---
 
 ## 🎯 Quick Links by Topic
