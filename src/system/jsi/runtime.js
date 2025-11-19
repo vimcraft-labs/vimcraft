@@ -483,6 +483,46 @@ vim.buffer = vimBuffer;
 
 Object.freeze(vim.buffer);
 
+// vim.api - Neovim-compatible API functions
+// Provides compatibility layer for Neovim plugins
+vim.api = {
+  // vim.api.setHighlight(ns_id, name, opts)
+  //   ns_id: number (namespace ID, 0 for global)
+  //   name: string (highlight group name, e.g., "Function", "@function", "ui.text")
+  //   opts: object (highlight definition)
+  //     - fg: string (foreground color, "#ff0000" or "124")
+  //     - bg: string (background color)
+  //     - sp: string (special color for underline)
+  //     - bold: boolean
+  //     - italic: boolean
+  //     - underline: boolean
+  //     - undercurl: boolean
+  //     - strikethrough: boolean
+  //     - link: string (link to another group, e.g., "Function")
+  //
+  // Examples:
+  //   vim.api.setHighlight(0, "Function", { fg: "#61AFEF", bold: true });
+  //   vim.api.setHighlight(0, "@function", { link: "Function" });
+  //   vim.api.setHighlight(0, "ui.text.focus", { fg: "#FFFFFF", bg: "#3E4452" });
+  setHighlight: function(ns_id, name, opts) {
+    vimApiSetHighlight(ns_id, name, opts);
+  },
+
+  // vim.api.getHighlight(ns_id, name)
+  //   ns_id: number (namespace ID, 0 for global)
+  //   name: string (highlight group name)
+  //   returns: object (highlight definition) or undefined
+  //
+  // Example:
+  //   const hl = vim.api.getHighlight(0, "Function");
+  //   // Returns: { fg: "#61afef", bold: true }
+  getHighlight: function(ns_id, name) {
+    return vimApiGetHighlight(ns_id, name);
+  }
+};
+
+Object.freeze(vim.api);
+
 // Event API - Expose vimEventEmitter methods on vim object
 // Allows plugins to use vim.on('BufWritePre', callback) syntax
 // Direct HostObject method forwarding (zero-copy JSI)

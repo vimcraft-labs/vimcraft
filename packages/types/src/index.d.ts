@@ -327,22 +327,23 @@ export type AutocmdEvent =
 
 /**
  * Autocommand callback arguments
+ * Matches Neovim's autocmd callback args structure exactly
  */
 export interface AutocmdCallbackArgs {
   /** Autocommand ID */
   id: number;
   /** Event name that triggered the autocommand */
   event: string;
-  /** Augroup ID (if any) */
-  group?: number;
-  /** Pattern that matched */
+  /** Augroup ID (null if not in a group) */
+  group: number | null;
+  /** Pattern that matched (currently same as file) */
   match: string;
   /** Buffer number */
   buf: number;
-  /** File name */
+  /** File name (empty string if no file) */
   file: string;
-  /** Additional data (event-specific) */
-  data?: any;
+  /** Additional event-specific data (null if none) */
+  data: any;
 }
 
 /**
@@ -892,6 +893,55 @@ export interface Vim {
    * vim.keymap.set('n', '<leader>w', ':w<CR>', { silent: true });
    */
   keymap: Keymap;
+
+  /**
+   * Register event listener for autocommand events
+   * Callback receives Neovim-compatible args object
+   * @param event - Event name (e.g., 'BufRead', 'InsertEnter')
+   * @param callback - Callback function that receives event args
+   * @example
+   * vim.on('BufWritePre', (args) => {
+   *   console.log('Saving file:', args.file);
+   *   console.log('Buffer:', args.buf, 'Event:', args.event);
+   * });
+   */
+  on(event: AutocmdEvent, callback: (args: AutocmdCallbackArgs) => void): void;
+
+  /**
+   * Remove event listener for autocommand events
+   * Currently removes ALL listeners for the event
+   * @param event - Event name
+   * @param callback - Callback to remove (currently unused, removes all)
+   * @example
+   * vim.off('BufWritePre', callback);
+   */
+  off(event: AutocmdEvent, callback: (args: AutocmdCallbackArgs) => void): void;
+
+  /**
+   * Remove all listeners for an event
+   * @param event - Event name
+   * @example
+   * vim.removeAllListeners('BufWritePre');
+   */
+  removeAllListeners(event: AutocmdEvent): void;
+
+  /**
+   * Get listener count for an event
+   * @param event - Event name
+   * @returns Number of listeners
+   * @example
+   * const count = vim.listenerCount('BufWritePre');
+   */
+  listenerCount(event: AutocmdEvent): number;
+
+  /**
+   * Emit an event (for testing/advanced use)
+   * @param event - Event name
+   * @param args - Event arguments
+   * @example
+   * vim.emit('User', { event: 'MyCustomEvent', data: {...} });
+   */
+  emit(event: AutocmdEvent, args: AutocmdCallbackArgs): void;
 
   /**
    * Vimscript function bridge

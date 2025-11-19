@@ -18,6 +18,7 @@ const OptionsManager = @import("config/options.zig").OptionsManager;
 const KeymapManager = @import("keymap/keymap.zig").KeymapManager;
 const Loader = @import("treesitter/loader.zig").Loader;
 const EventEmitter = @import("../system/jsi/event_emitter.zig").EventEmitter;
+const HighlightRegistry = @import("../system/jsi/highlight_api.zig").HighlightRegistry;
 
 /// Pending command for multi-key sequences (like dd, dw)
 const PendingCommand = struct {
@@ -177,6 +178,10 @@ pub const Editor = struct {
     // Options (optional - null for headless mode without config)
     options_manager: ?*OptionsManager = null,
 
+    // Highlight registry for tree-sitter syntax highlighting (vim.api.setHighlight)
+    // Initialized when JSI runtime created (terminal backend sets this during JSI setup)
+    highlight_registry: HighlightRegistry,
+
     // Event emitter for autocommands (initialized when JSI runtime created)
     // Null until JSI runtime is available (terminal backend sets this during JSI setup)
     event_emitter: ?*EventEmitter = null,
@@ -229,6 +234,7 @@ pub const Editor = struct {
             .keymap_mgr = KeymapManager.init(allocator),
             .ts_loader = ts_loader,
             .logger = Logger.init(allocator),
+            .highlight_registry = HighlightRegistry.init(allocator),
             .pending_cmd = PendingCommand{},
             .pending_register = PendingRegister{},
             .pending_text_object = PendingTextObject{},
@@ -245,6 +251,7 @@ pub const Editor = struct {
         self.register_mgr.deinit();
         self.keymap_mgr.deinit();
         self.ts_loader.deinit();
+        self.highlight_registry.deinit();
         self.cmd_buffer.deinit();
         self.logger.deinit();
     }
@@ -268,8 +275,8 @@ pub const Editor = struct {
         // Trigger autocommands (Phase 4 - autocommand support)
         // BufRead: After reading buffer into memory
         // BufEnter: After entering buffer
-        self.triggerAutocommand("BufRead", .{});
-        self.triggerAutocommand("BufEnter", .{});
+        self.triggerAutocommand("BufRead");
+        self.triggerAutocommand("BufEnter");
     }
 
     /// Execute a string of keys through the editor
@@ -317,7 +324,7 @@ pub const Editor = struct {
         self.mode_manager.enterInsert();
 
         // Trigger InsertEnter autocommand (Phase 4)
-        self.triggerAutocommand("InsertEnter", .{});
+        self.triggerAutocommand("InsertEnter");
     }
 
     /// Handle input in Normal mode
@@ -940,7 +947,7 @@ pub const Editor = struct {
             }
 
             // Trigger InsertLeave autocommand (Phase 4) BEFORE mode change
-            self.triggerAutocommand("InsertLeave", .{});
+            self.triggerAutocommand("InsertLeave");
 
             self.keymap_mgr.clearPending(); // Clear pending state on mode change
             self.mode_manager.enterNormal();
@@ -1262,47 +1269,91 @@ pub const Editor = struct {
     }
 
     /// Trigger an autocommand event
-    /// Converts Zig values to JSI and emits to JavaScript listeners
+    /// Creates Neovim-compatible args object and emits to JavaScript listeners
+    ///
+    /// The args object contains these properties (matching Neovim's autocmd callback):
+    ///   - id: autocommand id (always 0 for now)
+    ///   - event: event name (string)
+    ///   - group: autocommand group id (always null for now)
+    ///   - buf: buffer number (always 0, single-buffer support)
+    ///   - file: file path (string or empty string if no file)
+    ///   - match: matched pattern (same as file for now)
+    ///   - data: arbitrary data (always null for now)
     ///
     /// Usage:
-    ///   editor.triggerAutocommand("BufEnter", .{@as(usize, 0)});
-    ///   editor.triggerAutocommand("InsertLeave", .{});
-    pub fn triggerAutocommand(self: *Editor, event_name: []const u8, args: anytype) void {
+    ///   editor.triggerAutocommand("BufEnter");
+    ///   editor.triggerAutocommand("InsertLeave");
+    pub fn triggerAutocommand(self: *Editor, event_name: []const u8) void {
         const emitter = self.event_emitter orelse return; // No JSI runtime yet
 
         // Get runtime from EventEmitter
         const runtime = emitter.runtime;
         const c = @import("../system/jsi/c_api.zig").c;
 
-        // Convert args to JSI values
-        var jsi_args: std.ArrayList(*c.OVHermesValue) = .empty;
-        defer jsi_args.deinit(self.allocator);
+        // Create args object: {id, event, group, buf, file, match, data}
+        const args_obj = c.hermes_value_create_object(runtime) orelse {
+            self.logger.err("Failed to create args object for event '{s}'", .{event_name}) catch {};
+            return;
+        };
+        defer c.hermes_value_destroy(args_obj);
 
-        inline for (args) |arg| {
-            const ArgType = @TypeOf(arg);
-            const val = switch (ArgType) {
-                usize => c.hermes_value_create_number(runtime, @floatFromInt(arg)),
-                []const u8 => c.hermes_value_create_string(runtime, arg.ptr, arg.len),
-                else => @compileError("Unsupported autocommand argument type: " ++ @typeName(ArgType)),
-            };
+        // Set properties (Neovim-compatible)
 
-            if (val) |v| {
-                jsi_args.append(self.allocator, v) catch continue;
-            }
+        // id: autocommand id (always 0 for now, Phase 5 will add proper IDs)
+        const id_val = c.hermes_value_create_number(runtime, 0);
+        if (id_val) |v| {
+            c.hermes_value_set_property(runtime, args_obj, "id", v);
+            c.hermes_value_destroy(v);
         }
 
-        // Cast to C-style pointer for emit
-        const c_args: []const *c.OVHermesValue = @ptrCast(jsi_args.items);
+        // event: event name (string)
+        const event_val = c.hermes_value_create_string(runtime, event_name.ptr, event_name.len);
+        if (event_val) |v| {
+            c.hermes_value_set_property(runtime, args_obj, "event", v);
+            c.hermes_value_destroy(v);
+        }
 
-        // Emit event
-        emitter.emit(event_name, c_args) catch |err| {
+        // group: autocommand group id (null for now, Phase 5 will add groups)
+        const group_val = c.hermes_value_create_null(runtime);
+        if (group_val) |v| {
+            c.hermes_value_set_property(runtime, args_obj, "group", v);
+            c.hermes_value_destroy(v);
+        }
+
+        // buf: buffer number (0 for now, single-buffer support)
+        const buf_val = c.hermes_value_create_number(runtime, 0);
+        if (buf_val) |v| {
+            c.hermes_value_set_property(runtime, args_obj, "buf", v);
+            c.hermes_value_destroy(v);
+        }
+
+        // file: file path (or empty string if no file loaded)
+        const file_path = self.buffer.filepath orelse "";
+        const file_val = c.hermes_value_create_string(runtime, file_path.ptr, file_path.len);
+        if (file_val) |v| {
+            c.hermes_value_set_property(runtime, args_obj, "file", v);
+            c.hermes_value_destroy(v);
+        }
+
+        // match: matched pattern (same as file for now, Phase 5 will add pattern matching)
+        const match_val = c.hermes_value_create_string(runtime, file_path.ptr, file_path.len);
+        if (match_val) |v| {
+            c.hermes_value_set_property(runtime, args_obj, "match", v);
+            c.hermes_value_destroy(v);
+        }
+
+        // data: arbitrary data (null for now, Phase 5 will allow custom data)
+        const data_val = c.hermes_value_create_null(runtime);
+        if (data_val) |v| {
+            c.hermes_value_set_property(runtime, args_obj, "data", v);
+            c.hermes_value_destroy(v);
+        }
+
+        // Emit event with args object (as single-element array)
+        const c_args = [_]*c.OVHermesValue{args_obj};
+        emitter.emit(event_name, &c_args) catch |err| {
             self.logger.err("Failed to emit autocommand '{s}': {}", .{ event_name, err }) catch {};
         };
-
-        // Clean up JSI values
-        for (jsi_args.items) |val| {
-            c.hermes_value_destroy(val);
-        }
     }
 };
 

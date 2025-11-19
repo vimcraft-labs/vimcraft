@@ -10,6 +10,7 @@ const Logger = @import("../../editor/log.zig").Logger;
 const OptionsManager = @import("../../editor/config/options.zig").OptionsManager;
 const KeymapManager = @import("../../editor/keymap/keymap.zig").KeymapManager;
 const Loader = @import("../../editor/treesitter/loader.zig").Loader;
+const HighlightRegistry = @import("../../system/jsi/highlight_api.zig").HighlightRegistry;
 const movement = @import("../../editor/movement/movement.zig");
 const Position = @import("../../backends/terminal/visual/visual.zig").Position;
 const yank = @import("../../editor/buffer/yank.zig");
@@ -112,6 +113,7 @@ pub const EditorContext = struct {
     options_manager: ?*OptionsManager = null,
     keymap_mgr: KeymapManager,
     ts_loader: Loader,
+    highlight_registry: HighlightRegistry,
 
     // Internal state
     pending_cmd: PendingCommand,
@@ -154,6 +156,7 @@ pub const EditorContext = struct {
             .logger = Logger.init(allocator),
             .keymap_mgr = keymap_mgr,
             .ts_loader = ts_loader,
+            .highlight_registry = HighlightRegistry.init(allocator),
             .pending_cmd = PendingCommand{},
             .pending_register = PendingRegister{},
             .cmd_buffer = CommandBuffer.init(allocator),
@@ -166,6 +169,7 @@ pub const EditorContext = struct {
         self.register_mgr.deinit();
         self.keymap_mgr.deinit();
         self.ts_loader.deinit();
+        self.highlight_registry.deinit();
         self.cmd_buffer.deinit();
         self.logger.deinit();
     }

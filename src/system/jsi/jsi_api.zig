@@ -25,6 +25,7 @@ pub const keymap_api = @import("keymap_api.zig");
 pub const filetype_api = @import("filetype_api.zig");
 pub const buffer_api = @import("buffer_api.zig");
 pub const event_api = @import("event_api.zig");
+pub const highlight_api = @import("highlight_api.zig");
 pub const loader = @import("loader.zig");
 
 /// Context struct for host functions
@@ -37,6 +38,7 @@ pub const JSIContext = struct {
 var global_config_ctx: ?*config_api.ConfigContext = null;
 var global_motion_ctx: ?*motion_api.MotionContext = null;
 var global_keymap_ctx: ?*keymap_api.KeymapContext = null;
+var global_highlight_ctx: ?*highlight_api.HighlightContext = null;
 var global_event_emitter: ?*EventEmitter = null;
 var global_allocator: ?std.mem.Allocator = null;
 
@@ -164,6 +166,17 @@ pub fn initJSI(
         event_api.register(runtime, emitter);
     }
 
+    // Register highlight API (vim.api.setHighlight, vim.api.getHighlight)
+    // Both Editor and EditorContext have highlight_registry
+    const hl_ctx = allocator.create(highlight_api.HighlightContext) catch @panic("Failed to allocate HighlightContext");
+    hl_ctx.* = highlight_api.HighlightContext{
+        .registry = &editor_or_context.highlight_registry,
+        .allocator = allocator,
+        .js_state_dirty = js_state_dirty_ptr,
+    };
+    global_highlight_ctx = hl_ctx;
+    highlight_api.register(runtime, hl_ctx);
+
     // JSI functions registered (silent mode)
 }
 
@@ -190,6 +203,12 @@ pub fn deinitJSI() void {
     if (global_keymap_ctx) |ctx| {
         ctx.deinit(); // KeymapContext has its own deinit that frees itself
         global_keymap_ctx = null;
+    }
+    if (global_highlight_ctx) |ctx| {
+        if (global_allocator) |alloc| {
+            alloc.destroy(ctx);
+        }
+        global_highlight_ctx = null;
     }
     if (global_event_emitter) |emitter| {
         emitter.deinit(); // Clean up all event listeners
