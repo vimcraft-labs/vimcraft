@@ -230,6 +230,7 @@ pub const Editor = struct {
         errdefer parser.deinit();
 
         var highlight_registry = HighlightRegistry.init(allocator);
+        try highlight_registry.initDefaults(); // Initialize default UI highlights (Neovim pattern)
         errdefer highlight_registry.deinit();
 
         // Set up default links from tree-sitter captures to Vim highlight groups
@@ -267,54 +268,100 @@ pub const Editor = struct {
     fn setupDefaultHighlightLinks(registry: *HighlightRegistry) !void {
         const HighlightDef = @import("../system/jsi/highlight_api.zig").HighlightDef;
 
+        // Set default highlight groups (fallback definitions)
+        // These are used if theme doesn't define them
+        try registry.set("Keyword", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 197, .g = 134, .b = 192 } }, // Purple
+        });
+
+        try registry.set("Function", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 130, .g = 170, .b = 255 } }, // Blue
+        });
+
+        try registry.set("String", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 152, .g = 195, .b = 121 } }, // Green
+        });
+
+        try registry.set("Comment", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 128, .g = 128, .b = 128 } }, // Gray
+            .italic = true,
+        });
+
+        try registry.set("Type", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 86, .g = 182, .b = 194 } }, // Cyan
+        });
+
+        try registry.set("Constant", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 209, .g = 154, .b = 102 } }, // Orange
+        });
+
+        try registry.set("Operator", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 200, .g = 200, .b = 200 } }, // Light gray
+        });
+
+        try registry.set("Identifier", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 224, .g = 108, .b = 117 } }, // Red
+        });
+
+        try registry.set("Delimiter", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 171, .g = 178, .b = 191 } }, // Gray
+        });
+
+        try registry.set("Normal", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 171, .g = 178, .b = 191 } }, // Default text color
+        });
+
+        // NOTE: Tree-sitter C API returns capture names WITHOUT '@' prefix
+        // (query file has "@keyword", C API returns "keyword")
+
         // Keywords and control flow
-        try registry.set("@keyword", HighlightDef{ .link = "Keyword" });
-        try registry.set("@keyword.function", HighlightDef{ .link = "Keyword" });
-        try registry.set("@keyword.operator", HighlightDef{ .link = "Keyword" });
-        try registry.set("@keyword.return", HighlightDef{ .link = "Keyword" });
-        try registry.set("@keyword.conditional", HighlightDef{ .link = "Keyword" });
-        try registry.set("@keyword.repeat", HighlightDef{ .link = "Keyword" });
+        try registry.set("keyword", HighlightDef{ .link = "Keyword" });
+        try registry.set("keyword.function", HighlightDef{ .link = "Keyword" });
+        try registry.set("keyword.operator", HighlightDef{ .link = "Keyword" });
+        try registry.set("keyword.return", HighlightDef{ .link = "Keyword" });
+        try registry.set("keyword.conditional", HighlightDef{ .link = "Keyword" });
+        try registry.set("keyword.repeat", HighlightDef{ .link = "Keyword" });
 
         // Functions and methods
-        try registry.set("@function", HighlightDef{ .link = "Function" });
-        try registry.set("@function.builtin", HighlightDef{ .link = "Function" });
-        try registry.set("@function.call", HighlightDef{ .link = "Function" });
-        try registry.set("@function.method", HighlightDef{ .link = "Function" });
-        try registry.set("@method", HighlightDef{ .link = "Function" });
-        try registry.set("@method.call", HighlightDef{ .link = "Function" });
+        try registry.set("function", HighlightDef{ .link = "Function" });
+        try registry.set("function.builtin", HighlightDef{ .link = "Function" });
+        try registry.set("function.call", HighlightDef{ .link = "Function" });
+        try registry.set("function.method", HighlightDef{ .link = "Function" });
+        try registry.set("method", HighlightDef{ .link = "Function" });
+        try registry.set("method.call", HighlightDef{ .link = "Function" });
 
         // Types
-        try registry.set("@type", HighlightDef{ .link = "Type" });
-        try registry.set("@type.builtin", HighlightDef{ .link = "Type" });
-        try registry.set("@type.definition", HighlightDef{ .link = "Type" });
+        try registry.set("type", HighlightDef{ .link = "Type" });
+        try registry.set("type.builtin", HighlightDef{ .link = "Type" });
+        try registry.set("type.definition", HighlightDef{ .link = "Type" });
 
         // Strings and literals
-        try registry.set("@string", HighlightDef{ .link = "String" });
-        try registry.set("@string.regex", HighlightDef{ .link = "String" });
-        try registry.set("@string.escape", HighlightDef{ .link = "String" });
-        try registry.set("@character", HighlightDef{ .link = "String" });
+        try registry.set("string", HighlightDef{ .link = "String" });
+        try registry.set("string.regex", HighlightDef{ .link = "String" });
+        try registry.set("string.escape", HighlightDef{ .link = "String" });
+        try registry.set("character", HighlightDef{ .link = "String" });
 
         // Comments
-        try registry.set("@comment", HighlightDef{ .link = "Comment" });
-        try registry.set("@comment.documentation", HighlightDef{ .link = "Comment" });
+        try registry.set("comment", HighlightDef{ .link = "Comment" });
+        try registry.set("comment.documentation", HighlightDef{ .link = "Comment" });
 
         // Constants and numbers
-        try registry.set("@constant", HighlightDef{ .link = "Constant" });
-        try registry.set("@constant.builtin", HighlightDef{ .link = "Constant" });
-        try registry.set("@number", HighlightDef{ .link = "Constant" });
-        try registry.set("@boolean", HighlightDef{ .link = "Constant" });
-        try registry.set("@float", HighlightDef{ .link = "Constant" });
+        try registry.set("constant", HighlightDef{ .link = "Constant" });
+        try registry.set("constant.builtin", HighlightDef{ .link = "Constant" });
+        try registry.set("number", HighlightDef{ .link = "Constant" });
+        try registry.set("boolean", HighlightDef{ .link = "Constant" });
+        try registry.set("float", HighlightDef{ .link = "Constant" });
 
         // Variables and identifiers
-        try registry.set("@variable", HighlightDef{ .link = "Normal" });
-        try registry.set("@variable.builtin", HighlightDef{ .link = "Constant" });
-        try registry.set("@variable.parameter", HighlightDef{ .link = "Normal" });
-        try registry.set("@property", HighlightDef{ .link = "Normal" });
+        try registry.set("variable", HighlightDef{ .link = "Normal" });
+        try registry.set("variable.builtin", HighlightDef{ .link = "Constant" });
+        try registry.set("variable.parameter", HighlightDef{ .link = "Normal" });
+        try registry.set("property", HighlightDef{ .link = "Normal" });
 
         // Operators and punctuation
-        try registry.set("@operator", HighlightDef{ .link = "Keyword" });
-        try registry.set("@punctuation.bracket", HighlightDef{ .link = "Normal" });
-        try registry.set("@punctuation.delimiter", HighlightDef{ .link = "Normal" });
+        try registry.set("operator", HighlightDef{ .link = "Keyword" });
+        try registry.set("punctuation.bracket", HighlightDef{ .link = "Normal" });
+        try registry.set("punctuation.delimiter", HighlightDef{ .link = "Normal" });
     }
 
     pub fn deinit(self: *Editor) void {
@@ -345,13 +392,13 @@ pub const Editor = struct {
 
         if (filetype) |ft| {
             self.buffer.filetype = ft;
-            self.logger.info("Detected filetype: {s} for {s}", .{ ft, path }) catch {};
+            self.logger.info("✅ Detected filetype: {s} for {s}", .{ ft, path }) catch {};
 
             // Parse with tree-sitter
             try self.parseBufferWithTreeSitter(ft);
         } else {
             self.buffer.filetype = null;
-            self.logger.debug("No filetype detected for {s}", .{path}) catch {};
+            self.logger.info("❌ No filetype detected for {s}", .{path}) catch {};
         }
 
         // Trigger autocommands (Phase 4 - autocommand support)
@@ -1378,10 +1425,11 @@ pub const Editor = struct {
     fn parseBufferWithTreeSitter(self: *Editor, filetype: []const u8) !void {
         // Normalize language name
         const lang_name = normalizeLangName(filetype);
+        self.logger.info("🔍 Normalizing filetype '{s}' → '{s}'", .{ filetype, lang_name }) catch {};
 
         // Get language from registry
         const lang = languages.getLanguage(lang_name) orelse {
-            self.logger.debug("No tree-sitter support for language: {s}", .{lang_name}) catch {};
+            self.logger.info("❌ No tree-sitter parser for language: {s}", .{lang_name}) catch {};
             return; // No tree-sitter support, syntax stays null
         };
 
@@ -1400,7 +1448,7 @@ pub const Editor = struct {
         // Create new Syntax instance
         self.syntax = try Syntax.init(self.allocator, tree, lang, lang_name);
 
-        self.logger.info("Parsed {d} bytes of {s} with tree-sitter", .{ source.len, lang_name }) catch {};
+        self.logger.info("✅ Parsed {d} bytes of {s} with tree-sitter (syntax instance created)", .{ source.len, lang_name }) catch {};
     }
 
     /// Trigger an autocommand event

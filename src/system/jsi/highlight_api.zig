@@ -148,6 +148,46 @@ pub const HighlightRegistry = struct {
         };
     }
 
+    /// Initialize default UI highlights (Neovim pattern)
+    /// This sets up the basic highlight groups that are expected by the UI layer
+    /// Call this immediately after init() to ensure UI has sensible defaults
+    pub fn initDefaults(self: *HighlightRegistry) !void {
+        // Default colors (similar to Neovim's defaults)
+        const default_fg = Color{ .rgb = .{ .r = 0xAB, .g = 0xB2, .b = 0xBF } }; // Light gray
+        const default_bg = Color{ .rgb = .{ .r = 0x1A, .g = 0x1B, .b = 0x26 } }; // Dark background
+        const cursor_bg = Color{ .rgb = .{ .r = 0xAE, .g = 0xAF, .b = 0xAD } };  // Light gray cursor
+        const cursorline_bg = Color{ .rgb = .{ .r = 0x1E, .g = 0x20, .b = 0x2F } }; // Subtle highlight
+        const visual_bg = Color{ .rgb = .{ .r = 0x28, .g = 0x34, .b = 0x57 } };   // Blue tint
+        const line_nr_fg = Color{ .rgb = .{ .r = 0x34, .g = 0x35, .b = 0x43 } };  // Dim gray
+        const active_line_nr_fg = Color{ .rgb = .{ .r = 0x51, .g = 0xAF, .b = 0xEF } }; // Bright blue
+        const invisible_fg = Color{ .rgb = .{ .r = 0x37, .g = 0x38, .b = 0x4F } };  // Very dim gray
+        const yank_flash_bg = Color{ .rgb = .{ .r = 0x64, .g = 0x64, .b = 0x32 } }; // Yellow flash
+
+        // Normal - base colors for text
+        try self.set("Normal", .{ .fg = default_fg, .bg = default_bg });
+
+        // Cursor - cursor block color
+        try self.set("Cursor", .{ .bg = cursor_bg });
+
+        // CursorLine - current line highlight
+        try self.set("CursorLine", .{ .bg = cursorline_bg });
+
+        // Visual - visual mode selection
+        try self.set("Visual", .{ .bg = visual_bg });
+
+        // Line numbers
+        try self.set("LineNr", .{ .fg = line_nr_fg });
+        try self.set("CursorLineNr", .{ .fg = active_line_nr_fg });
+
+        // Whitespace/invisible characters (listchars)
+        try self.set("Whitespace", .{ .fg = invisible_fg });
+        try self.set("SpecialKey", .{ .fg = invisible_fg });
+        try self.set("NonText", .{ .fg = invisible_fg });
+
+        // Yank flash
+        try self.set("YankFlash", .{ .bg = yank_flash_bg });
+    }
+
     pub fn deinit(self: *HighlightRegistry) void {
         // Free owned strings (scopes shares pointers with highlights, don't free twice)
         var it = self.highlights.keyIterator();
@@ -191,6 +231,8 @@ pub const HighlightRegistry = struct {
 
             // Remove old highlight if exists
             if (self.highlights.fetchRemove(name_copy)) |old| {
+                // CRITICAL: Also remove from scope_to_index (pointer will be invalid)
+                _ = self.scope_to_index.fetchRemove(old.key);
                 self.allocator.free(old.key);
             }
 
@@ -198,10 +240,21 @@ pub const HighlightRegistry = struct {
 
             // Add to Vec if it's a syntax scope (for O(1) tree-sitter lookup)
             if (self.isSyntaxScope(name)) {
-                // Check if already indexed
-                if (self.scope_to_index.get(name_copy)) |existing_index| {
+                // Check if already indexed (use name string comparison, not pointer)
+                const existing_index_opt = blk: {
+                    var it = self.scope_to_index.iterator();
+                    while (it.next()) |entry| {
+                        if (std.mem.eql(u8, entry.key_ptr.*, name)) {
+                            break :blk entry.value_ptr.*;
+                        }
+                    }
+                    break :blk null;
+                };
+
+                if (existing_index_opt) |existing_index| {
                     // Update existing entry
                     self.highlight_vec.items[existing_index] = style;
+                    try self.scope_to_index.put(name_copy, existing_index);
                 } else {
                     // Add new entry
                     const index: u32 = @intCast(self.scopes.items.len);

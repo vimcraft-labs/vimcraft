@@ -118,10 +118,10 @@ globalThis.performance = {
 
 // vim API object - make it global for plugins!
 globalThis.vim = {
+  // Convenience wrapper for vim.api.setHighlight (Neovim compatibility)
+  // vim.highlight("Function", { fg: "#61AFEF", bold: true })
   highlight: function(name, opts) {
-    const bg = opts.bg || null;
-    const fg = opts.fg || null;
-    setHighlight(name, bg, fg);
+    vimApiSetHighlight(0, name, opts);
   },
   // Dynamic options proxy - handles ANY option via HostObject properties
   // Supports both camelCase (JavaScript style) and lowercase (Vim style)

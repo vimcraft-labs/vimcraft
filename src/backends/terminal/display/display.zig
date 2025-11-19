@@ -351,7 +351,7 @@ pub const Display = struct {
         self: *Display,
         editor: anytype,
         status: []const u8,
-        config: *const highlights.HighlightConfig,
+        cursorline_enabled: bool,
         visual_state: *const VisualState,
         yank_highlight: *const YankHighlight,
         cursor_override: ?CursorPosition,
@@ -402,7 +402,7 @@ pub const Display = struct {
 
         // PHASE 2.5: Multi-layer rendering pipeline (ACTIVATED!)
         // STEP 1: Update all layers from buffer state
-        try layer_renderer.updateLayers(self, editor, status, config, visual_state, yank_highlight, list_enabled, listchars);
+        try layer_renderer.updateLayers(self, editor, status, &editor.highlight_registry, visual_state, yank_highlight, cursorline_enabled, list_enabled, listchars);
 
         // STEP 1.5: Apply virtual text overlay (Neovim-style extmarks)
         // Plugins render arbitrary text via virtual_text_layer
@@ -455,7 +455,7 @@ pub const Display = struct {
         self: *Display,
         editor: anytype,
         status: []const u8,
-        config: *const highlights.HighlightConfig,
+        cursorline_enabled: bool,
         visual_state: *const VisualState,
         yank_highlight: *const YankHighlight,
         list_enabled: bool,
@@ -498,7 +498,7 @@ pub const Display = struct {
         char_width.clearCache();
 
         // STEP 1: Update all layers from buffer state
-        try layer_renderer.updateLayers(self, editor, status, config, visual_state, yank_highlight, list_enabled, listchars);
+        try layer_renderer.updateLayers(self, editor, status, &editor.highlight_registry, visual_state, yank_highlight, cursorline_enabled, list_enabled, listchars);
 
         // STEP 1.5: Apply virtual text overlay (Neovim-style extmarks)
         self.virtual_text.applyToGrid(&self.virtual_text_layer.grid);

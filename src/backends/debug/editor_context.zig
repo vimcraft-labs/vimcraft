@@ -115,6 +115,10 @@ pub const EditorContext = struct {
     ts_loader: Loader,
     highlight_registry: HighlightRegistry,
 
+    // Tree-sitter parser and syntax highlighting
+    parser: @import("../../editor/treesitter/parser.zig").Parser,
+    syntax: ?@import("../../editor/treesitter/syntax.zig").Syntax,
+
     // Internal state
     pending_cmd: PendingCommand,
     pending_register: PendingRegister,
@@ -138,6 +142,17 @@ pub const EditorContext = struct {
         var ts_loader = try Loader.init(allocator);
         errdefer ts_loader.deinit();
 
+        const Parser = @import("../../editor/treesitter/parser.zig").Parser;
+        var parser = try Parser.init(allocator);
+        errdefer parser.deinit();
+
+        var highlight_registry = HighlightRegistry.init(allocator);
+        try highlight_registry.initDefaults(); // Initialize default UI highlights (Neovim pattern)
+        errdefer highlight_registry.deinit();
+
+        // Set up default links from tree-sitter captures to Vim highlight groups
+        try setupDefaultHighlightLinks(&highlight_registry);
+
         // Note: Display won't actually render since we never call flush() in headless mode
 
         return EditorContext{
@@ -156,7 +171,9 @@ pub const EditorContext = struct {
             .logger = Logger.init(allocator),
             .keymap_mgr = keymap_mgr,
             .ts_loader = ts_loader,
-            .highlight_registry = HighlightRegistry.init(allocator),
+            .highlight_registry = highlight_registry,
+            .parser = parser,
+            .syntax = null,
             .pending_cmd = PendingCommand{},
             .pending_register = PendingRegister{},
             .cmd_buffer = CommandBuffer.init(allocator),
@@ -169,9 +186,157 @@ pub const EditorContext = struct {
         self.register_mgr.deinit();
         self.keymap_mgr.deinit();
         self.ts_loader.deinit();
+        if (self.syntax) |*syntax| {
+            syntax.deinit();
+        }
+        self.parser.deinit();
         self.highlight_registry.deinit();
         self.cmd_buffer.deinit();
         self.logger.deinit();
+    }
+
+    /// Setup default links from tree-sitter captures to Vim highlight groups
+    /// This allows tree-sitter highlights (@keyword, @function, etc.) to use
+    /// theme definitions for traditional Vim groups (Keyword, Function, etc.)
+    fn setupDefaultHighlightLinks(registry: *HighlightRegistry) !void {
+        const HighlightDef = @import("../../system/jsi/highlight_api.zig").HighlightDef;
+
+        // Set default highlight groups (fallback definitions)
+        // These are used if theme doesn't define them
+        try registry.set("Keyword", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 197, .g = 134, .b = 192 } }, // Purple
+        });
+
+        try registry.set("Function", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 130, .g = 170, .b = 255 } }, // Blue
+        });
+
+        try registry.set("String", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 152, .g = 195, .b = 121 } }, // Green
+        });
+
+        try registry.set("Comment", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 128, .g = 128, .b = 128 } }, // Gray
+            .italic = true,
+        });
+
+        try registry.set("Type", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 86, .g = 182, .b = 194 } }, // Cyan
+        });
+
+        try registry.set("Constant", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 209, .g = 154, .b = 102 } }, // Orange
+        });
+
+        try registry.set("Operator", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 200, .g = 200, .b = 200 } }, // Light gray
+        });
+
+        try registry.set("Identifier", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 224, .g = 108, .b = 117 } }, // Red
+        });
+
+        try registry.set("Delimiter", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 171, .g = 178, .b = 191 } }, // Gray
+        });
+
+        try registry.set("Conditional", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 197, .g = 134, .b = 192 } }, // Purple (same as Keyword)
+        });
+
+        try registry.set("Repeat", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 197, .g = 134, .b = 192 } }, // Purple (same as Keyword)
+        });
+
+        try registry.set("Exception", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 197, .g = 134, .b = 192 } }, // Purple (same as Keyword)
+        });
+
+        try registry.set("Boolean", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 209, .g = 154, .b = 102 } }, // Orange (same as Constant)
+        });
+
+        try registry.set("Number", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 209, .g = 154, .b = 102 } }, // Orange (same as Constant)
+        });
+
+        try registry.set("Float", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 209, .g = 154, .b = 102 } }, // Orange (same as Constant)
+        });
+
+        // Now create links from tree-sitter captures to Vim highlight groups
+        // Links are created by passing a HighlightDef with the 'link' field set
+        // NOTE: Tree-sitter C API returns capture names WITHOUT '@' prefix
+        // (query file has "@keyword", C API returns "keyword")
+
+        // Keywords and control flow → Keyword
+        const keyword_group = try std.heap.page_allocator.dupe(u8, "Keyword");
+        try registry.set("keyword", HighlightDef{ .link = keyword_group });
+        try registry.set("keyword.function", HighlightDef{ .link = keyword_group });
+        try registry.set("keyword.return", HighlightDef{ .link = keyword_group });
+        try registry.set("keyword.operator", HighlightDef{ .link = keyword_group });
+
+        const cond_group = try std.heap.page_allocator.dupe(u8, "Conditional");
+        try registry.set("conditional", HighlightDef{ .link = cond_group });
+
+        const repeat_group = try std.heap.page_allocator.dupe(u8, "Repeat");
+        try registry.set("repeat", HighlightDef{ .link = repeat_group });
+
+        const except_group = try std.heap.page_allocator.dupe(u8, "Exception");
+        try registry.set("exception", HighlightDef{ .link = except_group });
+
+        // Functions and methods → Function
+        const func_group = try std.heap.page_allocator.dupe(u8, "Function");
+        try registry.set("function", HighlightDef{ .link = func_group });
+        try registry.set("function.call", HighlightDef{ .link = func_group });
+        try registry.set("function.builtin", HighlightDef{ .link = func_group });
+        try registry.set("method", HighlightDef{ .link = func_group });
+        try registry.set("method.call", HighlightDef{ .link = func_group });
+
+        // Types and constants
+        const type_group = try std.heap.page_allocator.dupe(u8, "Type");
+        try registry.set("type", HighlightDef{ .link = type_group });
+        try registry.set("type.builtin", HighlightDef{ .link = type_group });
+        try registry.set("type.definition", HighlightDef{ .link = type_group });
+
+        const const_group = try std.heap.page_allocator.dupe(u8, "Constant");
+        try registry.set("constant", HighlightDef{ .link = const_group });
+        try registry.set("constant.builtin", HighlightDef{ .link = const_group });
+
+        const bool_group = try std.heap.page_allocator.dupe(u8, "Boolean");
+        try registry.set("boolean", HighlightDef{ .link = bool_group });
+
+        const num_group = try std.heap.page_allocator.dupe(u8, "Number");
+        try registry.set("number", HighlightDef{ .link = num_group });
+
+        const float_group = try std.heap.page_allocator.dupe(u8, "Float");
+        try registry.set("float", HighlightDef{ .link = float_group });
+
+        // Strings and comments
+        const str_group = try std.heap.page_allocator.dupe(u8, "String");
+        try registry.set("string", HighlightDef{ .link = str_group });
+
+        const comment_group = try std.heap.page_allocator.dupe(u8, "Comment");
+        try registry.set("comment", HighlightDef{ .link = comment_group });
+        try registry.set("comment.documentation", HighlightDef{ .link = comment_group });
+
+        // Operators and delimiters
+        const op_group = try std.heap.page_allocator.dupe(u8, "Operator");
+        try registry.set("operator", HighlightDef{ .link = op_group });
+
+        const delim_group = try std.heap.page_allocator.dupe(u8, "Delimiter");
+        try registry.set("punctuation", HighlightDef{ .link = delim_group });
+        try registry.set("punctuation.delimiter", HighlightDef{ .link = delim_group });
+        try registry.set("punctuation.bracket", HighlightDef{ .link = delim_group });
+
+        // Variables and identifiers
+        const ident_group = try std.heap.page_allocator.dupe(u8, "Identifier");
+        try registry.set("variable", HighlightDef{ .link = ident_group });
+        try registry.set("variable.builtin", HighlightDef{ .link = ident_group });
+        try registry.set("parameter", HighlightDef{ .link = ident_group });
+        try registry.set("property", HighlightDef{ .link = ident_group });
+        try registry.set("field", HighlightDef{ .link = ident_group });
+        try registry.set("namespace", HighlightDef{ .link = ident_group });
     }
 
     /// Execute pending viewport command (H/M/L) or viewport adjustment (zz/zt/zb) if one exists
@@ -269,6 +434,83 @@ pub const EditorContext = struct {
         // CRITICAL: After processing all input, check one more time for pending viewport command
         // This handles the case where H/M/L was the LAST key pressed
         _ = self.executeViewportCommand();
+    }
+
+    /// Load file and detect filetype
+    pub fn loadFile(self: *EditorContext, path: []const u8) !void {
+        try self.buffer.loadFile(path);
+
+        // Detect filetype using loader
+        const first_line = self.buffer.getLine(0);
+        const filetype = self.ts_loader.detectFiletype(path, first_line);
+
+        if (filetype) |ft| {
+            self.buffer.filetype = ft;
+            self.logger.info("✅ Detected filetype: {s} for {s}", .{ ft, path }) catch {};
+
+            // Parse with tree-sitter
+            try self.parseBufferWithTreeSitter(ft);
+        } else {
+            self.buffer.filetype = null;
+            self.logger.info("❌ No filetype detected for {s}", .{path}) catch {};
+        }
+    }
+
+    /// Normalize language name from go-enry to tree-sitter
+    /// go-enry returns capitalized names ("JavaScript"), tree-sitter needs lowercase ("javascript")
+    fn normalizeLangName(lang: []const u8) []const u8 {
+        const mappings = std.StaticStringMap([]const u8).initComptime(.{
+            .{ "JavaScript", "javascript" },
+            .{ "Python", "python" },
+            .{ "Rust", "rust" },
+            .{ "Zig", "zig" },
+            .{ "Go", "go" },
+            .{ "C", "c" },
+            .{ "C++", "cpp" },
+            .{ "TypeScript", "typescript" },
+            .{ "Markdown", "markdown" },
+            .{ "JSON", "json" },
+            .{ "YAML", "yaml" },
+            .{ "TOML", "toml" },
+            .{ "HTML", "html" },
+            .{ "CSS", "css" },
+            .{ "Bash", "bash" },
+            .{ "Shell", "bash" },
+        });
+        return mappings.get(lang) orelse lang;
+    }
+
+    /// Parse buffer content with tree-sitter after filetype detection
+    fn parseBufferWithTreeSitter(self: *EditorContext, filetype: []const u8) !void {
+        const languages = @import("../../editor/treesitter/languages.zig");
+        const Syntax = @import("../../editor/treesitter/syntax.zig").Syntax;
+
+        // Normalize language name
+        const lang_name = normalizeLangName(filetype);
+        self.logger.info("🔍 Normalizing filetype '{s}' → '{s}'", .{ filetype, lang_name }) catch {};
+
+        // Get language from registry
+        const lang = languages.getLanguage(lang_name) orelse {
+            self.logger.info("❌ No tree-sitter parser for language: {s}", .{lang_name}) catch {};
+            return; // No tree-sitter support, syntax stays null
+        };
+
+        // Set parser language
+        try self.parser.setLanguage(lang);
+
+        // Parse buffer content
+        const source = self.buffer.content.items;
+        const tree = try self.parser.parseString(null, source);
+
+        // Clean up old syntax if it exists
+        if (self.syntax) |*old_syntax| {
+            old_syntax.deinit();
+        }
+
+        // Create new Syntax instance
+        self.syntax = try Syntax.init(self.allocator, tree, lang, lang_name);
+
+        self.logger.info("✅ Parsed {d} bytes of {s} with tree-sitter (syntax instance created)", .{ source.len, lang_name }) catch {};
     }
 
     /// Process a single input sequence

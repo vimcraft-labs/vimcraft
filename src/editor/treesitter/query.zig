@@ -135,7 +135,47 @@ pub const Query = struct {
         language_name: []const u8,
         language: *const c.TSLanguage,
     ) QueryError!Query {
-        // Build path: vendor/tree-sitter-{lang}/queries/highlights.scm
+        // SPECIAL CASE: TypeScript needs JavaScript base highlights
+        // TypeScript-specific highlights.scm only has 35 lines (types, interfaces)
+        // JavaScript highlights.scm has 204 lines (keywords, functions, strings, etc.)
+        if (std.mem.eql(u8, language_name, "typescript")) {
+            // Load JavaScript base highlights
+            const js_path = "vendor/tree-sitter-javascript/queries/highlights.scm";
+            const js_file = std.fs.cwd().openFile(js_path, .{}) catch {
+                return QueryError.FileNotFound;
+            };
+            defer js_file.close();
+
+            const js_source = js_file.readToEndAlloc(allocator, 1024 * 1024) catch {
+                return QueryError.OutOfMemory;
+            };
+            defer allocator.free(js_source);
+
+            // Load TypeScript-specific highlights
+            const ts_path = "vendor/tree-sitter-typescript/queries/highlights.scm";
+            const ts_file = std.fs.cwd().openFile(ts_path, .{}) catch {
+                return QueryError.FileNotFound;
+            };
+            defer ts_file.close();
+
+            const ts_source = ts_file.readToEndAlloc(allocator, 1024 * 1024) catch {
+                return QueryError.OutOfMemory;
+            };
+            defer allocator.free(ts_source);
+
+            // Combine both queries (JavaScript base + TypeScript specifics)
+            const combined_source = try std.fmt.allocPrint(
+                allocator,
+                "{s}\n; TypeScript-specific highlights\n{s}",
+                .{ js_source, ts_source },
+            );
+            defer allocator.free(combined_source);
+
+            // Compile combined query
+            return try init(allocator, language, combined_source);
+        }
+
+        // Standard case: Load single highlights.scm file
         const path = try std.fmt.allocPrint(
             allocator,
             "vendor/tree-sitter-{s}/queries/highlights.scm",

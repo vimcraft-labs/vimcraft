@@ -224,7 +224,6 @@ pub fn handleGetTerminalUpdates(ctx: HandlerContext) !protocol.ResponseResult {
 pub const ExtendedHandlerContext = struct {
     base: HandlerContext,
     editor_context: *@import("editor_context.zig").EditorContext, // For executeKeys access
-    highlight_config: *const @import("../../editor/config/highlights.zig").HighlightConfig,
 };
 
 /// Execute keys and capture render pipeline state DURING render (before swapBuffers)
@@ -245,7 +244,6 @@ pub fn handleExecuteKeysWithRenderTrace(
 ) !protocol.ResponseResult {
     const ctx = ext_ctx.base;
     const editor = ext_ctx.editor_context;
-    const highlight_config = ext_ctx.highlight_config;
 
     // STEP 1: Execute keys to update buffer state
     try editor.executeKeys(keys);
@@ -266,14 +264,21 @@ pub fn handleExecuteKeysWithRenderTrace(
     } else
         ListChars{};
 
+    // Get cursorline option (for current line highlighting)
+    const cursorline_enabled = if (editor.options_manager) |opts|
+        opts.getBoolean("cursorLine") orelse false
+    else
+        false;
+
     // Update layers from buffer state
     try layer_renderer.updateLayers(
         ctx.display,
         editor,
         editor.mode_manager.getModeString(),
-        highlight_config,
+        &editor.highlight_registry,
         &editor.visual_state,
         &editor.yank_highlight,
+        cursorline_enabled,
         list_enabled,
         &listchars,
     );

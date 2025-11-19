@@ -18,20 +18,17 @@ pub const Server = struct {
     config: ServerConfig,
     running: bool,
     editor: *EditorContext, // Reference to editor context (includes Display for visual debugging)
-    highlight_config: *const @import("../../editor/config/highlights.zig").HighlightConfig, // For rendering
 
     pub fn init(
         allocator: std.mem.Allocator,
         config: ServerConfig,
         editor: *EditorContext,
-        highlight_config: *const @import("../../editor/config/highlights.zig").HighlightConfig,
     ) Server {
         return .{
             .allocator = allocator,
             .config = config,
             .running = false,
             .editor = editor,
-            .highlight_config = highlight_config,
         };
     }
 
@@ -505,10 +502,16 @@ pub const Server = struct {
                 } else
                     ListChars{};
 
+                // Get cursorline option
+                const cursorline_enabled = if (self.editor.options_manager) |opts|
+                    opts.getBoolean("cursorLine") orelse false
+                else
+                    false;
+
                 try self.editor.display.renderHeadless(
                     self.editor,
                     self.editor.mode_manager.getModeString(),
-                    self.highlight_config,
+                    cursorline_enabled,
                     &self.editor.visual_state,
                     &self.editor.yank_highlight,
                     list_enabled,
@@ -649,10 +652,16 @@ pub const Server = struct {
                 } else
                     ListChars{};
 
+                // Get cursorline option
+                const cursorline_enabled = if (self.editor.options_manager) |opts|
+                    opts.getBoolean("cursorLine") orelse false
+                else
+                    false;
+
                 try self.editor.display.renderHeadless(
                     self.editor,
                     self.editor.mode_manager.getModeString(),
-                    self.highlight_config,
+                    cursorline_enabled,
                     &self.editor.visual_state,
                     &self.editor.yank_highlight,
                     list_enabled,
@@ -1080,7 +1089,6 @@ pub const Server = struct {
                         .display = &self.editor.display,
                     },
                     .editor_context = self.editor,
-                    .highlight_config = self.highlight_config,
                 };
 
                 return try handlers.handleExecuteKeysWithRenderTrace(ext_ctx, keys);
@@ -1088,7 +1096,7 @@ pub const Server = struct {
 
             .load_file => {
                 const path = cmd.args.load_file.path;
-                try self.editor.buffer.loadFile(path);
+                try self.editor.loadFile(path);
 
                 // Get list/listchars options for rendering
                 const list_enabled = if (self.editor.options_manager) |opts|
@@ -1102,11 +1110,17 @@ pub const Server = struct {
                 } else
                     ListChars{};
 
+                // Get cursorline option
+                const cursorline_enabled = if (self.editor.options_manager) |opts|
+                    opts.getBoolean("cursorLine") orelse false
+                else
+                    false;
+
                 // CRITICAL: Use headless render to update compositor WITHOUT stdout pollution
                 try self.editor.display.renderHeadless(
                     self.editor,
                     self.editor.mode_manager.getModeString(),
-                    self.highlight_config,
+                    cursorline_enabled,
                     &self.editor.visual_state,
                     &self.editor.yank_highlight,
                     list_enabled,

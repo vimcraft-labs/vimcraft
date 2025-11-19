@@ -671,11 +671,17 @@ pub const TerminalBackend = struct {
         } else
             ListChars{};
 
+        // Get cursorline option (for current line highlighting)
+        const cursorline_enabled = if (self.editor.options_manager) |opts|
+            opts.getBoolean("cursorLine") orelse false
+        else
+            false;
+
         // Render to display
         try self.display.render(
             self.editor,
             status,
-            self.highlight_config,
+            cursorline_enabled,
             &self.editor.visual_state,
             &self.editor.yank_highlight,
             cursor_override,

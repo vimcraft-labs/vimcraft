@@ -12,6 +12,7 @@ const SyntaxHighlighter = @import("../../../editor/treesitter/syntax_highlighter
 const Range = @import("../../../editor/treesitter/highlight.zig").Range;
 const Style = @import("../../../system/jsi/highlight_api.zig").Style;
 const Color = @import("../../../system/jsi/highlight_api.zig").Color;
+const HighlightRegistry = @import("../../../system/jsi/highlight_api.zig").HighlightRegistry;
 
 // ============================================================================
 // PHASE 2.5: Layer-based Rendering Pipeline
@@ -22,13 +23,15 @@ const Color = @import("../../../system/jsi/highlight_api.zig").Color;
 /// Update all layers from buffer state (Phase 2.5)
 /// This is the new rendering entry point that replaces updateGridFromBuffer
 /// Generic over Editor/EditorContext types (both have same fields)
+/// Uses unified HighlightRegistry (Neovim/Helix pattern - ONE system for all highlights)
 pub fn updateLayers(
     self: *Display,
     editor: anytype,
     _: []const u8, // status - not used yet, will be for status layer
-    config: *const highlights.HighlightConfig,
+    registry: *const HighlightRegistry,
     visual_state: *const VisualState,
     yank_highlight: *const YankHighlight,
+    cursorline_enabled: bool,
     list_enabled: bool,
     listchars: *const ListChars,
 ) !void {
@@ -43,11 +46,12 @@ pub fn updateLayers(
     // Note: virtual_text_layer is managed by plugins via JSI
 
     // Update each layer in logical order (not z-order)
-    try updateBaseLayer(self, editor, config, text_rows, list_enabled, listchars);
-    try updateGutterLayer(self, &editor.buffer, config, text_rows);
-    try updateSelectionLayer(self, &editor.buffer, visual_state, config, text_rows);
-    try updateYankLayer(self, &editor.buffer, yank_highlight, config, text_rows);
-    try updateCursorLayer(self, &editor.buffer, config, text_rows);
+    // All layers now use unified registry (Neovim/Helix pattern)
+    try updateBaseLayer(self, editor, registry, text_rows, list_enabled, listchars);
+    try updateGutterLayer(self, &editor.buffer, registry, text_rows);
+    try updateSelectionLayer(self, &editor.buffer, visual_state, registry, text_rows);
+    try updateYankLayer(self, &editor.buffer, yank_highlight, registry, text_rows);
+    try updateCursorLayer(self, &editor.buffer, registry, cursorline_enabled, text_rows);
 
     // Virtual text layer is updated by plugins, so skip it here
 }
@@ -61,21 +65,27 @@ const ListCharsColors = struct {
 };
 
 /// Compute listchars highlight colors once per frame (performance optimization)
-/// This avoids repeating the same optional unwraps on every line render
+/// This avoids repeating the same registry.get() calls on every line render
+/// Uses Neovim/Helix unified highlight system (ONE registry for all highlights)
 fn computeListCharsColors(
-    config: *const highlights.HighlightConfig,
+    registry: *const HighlightRegistry,
     normal_fg: ?highlights.Color,
     normal_bg: ?highlights.Color,
 ) ListCharsColors {
-    // Extract highlight group colors
-    const whitespace_fg = if (config.whitespace) |ws| ws.fg else null;
-    const whitespace_bg = if (config.whitespace) |ws| ws.bg else null;
-    const special_key_fg = if (config.special_key) |sk| sk.fg else null;
-    const special_key_bg = if (config.special_key) |sk| sk.bg else null;
-    const non_text_fg = if (config.non_text) |nt| nt.fg else null;
-    const non_text_bg = if (config.non_text) |nt| nt.bg else null;
+    // Get highlights from unified registry (Neovim/Helix pattern)
+    const whitespace_style = registry.get("Whitespace");
+    const special_key_style = registry.get("SpecialKey");
+    const non_text_style = registry.get("NonText");
 
-    // Compute fallback chains once
+    // Extract colors (convert from highlight_api.Color to highlights.Color)
+    const whitespace_fg = if (whitespace_style.fg) |c| convertColor(c) else null;
+    const whitespace_bg = if (whitespace_style.bg) |c| convertColor(c) else null;
+    const special_key_fg = if (special_key_style.fg) |c| convertColor(c) else null;
+    const special_key_bg = if (special_key_style.bg) |c| convertColor(c) else null;
+    const non_text_fg = if (non_text_style.fg) |c| convertColor(c) else null;
+    const non_text_bg = if (non_text_style.bg) |c| convertColor(c) else null;
+
+    // Compute fallback chains once (Neovim-compatible)
     return .{
         // Whitespace colors: Whitespace → SpecialKey → NonText → Normal
         .ws_fg = whitespace_fg orelse special_key_fg orelse non_text_fg orelse normal_fg,
@@ -92,7 +102,7 @@ fn computeListCharsColors(
 fn updateBaseLayer(
     self: *Display,
     editor: anytype,
-    config: *const highlights.HighlightConfig,
+    registry: *const HighlightRegistry,
     text_rows: usize,
     list_enabled: bool,
     listchars: *const ListChars,
@@ -100,17 +110,19 @@ fn updateBaseLayer(
     const buffer = &editor.buffer;
     const gutter_width = self.gutter_manager.getTotalWidth();
 
-    const fg_color = if (config.normal) |n| n.fg else null;
-    const bg_color = if (config.normal) |n| n.bg else null;
+    // Get Normal highlight from unified registry (Neovim/Helix pattern)
+    const normal_style = registry.get("Normal");
+    const fg_color = if (normal_style.fg) |c| convertColor(c) else null;
+    const bg_color = if (normal_style.bg) |c| convertColor(c) else null;
 
     // Pre-compute listchars colors once per frame (optimization)
     const lc_colors = if (list_enabled)
-        computeListCharsColors(config, fg_color, bg_color)
+        computeListCharsColors(registry, fg_color, bg_color)
     else
         undefined; // Won't be used if list_enabled = false
 
     // Create syntax highlighter if tree-sitter syntax available
-    // Only Editor has .syntax field; EditorContext doesn't
+    // Both Editor and EditorContext have .syntax field
     var syntax_highlighter: ?SyntaxHighlighter = null;
     if (@hasField(@TypeOf(editor.*), "syntax")) {
         if (editor.syntax) |*syntax| {
@@ -148,9 +160,9 @@ fn updateBaseLayer(
 
             // Render text to base layer
             // Priority: Syntax highlighting > listchars > plain text
-            const end_col = if (syntax_highlighter) |*sh|
-                try renderWithSyntaxHighlight(self, sh, row, gutter_width, remaining, text_byte_offset, list_enabled, listchars, lc_colors, fg_color, bg_color)
-            else if (list_enabled)
+            const end_col = if (syntax_highlighter) |*sh| blk: {
+                break :blk try renderWithSyntaxHighlight(self, sh, row, gutter_width, remaining, text_byte_offset, list_enabled, listchars, lc_colors, fg_color, bg_color);
+            } else if (list_enabled)
                 try renderWithListChars(self, row, gutter_width, remaining, listchars, lc_colors, fg_color, bg_color)
             else
                 self.base_layer.grid.setString(row, gutter_width, remaining, fg_color, bg_color);
@@ -177,7 +189,7 @@ fn updateBaseLayer(
 fn updateGutterLayer(
     self: *Display,
     buffer: *const Buffer,
-    config: *const highlights.HighlightConfig,
+    registry: *const HighlightRegistry,
     text_rows: usize,
 ) !void {
     const gutter_width = self.gutter_manager.getTotalWidth();
@@ -196,17 +208,15 @@ fn updateGutterLayer(
         );
         const gutter_str = gutter_buf[0..gutter_str_len];
 
-        // Determine colors
+        // Get line number highlights from unified registry
         const is_cursor_line = (line_num == buffer.cursor.row);
-        const line_nr_hl = if (is_cursor_line and config.cursorline_nr != null)
-            config.cursorline_nr.?
-        else if (config.line_nr != null)
-            config.line_nr.?
+        const line_nr_style = if (is_cursor_line)
+            registry.get("CursorLineNr")
         else
-            null;
+            registry.get("LineNr");
 
-        const gutter_fg = if (line_nr_hl) |hl| hl.fg else null;
-        const gutter_bg = if (line_nr_hl) |hl| hl.bg else null;
+        const gutter_fg = if (line_nr_style.fg) |c| convertColor(c) else null;
+        const gutter_bg = if (line_nr_style.bg) |c| convertColor(c) else null;
 
         // Render gutter characters
         var gutter_col: usize = 0;
@@ -244,7 +254,7 @@ fn updateSelectionLayer(
     self: *Display,
     buffer: *const Buffer,
     visual_state: *const VisualState,
-    config: *const highlights.HighlightConfig,
+    registry: *const HighlightRegistry,
     text_rows: usize,
 ) !void {
     if (!visual_state.active) return;
@@ -255,8 +265,10 @@ fn updateSelectionLayer(
     };
     const visual_range = visual_state.getRange(cursor_pos);
 
-    const visual_bg = if (config.visual) |v|
-        v.bg
+    // Get Visual highlight from unified registry
+    const visual_style = registry.get("Visual");
+    const visual_bg = if (visual_style.bg) |c|
+        convertColor(c)
     else
         highlights.Color{ .r = 80, .g = 80, .b = 80 };
 
@@ -324,13 +336,15 @@ fn updateYankLayer(
     self: *Display,
     buffer: *const Buffer,
     yank_highlight: *const YankHighlight,
-    config: *const highlights.HighlightConfig,
+    registry: *const HighlightRegistry,
     text_rows: usize,
 ) !void {
     if (!yank_highlight.active or !yank_highlight.isVisible()) return;
 
-    const yank_bg = if (config.yank_flash) |y|
-        y.bg
+    // Get YankFlash highlight from unified registry
+    const yank_style = registry.get("YankFlash");
+    const yank_bg = if (yank_style.bg) |c|
+        convertColor(c)
     else
         highlights.Color{ .r = 100, .g = 100, .b = 50 };
 
@@ -451,12 +465,21 @@ fn renderWithSyntaxHighlight(
     defer highlight_map.deinit();
 
     while (iter.next()) |styled| {
-        // Convert absolute byte offset to text-relative offset
-        if (styled.range.start_byte >= text_byte_offset and
-            styled.range.start_byte < text_byte_offset + text.len)
-        {
-            const rel_offset = styled.range.start_byte - text_byte_offset;
-            try highlight_map.put(rel_offset, styled.style);
+        // Convert absolute byte offsets to text-relative offsets
+        const range_start = if (styled.range.start_byte >= text_byte_offset)
+            styled.range.start_byte - text_byte_offset
+        else
+            0;
+
+        const range_end = if (styled.range.end_byte >= text_byte_offset)
+            @min(styled.range.end_byte - text_byte_offset, text.len)
+        else
+            0;
+
+        // Apply style to ALL bytes in the range, not just the first byte
+        var byte_offset = range_start;
+        while (byte_offset < range_end) : (byte_offset += 1) {
+            try highlight_map.put(byte_offset, styled.style);
         }
     }
 
@@ -819,16 +842,22 @@ fn renderWithListChars(
 fn updateCursorLayer(
     self: *Display,
     buffer: *const Buffer,
-    config: *const highlights.HighlightConfig,
+    registry: *const HighlightRegistry,
+    cursorline_enabled: bool,
     text_rows: usize,
 ) !void {
-    if (!config.cursorline_enabled or config.cursorline == null) return;
+    if (!cursorline_enabled) return;
 
     const cursor_line = buffer.cursor.row;
     if (cursor_line < self.viewport_top or cursor_line >= self.viewport_top + text_rows) return;
 
     const screen_row = cursor_line - self.viewport_top;
-    const cursorline_bg = config.cursorline.?.bg;
+
+    // Get CursorLine highlight from unified registry
+    const cursorline_style = registry.get("CursorLine");
+    if (cursorline_style.bg == null) return; // No cursorline if bg not set
+
+    const cursorline_bg = convertColor(cursorline_style.bg.?);
 
     // PHASE 6 FIX: Render cursorline background WITHOUT characters
     // We use char=0 (null) which the blend function will treat as "no character"

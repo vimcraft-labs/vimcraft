@@ -112,20 +112,23 @@ pub const Syntax = struct {
                 self.allocator,
                 self.language_name,
                 self.language,
-            ) catch {
+            ) catch |err| {
+                std.debug.print("[SYNTAX] Query load FAILED for {s}: {any}\n", .{ self.language_name, err });
                 return SyntaxError.QueryLoadFailed;
             };
         }
 
         // Create iterator (borrows from self.query)
-        return HighlightIterator.init(
+        const iter = HighlightIterator.init(
             self.allocator,
             &self.query.?,
             self.tree,
             range,
-        ) catch {
+        ) catch |err| {
+            std.debug.print("[SYNTAX] Iterator creation FAILED: {any}\n", .{err});
             return SyntaxError.IteratorCreationFailed;
         };
+        return iter;
     }
 
     /// Update tree for incremental parsing

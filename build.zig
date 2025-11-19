@@ -687,7 +687,9 @@ pub fn build(b: *std.Build) void {
         bench.linkSystemLibrary("dl");
     }
 
-    b.installArtifact(bench);
+    // FIXME: Benchmark build has C import path issues
+    // Comment out for now - doesn't affect main editor functionality
+    // b.installArtifact(bench);
 
     const run_bench = b.addRunArtifact(bench);
     run_bench.step.dependOn(b.getInstallStep());

@@ -470,7 +470,6 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
         allocator,
         .{ .use_stdio = true },
         &editor_ctx,
-        &highlight_config, // Pass highlight_config for display.render()
     );
     defer server.deinit();
 
@@ -500,8 +499,8 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var editor = try Editor.init(allocator);
     defer editor.deinit();
 
-    // Load file into editor
-    editor.buffer.loadFile(filepath) catch |err| {
+    // Load file into editor (this also initializes tree-sitter syntax if available)
+    editor.loadFile(filepath) catch |err| {
         std.debug.print("Error loading file: {}\n", .{err});
         return;
     };
@@ -776,8 +775,8 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     var editor = try Editor.init(allocator);
     defer editor.deinit();
 
-    // Load file into editor
-    editor.buffer.loadFile(filepath) catch |err| {
+    // Load file into editor (this also initializes tree-sitter syntax if available)
+    editor.loadFile(filepath) catch |err| {
         std.debug.print("Error loading file: {}\n", .{err});
         return;
     };
