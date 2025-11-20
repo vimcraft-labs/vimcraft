@@ -181,3 +181,52 @@ test "parseAnsiCursor: finds cursor in mixed output" {
     try std.testing.expectEqual(@as(usize, 2), pos.?.row);
     try std.testing.expectEqual(@as(usize, 3), pos.?.col);
 }
+
+/// Cursor position (row, col)
+pub const CursorPos = struct {
+    row: usize,
+    col: usize,
+};
+
+/// Find ALL cursor position codes in output
+/// Returns array of cursor positions in order they appear
+pub fn findAllCursorPositions(allocator: std.mem.Allocator, input: []const u8) ![]CursorPos {
+    var positions: std.ArrayList(CursorPos) = .empty;
+    errdefer positions.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < input.len) {
+        if (input[i] == 0x1b and i + 1 < input.len and input[i + 1] == '[') {
+            // Found ESC[, try to parse row;colH
+            i += 2;
+            const start = i;
+
+            // Parse row
+            var row: usize = 0;
+            while (i < input.len and input[i] >= '0' and input[i] <= '9') : (i += 1) {
+                row = row * 10 + (input[i] - '0');
+            }
+
+            if (i >= input.len or input[i] != ';') {
+                i = start;
+                continue;
+            }
+            i += 1; // Skip ';'
+
+            // Parse col
+            var col: usize = 0;
+            while (i < input.len and input[i] >= '0' and input[i] <= '9') : (i += 1) {
+                col = col * 10 + (input[i] - '0');
+            }
+
+            if (i < input.len and (input[i] == 'H' or input[i] == 'f')) {
+                try positions.append(allocator, .{ .row = row, .col = col });
+                i += 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    return positions.toOwnedSlice(allocator);
+}

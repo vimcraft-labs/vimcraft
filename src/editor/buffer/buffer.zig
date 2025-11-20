@@ -1,4 +1,5 @@
 const std = @import("std");
+const Rope = @import("rope.zig").Rope;
 
 /// Cursor position in the buffer
 pub const Cursor = struct {
@@ -50,12 +51,11 @@ const Transaction = struct {
     }
 };
 
-/// Simple text buffer implementation using ArrayList
-/// This is a minimal implementation - will be replaced with rope later for performance
+/// Text buffer implementation using Rope data structure for O(log n) edits
+/// Rope provides efficient insert/delete operations for large files
 pub const Buffer = struct {
     allocator: std.mem.Allocator,
-    content: std.ArrayList(u8),
-    line_starts: std.ArrayList(usize), // Byte offsets where each line starts
+    content: Rope,
     cursor: Cursor,
     filepath: ?[]const u8,
     filetype: ?[]const u8 = null, // Detected filetype (e.g., "rust", "javascript")
@@ -75,8 +75,7 @@ pub const Buffer = struct {
     pub fn init(allocator: std.mem.Allocator) Buffer {
         return .{
             .allocator = allocator,
-            .content = .empty,
-            .line_starts = .empty,
+            .content = Rope.init(allocator),
             .cursor = Cursor.init(),
             .filepath = null,
             .filetype = null,
@@ -87,8 +86,7 @@ pub const Buffer = struct {
     }
 
     pub fn deinit(self: *Buffer) void {
-        self.content.deinit(self.allocator);
-        self.line_starts.deinit(self.allocator);
+        self.content.deinit();
         if (self.filepath) |path| {
             self.allocator.free(path);
         }
@@ -123,62 +121,68 @@ pub const Buffer = struct {
         const file_contents = try file.readToEndAlloc(self.allocator, max_size);
         defer self.allocator.free(file_contents);
 
-        // Copy to our ArrayList
-        try self.content.appendSlice(self.allocator, file_contents);
+        // Load into Rope (replaces ArrayList appendSlice + buildLineIndex)
+        self.content.deinit(); // Clear existing content
+        self.content = try Rope.fromString(self.allocator, file_contents);
 
         // Store filepath
         self.filepath = try self.allocator.dupe(u8, path);
 
-        // Build line index
-        try self.buildLineIndex();
-
         self.modified = false;
     }
 
-    /// Build index of line start positions
-    pub fn buildLineIndex(self: *Buffer) !void {
-        self.line_starts.clearRetainingCapacity();
-
-        // First line starts at 0
-        try self.line_starts.append(self.allocator, 0);
-
-        // Find all newline positions
-        for (self.content.items, 0..) |byte, i| {
-            if (byte == '\n' and i + 1 < self.content.items.len) {
-                try self.line_starts.append(self.allocator, i + 1);
-            }
-        }
-    }
+    // NOTE: buildLineIndex() removed - Rope tracks line positions internally
 
     /// Get total number of lines
+    /// NOTE: Adjusts for editor semantics where trailing newline doesn't create empty line
+    /// e.g., "Hello\nWorld\n" has 2 lines, not 3, empty buffer has 0 lines
     pub fn lineCount(self: *const Buffer) usize {
-        if (self.line_starts.items.len == 0) return 0;
-        return self.line_starts.items.len;
+        const len = self.content.len();
+        if (len == 0) return 0; // Empty buffer has 0 lines
+
+        const rope_lines = self.content.lineCount();
+
+        // Check if buffer ends with newline (creating empty last line)
+        const last_byte = self.content.byteAt(len - 1);
+        if (last_byte != null and last_byte.? == '\n') {
+            // Trailing newline - don't count empty last line
+            return rope_lines - 1;
+        }
+
+        return rope_lines;
     }
 
     /// Get line by index (0-based)
-    /// Returns slice pointing into buffer content (includes newline if present)
+    /// Returns OWNED slice (must be freed by caller) including newline if present
+    /// Returns null if line_num is out of bounds
     pub fn getLine(self: *const Buffer, line_num: usize) ?[]const u8 {
         if (line_num >= self.lineCount()) return null;
 
-        const start = self.line_starts.items[line_num];
-        const end = if (line_num + 1 < self.line_starts.items.len)
-            self.line_starts.items[line_num + 1] // Include up to start of next line
+        const start = self.content.byteOfLine(line_num);
+        const end = if (line_num + 1 < self.lineCount())
+            self.content.byteOfLine(line_num + 1)
         else
-            self.content.items.len;
+            self.content.len();
 
-        return self.content.items[start..end];
+        // Slice the rope (creates new rope, then convert to string)
+        var line_rope = self.content.slice(start, end) catch return null;
+        defer line_rope.deinit();
+
+        // Convert to owned string (caller must free with Rope's allocator)
+        return line_rope.toString() catch null;
     }
 
     /// Get line length (in bytes, includes newline if present)
     pub fn getLineLength(self: *const Buffer, line_num: usize) usize {
         const line = self.getLine(line_num) orelse return 0;
+        defer self.allocator.free(line); // Free owned memory
         return line.len;
     }
 
     /// Get visual line length (excludes newline)
     pub fn getLineLengthVisual(self: *const Buffer, line_num: usize) usize {
         const line = self.getLine(line_num) orelse return 0;
+        defer self.allocator.free(line); // Free owned memory
         // Exclude newline for visual length
         return if (line.len > 0 and line[line.len - 1] == '\n')
             line.len - 1
@@ -210,17 +214,17 @@ pub const Buffer = struct {
 
     /// Get byte offset of cursor position
     pub fn getCursorOffset(self: *const Buffer) usize {
-        if (self.cursor.row >= self.lineCount()) return self.content.items.len;
+        if (self.cursor.row >= self.lineCount()) return self.content.len();
 
-        const line_start = self.line_starts.items[self.cursor.row];
+        const line_start = self.content.byteOfLine(self.cursor.row);
         return line_start + self.cursor.col;
     }
 
     /// Get character at cursor (returns null if at end of line/file)
     pub fn getCharAtCursor(self: *const Buffer) ?u8 {
         const offset = self.getCursorOffset();
-        if (offset >= self.content.items.len) return null;
-        return self.content.items[offset];
+        if (offset >= self.content.len()) return null;
+        return self.content.byteAt(offset);
     }
 
     /// Check if cursor is at end of line
@@ -236,7 +240,7 @@ pub const Buffer = struct {
 
     /// Check if buffer is empty
     pub fn isEmpty(self: *const Buffer) bool {
-        return self.content.items.len == 0;
+        return self.content.len() == 0;
     }
 
     // ===== Text Modification Functions =====
@@ -259,11 +263,9 @@ pub const Buffer = struct {
     /// Commit the active transaction to undo stack
     pub fn commitTransaction(self: *Buffer) !void {
         if (self.active_transaction) |*trans| {
-            // Rebuild line index now that transaction is complete
-            // (deferred during insertChar for performance)
-            try self.buildLineIndex();
+            // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
-            // CRITICAL: After rebuilding line_starts, cursor position might be invalid
+            // CRITICAL: Cursor position might be invalid
             // During transaction, cursor.row is incremented for '\n', but line_starts
             // wasn't rebuilt, so cursor.row might point past the end of actual lines.
             // Clamp cursor to valid range after rebuild.
@@ -306,9 +308,7 @@ pub const Buffer = struct {
     /// Used when manually creating a combined undo entry
     pub fn discardTransaction(self: *Buffer) void {
         if (self.active_transaction) |*trans| {
-            // Rebuild line index now that transaction is complete
-            // (deferred during insertChar for performance)
-            self.buildLineIndex() catch {}; // Best effort - ignore errors
+            // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
             trans.deinit();
             self.active_transaction = null;
@@ -330,24 +330,18 @@ pub const Buffer = struct {
         // Invalidate external ArrayBuffers before modification
         self.incrementVersion();
 
-        // During transactions, use tracked offset (line_starts may be stale)
+        // During transactions, use tracked offset
         // Otherwise, calculate from cursor position
         const offset = if (self.active_transaction) |trans|
             trans.current_offset
         else
             self.getCursorOffset();
 
-        // Insert character
-        try self.content.insert(self.allocator, offset, char);
+        // Insert character using Rope (automatic line tracking - O(log n)!)
+        const char_str = &[_]u8{char};
+        try self.content.insert(offset, char_str);
 
-        // Rebuild line index only when necessary:
-        // - If we're NOT in a transaction (single char insertions need immediate index update)
-        // During transactions (paste), defer ALL rebuilding until transaction completes
-        // CRITICAL: Do NOT rebuild during transaction even for newlines!
-        // Rebuilding would invalidate current_offset tracking and cause freeze/corruption
-        if (self.active_transaction == null) {
-            try self.buildLineIndex();
-        }
+        // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
         // Update cursor position
         if (char == '\n') {
@@ -390,27 +384,21 @@ pub const Buffer = struct {
     /// Delete character at cursor (like 'x' in Vim)
     pub fn deleteChar(self: *Buffer) !void {
         const offset = self.getCursorOffset();
-        if (offset >= self.content.items.len) return; // Nothing to delete
+        if (offset >= self.content.len()) return; // Nothing to delete
 
         // Invalidate external ArrayBuffers before modification
         self.incrementVersion();
 
         const cursor_before = self.cursor;
-        const deleted_char = self.content.items[offset];
+        const deleted_char = self.content.byteAt(offset) orelse return; // Get char before deleting
 
-        // Delete character
-        _ = self.content.orderedRemove(offset);
+        // Delete character using Rope (automatic line tracking!)
+        try self.content.delete(offset, offset + 1);
 
-        // Rebuild line index if newline was deleted
-        if (deleted_char == '\n') {
-            try self.buildLineIndex();
-            // Cursor stays at same position
-        } else {
-            // Clamp cursor to line length
-            const line_len = self.getLineLength(self.cursor.row);
-            if (line_len > 0 and self.cursor.col >= line_len) {
-                self.cursor.col = line_len - 1;
-            }
+        // Clamp cursor to line length
+        const line_len = self.getLineLength(self.cursor.row);
+        if (line_len > 0 and self.cursor.col >= line_len) {
+            self.cursor.col = line_len - 1;
         }
 
         // Record change for undo
@@ -445,13 +433,10 @@ pub const Buffer = struct {
         }
 
         const offset = self.getCursorOffset();
-        const deleted_char = self.content.items[offset];
+        const deleted_char = self.content.byteAt(offset) orelse return;
 
-        // Delete character
-        _ = self.content.orderedRemove(offset);
-
-        // Rebuild line index after deletion (offsets have shifted)
-        try self.buildLineIndex();
+        // Delete character using Rope (automatic line tracking!)
+        try self.content.delete(offset, offset + 1);
 
         // Record change for undo
         const change = Change{
@@ -475,22 +460,18 @@ pub const Buffer = struct {
 
         // Reverse the change
         if (change.inserted_text.len > 0) {
-            // Remove inserted text
-            for (0..change.inserted_text.len) |_| {
-                _ = self.content.orderedRemove(change.offset);
-            }
+            // Remove inserted text using Rope
+            const end_offset = change.offset + change.inserted_text.len;
+            try self.content.delete(change.offset, end_offset);
         }
 
         if (change.deleted_text.len > 0) {
-            // Re-insert deleted text
-            try self.content.insertSlice(self.allocator, change.offset, change.deleted_text);
+            // Re-insert deleted text using Rope
+            try self.content.insert(change.offset, change.deleted_text);
         }
 
         // Restore cursor position
         self.cursor = change.cursor_before;
-
-        // Rebuild line index
-        try self.buildLineIndex();
 
         // Move change to redo stack
         try self.redo_stack.append(self.allocator, change);
@@ -505,22 +486,18 @@ pub const Buffer = struct {
 
         // Reapply the change
         if (change.deleted_text.len > 0) {
-            // Remove text again
-            for (0..change.deleted_text.len) |_| {
-                _ = self.content.orderedRemove(change.offset);
-            }
+            // Remove text again using Rope
+            const end_offset = change.offset + change.deleted_text.len;
+            try self.content.delete(change.offset, end_offset);
         }
 
         if (change.inserted_text.len > 0) {
-            // Re-insert text
-            try self.content.insertSlice(self.allocator, change.offset, change.inserted_text);
+            // Re-insert text using Rope
+            try self.content.insert(change.offset, change.inserted_text);
         }
 
         // Restore cursor position
         self.cursor = change.cursor_after;
-
-        // Rebuild line index
-        try self.buildLineIndex();
 
         // Move change back to undo stack
         try self.undo_stack.append(self.allocator, change);
@@ -536,25 +513,20 @@ pub const Buffer = struct {
         const cursor_before = self.cursor;
         const line_num = self.cursor.row;
 
-        // Get line start and end positions
-        const line_start = self.line_starts.items[line_num];
-        const line_end = if (line_num + 1 < self.line_starts.items.len)
-            self.line_starts.items[line_num + 1]
+        // Get line start and end positions using Rope
+        const line_start = self.content.byteOfLine(line_num);
+        const line_end = if (line_num + 1 < self.lineCount())
+            self.content.byteOfLine(line_num + 1)
         else
-            self.content.items.len;
+            self.content.len();
 
-        // Save deleted text
-        const deleted_text = try self.allocator.dupe(u8, self.content.items[line_start..line_end]);
+        // Save deleted text (need to extract from Rope)
+        var deleted_rope = try self.content.slice(line_start, line_end);
+        defer deleted_rope.deinit();
+        const deleted_text = try deleted_rope.toString();
 
-        // Delete the line (including newline)
-        var i: usize = line_end;
-        while (i > line_start) {
-            i -= 1;
-            _ = self.content.orderedRemove(line_start);
-        }
-
-        // Rebuild line index
-        try self.buildLineIndex();
+        // Delete the line using Rope (automatic line tracking!)
+        try self.content.delete(line_start, line_end);
 
         // Move cursor to start of current line (or previous line if we deleted last line)
         if (self.lineCount() > 0) {
@@ -585,6 +557,7 @@ pub const Buffer = struct {
     /// Delete word forward (dw)
     pub fn deleteWord(self: *Buffer) !void {
         const line = self.getLine(self.cursor.row) orelse return;
+        defer self.allocator.free(line); // Free owned memory from getLine()
 
         // Invalidate external ArrayBuffers before modification
         self.incrementVersion();
@@ -610,26 +583,19 @@ pub const Buffer = struct {
             col = line_len;
         }
 
-        const end_offset = self.line_starts.items[self.cursor.row] + col;
+        const line_start = self.content.byteOfLine(self.cursor.row);
+        const end_offset = line_start + col;
         const delete_count = end_offset - start_offset;
 
         if (delete_count == 0) return;
 
-        // Save deleted text
-        const deleted_text = try self.allocator.dupe(u8, self.content.items[start_offset..end_offset]);
+        // Save deleted text (extract from Rope)
+        var deleted_rope = try self.content.slice(start_offset, end_offset);
+        defer deleted_rope.deinit();
+        const deleted_text = try deleted_rope.toString();
 
-        // Delete characters
-        for (0..delete_count) |_| {
-            _ = self.content.orderedRemove(start_offset);
-        }
-
-        // Rebuild line index if needed
-        for (deleted_text) |c| {
-            if (c == '\n') {
-                try self.buildLineIndex();
-                break;
-            }
-        }
+        // Delete characters using Rope (automatic line tracking!)
+        try self.content.delete(start_offset, end_offset);
 
         // Cursor stays at same position
         // Clamp to line length
@@ -666,7 +632,11 @@ pub const Buffer = struct {
         const file = try std.fs.cwd().createFile(path, .{});
         defer file.close();
 
-        try file.writeAll(self.content.items);
+        // Convert Rope to string and write to file
+        const content_str = try self.content.toString();
+        defer self.allocator.free(content_str); // Free with same allocator Rope used
+
+        try file.writeAll(content_str);
         self.modified = false;
     }
 };
@@ -700,9 +670,11 @@ test "Buffer: load simple content" {
     try std.testing.expectEqual(@as(usize, 2), buffer.lineCount());
 
     const line1 = buffer.getLine(0).?;
+    defer allocator.free(line1); // Free owned memory
     try std.testing.expectEqualStrings("Hello\n", line1);
 
     const line2 = buffer.getLine(1).?;
+    defer allocator.free(line2); // Free owned memory
     try std.testing.expectEqualStrings("World\n", line2);
 }
 
@@ -747,9 +719,7 @@ test "Buffer: paste with tab during transaction" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    // Start with empty buffer
-    try buffer.content.appendSlice(allocator, "");
-    try buffer.buildLineIndex();
+    // Buffer starts empty (Rope.init already called in Buffer.init)
 
     // Simulate what bracketed paste does:
     // 1. Start transaction
@@ -764,8 +734,10 @@ test "Buffer: paste with tab during transaction" {
     // 3. Commit transaction
     try buffer.commitTransaction();
 
-    // Verify final content
-    try std.testing.expectEqualStrings("hello\tworld\n", buffer.content.items);
+    // Verify final content using Rope.toString()
+    const content_str = try buffer.content.toString();
+    defer allocator.free(content_str); // Free with same allocator Rope used
+    try std.testing.expectEqualStrings("hello\tworld\n", content_str);
 
     // Verify line count (terminal \n doesn't create new line in line_starts)
     try std.testing.expectEqual(@as(usize, 1), buffer.lineCount());
@@ -779,5 +751,6 @@ test "Buffer: paste with tab during transaction" {
 
     // Verify line content
     const line1 = buffer.getLine(0).?;
+    defer allocator.free(line1); // Free owned memory
     try std.testing.expectEqualStrings("hello\tworld\n", line1);
 }

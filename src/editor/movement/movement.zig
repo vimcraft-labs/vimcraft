@@ -5,13 +5,15 @@ const grapheme = @import("ghostty_grapheme");
 /// Movement primitives for cursor navigation
 /// Implements Vim-style movement commands
 /// Move left (h)
-pub fn moveLeft(buffer: *Buffer) void {
+/// Returns true if cursor moved, false if already at boundary
+pub fn moveLeft(buffer: *Buffer) bool {
     if (buffer.cursor.col > 0) {
         const line = buffer.getLine(buffer.cursor.row) orelse {
             buffer.cursor.col -= 1;
             buffer.cursor.goal_column = buffer.cursor.col;
-            return;
+            return true;
         };
+        defer buffer.allocator.free(line);
 
         // Find the start of the current grapheme cluster by walking backwards
         var pos = buffer.cursor.col;
@@ -51,12 +53,16 @@ pub fn moveLeft(buffer: *Buffer) void {
 
         buffer.cursor.col = cluster_start;
         buffer.cursor.goal_column = buffer.cursor.col;
+        return true;
     }
+    return false; // Already at left boundary
 }
 
 /// Move right (l)
-pub fn moveRight(buffer: *Buffer) void {
-    const line = buffer.getLine(buffer.cursor.row) orelse return;
+/// Returns true if cursor moved, false if already at boundary
+pub fn moveRight(buffer: *Buffer) bool {
+    const line = buffer.getLine(buffer.cursor.row) orelse return false;
+    defer buffer.allocator.free(line);
     const line_len = buffer.getLineLength(buffer.cursor.row);
 
     if (line_len > 0 and buffer.cursor.col < line_len - 1) {
@@ -90,11 +96,14 @@ pub fn moveRight(buffer: *Buffer) void {
 
         buffer.cursor.col = @min(pos, line_len - 1);
         buffer.cursor.goal_column = buffer.cursor.col;
+        return true;
     }
+    return false; // Already at right boundary
 }
 
 /// Move up (k)
-pub fn moveUp(buffer: *Buffer) void {
+/// Returns true if cursor moved, false if already at boundary
+pub fn moveUp(buffer: *Buffer) bool {
     if (buffer.cursor.row > 0) {
         // Set goal column to current column if not already set
         if (buffer.cursor.goal_column == null) {
@@ -118,11 +127,14 @@ pub fn moveUp(buffer: *Buffer) void {
             // Line is shorter, move to end but keep goal column
             buffer.cursor.col = visual_len;
         }
+        return true;
     }
+    return false; // Already at top
 }
 
 /// Move down (j)
-pub fn moveDown(buffer: *Buffer) void {
+/// Returns true if cursor moved, false if already at boundary
+pub fn moveDown(buffer: *Buffer) bool {
     if (buffer.cursor.row + 1 < buffer.lineCount()) {
         // Set goal column to current column if not already set
         if (buffer.cursor.goal_column == null) {
@@ -146,7 +158,9 @@ pub fn moveDown(buffer: *Buffer) void {
             // Line is shorter, move to end but keep goal column
             buffer.cursor.col = visual_len;
         }
+        return true;
     }
+    return false; // Already at bottom
 }
 
 /// Move to start of line (0)
@@ -162,6 +176,7 @@ pub fn moveToLineEnd(buffer: *Buffer) void {
         buffer.cursor.goal_column = buffer.cursor.col;
         return;
     };
+    defer buffer.allocator.free(line);
 
     // Get visual length (exclude newline)
     const visual_len = if (line.len > 0 and line[line.len - 1] == '\n')
@@ -180,6 +195,7 @@ pub fn moveToLineEnd(buffer: *Buffer) void {
 /// Move to first non-blank character of line (^)
 pub fn moveToFirstNonBlank(buffer: *Buffer) void {
     const line = buffer.getLine(buffer.cursor.row) orelse return;
+    defer buffer.allocator.free(line);
 
     for (line, 0..) |char, i| {
         if (char != ' ' and char != '\t') {
@@ -220,6 +236,7 @@ fn isWordChar(c: u8) bool {
 /// Move to next word start (w)
 pub fn moveWordForward(buffer: *Buffer) void {
     const line = buffer.getLine(buffer.cursor.row) orelse return;
+    defer buffer.allocator.free(line);
 
     var col = buffer.cursor.col;
 
@@ -265,6 +282,7 @@ pub fn moveWordBackward(buffer: *Buffer) void {
     }
 
     const line = buffer.getLine(buffer.cursor.row) orelse return;
+    defer buffer.allocator.free(line);
 
     // Handle case where we're already at column 0 after line wrap
     if (buffer.cursor.col == 0) {
@@ -299,6 +317,7 @@ pub fn moveWordBackward(buffer: *Buffer) void {
 /// Move to word end (e)
 pub fn moveWordEnd(buffer: *Buffer) void {
     const line = buffer.getLine(buffer.cursor.row) orelse return;
+    defer buffer.allocator.free(line);
 
     var col = buffer.cursor.col;
 
@@ -465,22 +484,22 @@ test "Movement: basic hjkl" {
     try buffer.loadFile(tmp_path);
 
     // Test right movement
-    moveRight(&buffer);
+    try std.testing.expect(moveRight(&buffer));
     try std.testing.expectEqual(@as(usize, 1), buffer.cursor.col);
 
-    moveRight(&buffer);
+    try std.testing.expect(moveRight(&buffer));
     try std.testing.expectEqual(@as(usize, 2), buffer.cursor.col);
 
     // Test down movement
-    moveDown(&buffer);
+    try std.testing.expect(moveDown(&buffer));
     try std.testing.expectEqual(@as(usize, 1), buffer.cursor.row);
 
     // Test left movement
-    moveLeft(&buffer);
+    try std.testing.expect(moveLeft(&buffer));
     try std.testing.expectEqual(@as(usize, 1), buffer.cursor.col);
 
     // Test up movement
-    moveUp(&buffer);
+    try std.testing.expect(moveUp(&buffer));
     try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
 }
 

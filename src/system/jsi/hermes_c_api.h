@@ -104,6 +104,46 @@ bool hermes_has_exception(OVHermesRuntime* runtime);
  */
 const char* hermes_get_exception_message(OVHermesRuntime* runtime);
 
+/**
+ * Throw a JavaScript Error from native code
+ *
+ * This sets a pending throw flag that will be checked by the host function
+ * wrapper. When the host function returns, a JavaScript Error will be thrown
+ * with the provided message.
+ *
+ * Usage in host functions:
+ * 1. Call hermes_throw_error(runtime, "error message")
+ * 2. Return NULL from host function
+ * 3. JavaScript caller receives Error exception
+ *
+ * @param runtime The Hermes runtime
+ * @param message Error message (will be copied)
+ *
+ * @example
+ * if (!valid_arg) {
+ *     hermes_throw_error(runtime, "Invalid argument");
+ *     return NULL;  // Host function wrapper will throw
+ * }
+ */
+void hermes_throw_error(OVHermesRuntime* runtime, const char* message);
+
+/**
+ * Throw a JavaScript TypeError from native code
+ *
+ * Similar to hermes_throw_error(), but creates a TypeError instead of Error.
+ * Use this for type validation failures (e.g., expected string, got number).
+ *
+ * @param runtime The Hermes runtime
+ * @param message Error message
+ *
+ * @example
+ * if (!hermes_value_is_string(arg)) {
+ *     hermes_throw_type_error(runtime, "Expected string argument");
+ *     return NULL;
+ * }
+ */
+void hermes_throw_type_error(OVHermesRuntime* runtime, const char* message);
+
 //
 // Host Function Registration
 //

@@ -11,9 +11,20 @@ pub const Pty = struct {
 
     /// Spawn a process in a pseudoterminal
     /// The process's stdin/stdout/stderr will be connected to the pty
+    /// If env is provided, it will be used instead of inheriting parent's environment
     pub fn spawn(
         allocator: std.mem.Allocator,
         argv: []const []const u8,
+    ) !Pty {
+        return spawnWithEnv(allocator, argv, null);
+    }
+
+    /// Spawn with custom environment variables
+    /// env_map: HashMap where keys and values are environment variable names and values
+    pub fn spawnWithEnv(
+        allocator: std.mem.Allocator,
+        argv: []const []const u8,
+        env_map: ?*const std.process.EnvMap,
     ) !Pty {
         if (argv.len == 0) return error.EmptyArgv;
 
@@ -75,10 +86,51 @@ pub const Pty = struct {
             }
             argv_ptrs[argv.len] = null;
 
+            // Build environment (custom or inherited)
+            var env_storage: [256][512:0]u8 = undefined;
+            var env_ptrs: [257:null]?[*:0]const u8 = undefined;
+            var env_count: usize = 0;
+
+            if (env_map) |map| {
+                // Use custom environment
+                var iter = map.iterator();
+                while (iter.next()) |entry| {
+                    if (env_count >= 256) break; // Too many vars
+
+                    const key = entry.key_ptr.*;
+                    const value = entry.value_ptr.*;
+
+                    // Format as KEY=VALUE
+                    var buf_len: usize = 0;
+                    for (key) |ch| {
+                        if (buf_len >= 511) break;
+                        env_storage[env_count][buf_len] = ch;
+                        buf_len += 1;
+                    }
+                    if (buf_len < 511) {
+                        env_storage[env_count][buf_len] = '=';
+                        buf_len += 1;
+                    }
+                    for (value) |ch| {
+                        if (buf_len >= 511) break;
+                        env_storage[env_count][buf_len] = ch;
+                        buf_len += 1;
+                    }
+                    env_storage[env_count][buf_len] = 0;
+
+                    env_ptrs[env_count] = @ptrCast(&env_storage[env_count]);
+                    env_count += 1;
+                }
+                env_ptrs[env_count] = null;
+            }
+
             // Use Zig's posix.execveZ - replaces current process with new program
             // execveZ never returns on success, only returns ExecveError on failure
-            // Cast environ to the required type
-            const environ_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(@alignCast(std.os.environ.ptr));
+            const environ_ptr: [*:null]const ?[*:0]const u8 = if (env_map != null)
+                @ptrCast(@alignCast(&env_ptrs))
+            else
+                @ptrCast(@alignCast(std.os.environ.ptr));
+
             const err = posix.execveZ(
                 argv_ptrs[0].?,
                 &argv_ptrs,

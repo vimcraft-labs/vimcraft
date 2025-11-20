@@ -42,8 +42,7 @@ fn benchmarkHostObjectPropertyLookup(runtime: *c.OVHermesRuntime, allocator: std
     // Setup
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
-    try buffer.content.appendSlice(allocator, "test\n");
-    try buffer.buildLineIndex();
+    try buffer.content.insert(0, "test\n");
 
     var viewport_top: usize = 0;
     var js_state_dirty: bool = false;
@@ -114,8 +113,7 @@ fn benchmarkPropertyEnumeration(runtime: *c.OVHermesRuntime, allocator: std.mem.
     // Setup
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
-    try buffer.content.appendSlice(allocator, "test\n");
-    try buffer.buildLineIndex();
+    try buffer.content.insert(0, "test\n");
 
     var viewport_top: usize = 0;
     var js_state_dirty: bool = false;

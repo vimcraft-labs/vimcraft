@@ -442,6 +442,7 @@ pub const EditorContext = struct {
 
         // Detect filetype using loader
         const first_line = self.buffer.getLine(0);
+        defer if (first_line != null) self.allocator.free(first_line.?); // ✅ FIX: Free owned memory from getLine()
         const filetype = self.ts_loader.detectFiletype(path, first_line);
 
         if (filetype) |ft| {
@@ -498,8 +499,9 @@ pub const EditorContext = struct {
         // Set parser language
         try self.parser.setLanguage(lang);
 
-        // Parse buffer content
-        const source = self.buffer.content.items;
+        // Parse buffer content (convert Rope to string for tree-sitter)
+        const source = try self.buffer.content.toString();
+        defer self.allocator.free(source); // Free temporary string after parsing
         const tree = try self.parser.parseString(null, source);
 
         // Clean up old syntax if it exists
@@ -595,6 +597,7 @@ pub const EditorContext = struct {
                                 self.pending_register.clear();
                                 return;
                             };
+                            defer self.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
 
                             const text = if (line.len > 0 and line[line.len - 1] == '\n')
                                 line[0 .. line.len - 1]
@@ -626,10 +629,10 @@ pub const EditorContext = struct {
 
             switch (char) {
                 // Basic movement (hjkl)
-                'h' => movement.moveLeft(&self.buffer),
-                'j' => movement.moveDown(&self.buffer),
-                'k' => movement.moveUp(&self.buffer),
-                'l' => movement.moveRight(&self.buffer),
+                'h' => _ = movement.moveLeft(&self.buffer),
+                'j' => _ = movement.moveDown(&self.buffer),
+                'k' => _ = movement.moveUp(&self.buffer),
+                'l' => _ = movement.moveRight(&self.buffer),
 
                 // Line movement
                 '0' => movement.moveToLineStart(&self.buffer),
@@ -741,14 +744,14 @@ pub const EditorContext = struct {
                 'a' => {
                     self.pending_cmd.clear();
                     self.pending_register.clear();
-                    movement.moveRight(&self.buffer);
+                    _ = movement.moveRight(&self.buffer);
                     self.mode_manager.enterInsert();
                 },
                 'A' => {
                     self.pending_cmd.clear();
                     self.pending_register.clear();
                     movement.moveToLineEnd(&self.buffer);
-                    movement.moveRight(&self.buffer);
+                    _ = movement.moveRight(&self.buffer);
                     self.mode_manager.enterInsert();
                 },
                 'I' => {
@@ -769,7 +772,7 @@ pub const EditorContext = struct {
                     self.pending_register.clear();
                     movement.moveToLineStart(&self.buffer);
                     try self.buffer.insertChar('\n');
-                    movement.moveUp(&self.buffer);
+                    _ = movement.moveUp(&self.buffer);
                     self.mode_manager.enterInsert();
                 },
 
@@ -791,10 +794,10 @@ pub const EditorContext = struct {
         // Arrow keys
         if (input.len == 3 and input[0] == 27 and input[1] == '[') {
             switch (input[2]) {
-                'A' => movement.moveUp(&self.buffer),
-                'B' => movement.moveDown(&self.buffer),
-                'C' => movement.moveRight(&self.buffer),
-                'D' => movement.moveLeft(&self.buffer),
+                'A' => _ = movement.moveUp(&self.buffer),
+                'B' => _ = movement.moveDown(&self.buffer),
+                'C' => _ = movement.moveRight(&self.buffer),
+                'D' => _ = movement.moveLeft(&self.buffer),
                 else => {},
             }
         }
@@ -859,10 +862,10 @@ pub const EditorContext = struct {
         // Arrow keys
         if (input.len == 3 and input[0] == 27 and input[1] == '[') {
             switch (input[2]) {
-                'A' => movement.moveUp(&self.buffer),
-                'B' => movement.moveDown(&self.buffer),
-                'C' => movement.moveRight(&self.buffer),
-                'D' => movement.moveLeft(&self.buffer),
+                'A' => _ = movement.moveUp(&self.buffer),
+                'B' => _ = movement.moveDown(&self.buffer),
+                'C' => _ = movement.moveRight(&self.buffer),
+                'D' => _ = movement.moveLeft(&self.buffer),
                 else => {},
             }
             return;
@@ -921,6 +924,7 @@ pub const EditorContext = struct {
         if (self.buffer.cursor.row == 0) return; // No previous line on first line
 
         const prev_line = self.buffer.getLine(self.buffer.cursor.row - 1) orelse return;
+        defer self.allocator.free(prev_line); // ✅ FIX: Free owned memory from getLine()
 
         // Count leading whitespace on previous line
         var indent_count: usize = 0;
@@ -965,10 +969,10 @@ pub const EditorContext = struct {
 
             switch (char) {
                 // Navigation
-                'h' => movement.moveLeft(&self.buffer),
-                'j' => movement.moveDown(&self.buffer),
-                'k' => movement.moveUp(&self.buffer),
-                'l' => movement.moveRight(&self.buffer),
+                'h' => _ = movement.moveLeft(&self.buffer),
+                'j' => _ = movement.moveDown(&self.buffer),
+                'k' => _ = movement.moveUp(&self.buffer),
+                'l' => _ = movement.moveRight(&self.buffer),
                 '0' => movement.moveToLineStart(&self.buffer),
                 '$' => movement.moveToLineEnd(&self.buffer),
                 '^' => movement.moveToFirstNonBlank(&self.buffer),
@@ -1013,10 +1017,10 @@ pub const EditorContext = struct {
         // Arrow keys
         if (input.len == 3 and input[0] == 27 and input[1] == '[') {
             switch (input[2]) {
-                'A' => movement.moveUp(&self.buffer),
-                'B' => movement.moveDown(&self.buffer),
-                'C' => movement.moveRight(&self.buffer),
-                'D' => movement.moveLeft(&self.buffer),
+                'A' => _ = movement.moveUp(&self.buffer),
+                'B' => _ = movement.moveDown(&self.buffer),
+                'C' => _ = movement.moveRight(&self.buffer),
+                'D' => _ = movement.moveLeft(&self.buffer),
                 else => {},
             }
         }

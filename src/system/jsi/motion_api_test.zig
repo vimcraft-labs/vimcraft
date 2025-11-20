@@ -27,9 +27,10 @@ test "motion API - Object.keys lists all methods" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "Hello, World!\n");
-    try buffer.content.appendSlice(allocator, "Second line\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../editor/buffer/rope.zig").Rope.fromString(allocator, "Hello, World!\n");
+    buffer.content.deinit();
+    buffer.content = try @import("../../editor/buffer/rope.zig").Rope.fromString(allocator, "Second line\n");
 
     var viewport_top: usize = 0;
     var js_state_dirty: bool = false;
@@ -65,8 +66,8 @@ test "motion API - method execution modifies buffer" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "Hello, World!\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../editor/buffer/rope.zig").Rope.fromString(allocator, "Hello, World!\n");
 
     var viewport_top: usize = 0;
     var js_state_dirty: bool = false;
@@ -105,8 +106,8 @@ test "motion API - all methods callable" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "Hello, World!\nSecond line\nThird line\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../editor/buffer/rope.zig").Rope.fromString(allocator, "Hello, World!\nSecond line\nThird line\n");
 
     var viewport_top: usize = 0;
     var js_state_dirty: bool = false;
@@ -160,8 +161,8 @@ test "motion API - sequential method calls" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "Hello, World!\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../editor/buffer/rope.zig").Rope.fromString(allocator, "Hello, World!\n");
 
     var viewport_top: usize = 0;
     var js_state_dirty: bool = false;
@@ -198,8 +199,8 @@ test "motion API - properties are functions" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "test\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../editor/buffer/rope.zig").Rope.fromString(allocator, "test\n");
 
     var viewport_top: usize = 0;
     var js_state_dirty: bool = false;
@@ -236,8 +237,8 @@ test "motion API - invalid property" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "test\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../editor/buffer/rope.zig").Rope.fromString(allocator, "test\n");
 
     var viewport_top: usize = 0;
     var js_state_dirty: bool = false;
@@ -272,8 +273,8 @@ test "motion API - global object registration" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "test\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../editor/buffer/rope.zig").Rope.fromString(allocator, "test\n");
 
     var viewport_top: usize = 0;
     var js_state_dirty: bool = false;
@@ -308,8 +309,8 @@ test "motion API - dirty flag management" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "Hello, World!\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../editor/buffer/rope.zig").Rope.fromString(allocator, "Hello, World!\n");
 
     var viewport_top: usize = 0;
     var js_state_dirty: bool = false;

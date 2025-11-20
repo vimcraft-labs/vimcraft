@@ -388,7 +388,6 @@ pub const Editor = struct {
 
         // Detect filetype using loader
         const first_line = self.buffer.getLine(0);
-        defer if (first_line != null) self.allocator.free(first_line.?); // ✅ FIX: Free owned memory from getLine()
         const filetype = self.ts_loader.detectFiletype(path, first_line);
 
         if (filetype) |ft| {
@@ -613,8 +612,8 @@ pub const Editor = struct {
                                 self.enterInsertMode();
                             },
                             'y' => { // Yank text object
-                                const text = try range.getText(&self.buffer);
-                                defer self.allocator.free(text); // getText() now returns owned memory
+                                const text = range.getText(&self.buffer);
+                                // Note: getText() returns a slice, not allocated memory, so no defer free
                                 const reg = self.pending_register.getSelected() orelse '"';
                                 const lines = [_][]const u8{text};
                                 try self.register_mgr.yank(reg, &lines, .char_wise);
@@ -750,7 +749,6 @@ pub const Editor = struct {
                                 self.pending_register.clear();
                                 return false; // No line to yank, no state change
                             };
-                            defer self.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
 
                             const text = if (line.len > 0 and line[line.len - 1] == '\n')
                                 line[0 .. line.len - 1]
@@ -1222,7 +1220,6 @@ pub const Editor = struct {
         if (self.buffer.cursor.row == 0) return; // No previous line on first line
 
         const prev_line = self.buffer.getLine(self.buffer.cursor.row - 1) orelse return;
-        defer self.allocator.free(prev_line);
 
         // Count leading whitespace on previous line
         var indent_count: usize = 0;
@@ -1495,24 +1492,16 @@ pub const Editor = struct {
     fn offsetToPosition(self: *const Editor, offset: usize) Position {
         // Find which line this offset belongs to
         var line_num: usize = 0;
-        // Find line number by iterating through lines
-        // (Rope doesn't have lineOfByte, only byteOfLine)
-        var current_line: usize = 0;
-        while (current_line < self.buffer.lineCount()) : (current_line += 1) {
-            const line_start_offset = self.buffer.content.byteOfLine(current_line);
-            const line_end_offset = if (current_line + 1 < self.buffer.lineCount())
-                self.buffer.content.byteOfLine(current_line + 1)
-            else
-                self.buffer.content.len();
-
-            if (offset >= line_start_offset and offset < line_end_offset) {
-                line_num = current_line;
+        for (self.buffer.line_starts.items, 0..) |line_start, i| {
+            if (offset >= line_start) {
+                line_num = i;
+            } else {
                 break;
             }
         }
 
         // Calculate column within that line
-        const line_start = self.buffer.content.byteOfLine(line_num);
+        const line_start = self.buffer.line_starts.items[line_num];
         const col = offset - line_start;
 
         return Position{ .line = line_num, .col = col };
@@ -1557,9 +1546,8 @@ pub const Editor = struct {
         // Set parser language
         try self.parser.setLanguage(lang);
 
-        // Parse buffer content (get owned string from Rope)
-        const source = try self.buffer.content.toString();
-        defer self.allocator.free(source);
+        // Parse buffer content
+        const source = self.buffer.content.items;
         const tree = try self.parser.parseString(null, source);
 
         // Clean up old syntax if it exists
@@ -1600,10 +1588,7 @@ pub const Editor = struct {
             self.logger.err("Failed to create args object for event '{s}'", .{event_name}) catch {};
             return;
         };
-        // CRITICAL FIX #2: Do NOT destroy args_obj here!
-        // JavaScript callbacks may store references to it (e.g., in setTimeout).
-        // Let Hermes GC manage the lifetime instead.
-        // The object will be freed when JavaScript releases all references.
+        defer c.hermes_value_destroy(args_obj);
 
         // Set properties (Neovim-compatible)
 
@@ -1672,8 +1657,8 @@ test "Editor: offsetToPosition converts byte offsets correctly" {
     defer editor.deinit();
 
     // Create buffer: "line 1\nline 2\nline 3\n"
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    try editor.buffer.content.appendSlice(allocator, "line 1\nline 2\nline 3\n");
+    try editor.buffer.buildLineIndex();
 
     // Test offset 0 (start of line 0)
     {
@@ -1710,14 +1695,14 @@ test "Editor: yi( yank highlight shows correct range" {
     defer editor.deinit();
 
     // Create buffer with text: "(line 293: src/core/editor.zig:293)\n"
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"(line 293: src/core/editor.zig:293)\n");
+    try editor.buffer.content.appendSlice(allocator, "(line 293: src/core/editor.zig:293)\n");
+    try editor.buffer.buildLineIndex();
 
     // Position cursor at colon (col 10) - NOT at the start of the range
     editor.buffer.cursor = .{ .row = 0, .col = 10 };
 
     // Execute yi( - should yank "line 293: src/core/editor.zig:293"
-    _ = try editor.executeKeys("yi(");
+    try editor.executeKeys("yi(");
 
     // Verify yank highlight shows the actual yanked range
     // start should be at col 1 (after '('), not at cursor col 10
@@ -1734,14 +1719,14 @@ test "Editor: yi[ yank highlight at different cursor position" {
     defer editor.deinit();
 
     // Create buffer: "foo[bar]baz\n"
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"foo[bar]baz\n");
+    try editor.buffer.content.appendSlice(allocator, "foo[bar]baz\n");
+    try editor.buffer.buildLineIndex();
 
     // Cursor at 'a' in "bar" (col 5)
     editor.buffer.cursor = .{ .row = 0, .col = 5 };
 
     // Execute yi[
-    _ = try editor.executeKeys("yi[");
+    try editor.executeKeys("yi[");
 
     // Highlight should be from col 4 to col 6 (the "bar" text, not including ']' at col 7)
     try std.testing.expectEqual(@as(usize, 0), editor.yank_highlight.start.line);
@@ -1756,8 +1741,8 @@ test "Editor: yank highlight does NOT include delimiter" {
     defer editor.deinit();
 
     // Buffer: "word)\n" - positions: w=0, o=1, r=2, d=3, )=4
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"word)\n");
+    try editor.buffer.content.appendSlice(allocator, "word)\n");
+    try editor.buffer.buildLineIndex();
 
     // Manually create a range for "word" (not including ')')
     const Range = @import("buffer/edit.zig").Range;
@@ -1778,19 +1763,17 @@ test "Editor: 'o' command opens new line AFTER current line" {
     defer editor.deinit();
 
     // Buffer: "abc\n"
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"abc\n");
+    try editor.buffer.content.appendSlice(allocator, "abc\n");
+    try editor.buffer.buildLineIndex();
 
     // Position cursor at 'b' (col 1) - shouldn't matter where
     editor.buffer.cursor = .{ .row = 0, .col = 1 };
 
     // Execute 'o' command
-    _ = try editor.executeKeys("o");
+    try editor.executeKeys("o");
 
     // Expected buffer: "abc\n\n" (newline inserted AFTER all characters, not before 'c')
-    const content = try editor.buffer.content.toString();
-    defer allocator.free(content);
-    try std.testing.expectEqualStrings("abc\n\n", content);
+    try std.testing.expectEqualStrings("abc\n\n", editor.buffer.content.items);
 
     // Cursor should be on the new line (row 1) at column 0
     try std.testing.expectEqual(@as(usize, 1), editor.buffer.cursor.row);
@@ -1806,15 +1789,14 @@ test "Editor: 'A' followed by 'ii' inserts both characters on same line" {
     defer editor.deinit();
 
     // Setup: README.md first line
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"# Vimcraft\n");
+    try editor.buffer.content.appendSlice(allocator, "# Vimcraft\n");
+    try editor.buffer.buildLineIndex();
 
     // Execute: A (append at end) then ii (type two i's)
-    _ = try editor.executeKeys("Aii");
+    try editor.executeKeys("Aii");
 
     // Verify: First line should be "# Vimcraftii\n"
     const first_line = editor.buffer.getLine(0).?;
-    defer allocator.free(first_line);
     try std.testing.expectEqualStrings("# Vimcraftii\n", first_line);
 
     // Verify: Cursor should be at (0, 12) - after the two i's
@@ -1836,15 +1818,15 @@ test "Keymap: simple string mapping executes correctly" {
     defer editor.deinit();
 
     // Setup buffer
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    try editor.buffer.content.appendSlice(allocator, "line 1\nline 2\nline 3\n");
+    try editor.buffer.buildLineIndex();
 
     // Map K → gg (move to file start) - global mapping
     const keys = try allocator.dupe(u8, "gg");
     try editor.keymap_mgr.set(.normal, "K", .{ .keys = keys }, .{ .noremap = true }, null);
 
     // Execute K
-    _ = try editor.executeKeys("K");
+    try editor.executeKeys("K");
 
     // Verify: cursor at file start (0, 0)
     try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
@@ -1858,8 +1840,8 @@ test "Keymap: noremap prevents recursive expansion" {
     defer editor.deinit();
 
     // Setup buffer
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"abc\n");
+    try editor.buffer.content.appendSlice(allocator, "abc\n");
+    try editor.buffer.buildLineIndex();
 
     // Map j → k (move up) - global mapping
     const keys1 = try allocator.dupe(u8, "k");
@@ -1872,7 +1854,7 @@ test "Keymap: noremap prevents recursive expansion" {
     // Execute j (should execute k literally, which maps to l)
     // With noremap, k should NOT expand again, so we move left once
     editor.buffer.cursor = .{ .row = 0, .col = 1 };
-    _ = try editor.executeKeys("j");
+    try editor.executeKeys("j");
 
     // With noremap: j→k (literal k executed) → move up (default k behavior)
     // But we're on line 0, so cursor stays at row 0
@@ -1895,12 +1877,12 @@ test "Keymap: recursion protection exists and depth tracking works" {
     try editor.keymap_mgr.set(.normal, "K", .{ .keys = keys }, .{}, null);
 
     // Setup buffer
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\n");
+    try editor.buffer.content.appendSlice(allocator, "line 1\nline 2\n");
+    try editor.buffer.buildLineIndex();
     editor.buffer.cursor = .{ .row = 1, .col = 0 };
 
     // Execute the mapping
-    _ = try editor.executeKeys("K");
+    try editor.executeKeys("K");
 
     // After execution completes, depth should be back to 0 (defer cleanup worked)
     try std.testing.expectEqual(@as(usize, 0), editor.mapping_depth);
@@ -1924,8 +1906,8 @@ test "Keymap: mapping overrides built-in command" {
     defer editor.deinit();
 
     // Setup buffer with 3 lines
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    try editor.buffer.content.appendSlice(allocator, "line 1\nline 2\nline 3\n");
+    try editor.buffer.buildLineIndex();
     editor.buffer.cursor = .{ .row = 1, .col = 0 }; // Start on line 2
 
     // Map j → k (override j to move up instead of down) - global mapping
@@ -1933,7 +1915,7 @@ test "Keymap: mapping overrides built-in command" {
     try editor.keymap_mgr.set(.normal, "j", .{ .keys = keys }, .{ .noremap = true }, null);
 
     // Execute j - should move UP (to line 1) not DOWN (to line 3)
-    _ = try editor.executeKeys("j");
+    try editor.executeKeys("j");
 
     // Verify: cursor moved up to line 0
     try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
@@ -1962,15 +1944,15 @@ test "Keymap: mode-specific mappings don't leak" {
     defer editor.deinit();
 
     // Setup buffer
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\n");
+    try editor.buffer.content.appendSlice(allocator, "line 1\nline 2\n");
+    try editor.buffer.buildLineIndex();
 
     // Map j → gg in normal mode only - global mapping
     const keys = try allocator.dupe(u8, "gg");
     try editor.keymap_mgr.set(.normal, "j", .{ .keys = keys }, .{ .noremap = true }, null);
 
     // In normal mode: j should execute gg
-    _ = try editor.executeKeys("j");
+    try editor.executeKeys("j");
     try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
 
     // Enter insert mode
@@ -1978,11 +1960,10 @@ test "Keymap: mode-specific mappings don't leak" {
     editor.mode_manager.enterInsert();
 
     // In insert mode: j should insert 'j', not execute mapping
-    _ = try editor.executeKeys("j");
+    try editor.executeKeys("j");
 
     // Verify: 'j' was inserted at cursor position
     const line = editor.buffer.getLine(1).?;
-    defer allocator.free(line);
     try std.testing.expect(std.mem.startsWith(u8, line, "j"));
 }
 
@@ -1993,8 +1974,8 @@ test "Keymap: complex mapping sequence (K → Hzz concept)" {
     defer editor.deinit();
 
     // Setup buffer with multiple lines
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\nline 4\n");
+    try editor.buffer.content.appendSlice(allocator, "line 1\nline 2\nline 3\nline 4\n");
+    try editor.buffer.buildLineIndex();
     editor.buffer.cursor = .{ .row = 2, .col = 0 }; // Start on line 3
 
     // Map K → gg (simpler than Hzz since z commands not implemented) - global mapping
@@ -2002,7 +1983,7 @@ test "Keymap: complex mapping sequence (K → Hzz concept)" {
     try editor.keymap_mgr.set(.normal, "K", .{ .keys = keys }, .{ .noremap = true }, null);
 
     // Execute K
-    _ = try editor.executeKeys("K");
+    try editor.executeKeys("K");
 
     // Verify: cursor at file start
     try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
@@ -2032,12 +2013,12 @@ test "Keymap: depth restored correctly after mapping error (errdefer fix)" {
     const keys = try allocator.dupe(u8, "gg");
     try editor.keymap_mgr.set(.normal, "J", .{ .keys = keys }, .{ .noremap = true }, null);
 
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\n");
+    try editor.buffer.content.appendSlice(allocator, "line 1\nline 2\n");
+    try editor.buffer.buildLineIndex();
     editor.buffer.cursor = .{ .row = 1, .col = 0 };
 
     // This should work (depth not corrupted by previous error)
-    _ = try editor.executeKeys("J");
+    try editor.executeKeys("J");
     try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
 }
 
@@ -2048,8 +2029,8 @@ test "Keymap: pending key loss bug - j then x (when jk is mapped)" {
     defer editor.deinit();
 
     // Setup buffer with 3 lines
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    try editor.buffer.content.appendSlice(allocator, "line 1\nline 2\nline 3\n");
+    try editor.buffer.buildLineIndex();
     editor.buffer.cursor = .{ .row = 0, .col = 0 }; // Start at line 1
 
     // Map jk → gg (move to file start) - global mapping
@@ -2057,13 +2038,13 @@ test "Keymap: pending key loss bug - j then x (when jk is mapped)" {
     try editor.keymap_mgr.set(.normal, "jk", .{ .keys = keys }, .{ .noremap = true }, null);
 
     // Type "j" → enters pending state, does NOT execute yet
-    _ = try editor.executeKeys("j");
+    try editor.executeKeys("j");
 
     // Verify: cursor STILL at line 1 (pending state, "j" not executed yet)
     try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
 
     // Type "x" → sequence breaks, should execute "j" (down) then "x" (delete char)
-    _ = try editor.executeKeys("x");
+    try editor.executeKeys("x");
 
     // After fix:
     // - "j" should execute as literal → move down to line 2 (row 1)
@@ -2072,7 +2053,6 @@ test "Keymap: pending key loss bug - j then x (when jk is mapped)" {
 
     // Verify 'x' executed by checking first char was deleted from line 2
     const line = editor.buffer.getLine(1).?;
-    defer allocator.free(line);
     try std.testing.expectEqualStrings("ine 2\n", line); // 'l' deleted
 }
 
@@ -2083,8 +2063,8 @@ test "Keymap: pending key loss bug - j then jkl (multiple keys)" {
     defer editor.deinit();
 
     // Setup buffer with 5 lines
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\nline 4\nline 5\n");
+    try editor.buffer.content.appendSlice(allocator, "line 1\nline 2\nline 3\nline 4\nline 5\n");
+    try editor.buffer.buildLineIndex();
     editor.buffer.cursor = .{ .row = 0, .col = 0 };
 
     // Map jk → gg (move to file start) - global mapping
@@ -2092,11 +2072,11 @@ test "Keymap: pending key loss bug - j then jkl (multiple keys)" {
     try editor.keymap_mgr.set(.normal, "jk", .{ .keys = keys }, .{ .noremap = true }, null);
 
     // Type "j" → enters pending state, does NOT execute yet
-    _ = try editor.executeKeys("j");
+    try editor.executeKeys("j");
     try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
 
     // Type "jkl" → sequence breaks on second "j", all keys should execute
-    _ = try editor.executeKeys("jkl");
+    try editor.executeKeys("jkl");
 
     // Expected behavior:
     // - First pending "j" executes as literal → move down to line 2 (row 1)
@@ -2116,8 +2096,8 @@ test "Keymap: pending sequence completed successfully (jk → gg)" {
     defer editor.deinit();
 
     // Setup buffer
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    try editor.buffer.content.appendSlice(allocator, "line 1\nline 2\nline 3\n");
+    try editor.buffer.buildLineIndex();
     editor.buffer.cursor = .{ .row = 2, .col = 0 }; // Start at line 3
 
     // Map jk → gg - global mapping
@@ -2125,7 +2105,7 @@ test "Keymap: pending sequence completed successfully (jk → gg)" {
     try editor.keymap_mgr.set(.normal, "jk", .{ .keys = keys }, .{ .noremap = true }, null);
 
     // Type "jk" → should execute gg (move to file start)
-    _ = try editor.executeKeys("jk");
+    try editor.executeKeys("jk");
 
     // Verify: cursor at file start (mapping executed)
     try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);

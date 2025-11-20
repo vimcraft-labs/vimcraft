@@ -113,7 +113,6 @@ pub const TerminalBackend = struct {
                 },
                 .complete => |sequence| {
                     // We have a complete sequence - process it!
-                    needs_render.* = true;
                     const input = sequence.bytes;
 
                     // Handle terminal-specific features first
@@ -129,11 +128,13 @@ pub const TerminalBackend = struct {
 
                     // 1. Arrow keys (terminal-specific handling based on mode)
                     if (try self.handleArrowKeys(sequence.kind)) {
+                        needs_render.* = true;
                         continue; // Arrow key handled, process next sequence
                     }
 
                     // 2. Mouse clicks (terminal-specific, not in core editor)
                     if (try self.handleMouseEvent(input)) {
+                        needs_render.* = true;
                         continue; // Mouse event handled, process next sequence
                     }
 
@@ -155,10 +156,12 @@ pub const TerminalBackend = struct {
                         if (char == 4 and self.editor.mode_manager.isNormal()) { // Ctrl+D
                             const viewport_height = self.display.terminal_rows - 1;
                             self.editor.scroll(.down, viewport_height);
+                            needs_render.* = true;
                             continue; // Process next sequence
                         } else if (char == 21 and self.editor.mode_manager.isNormal()) { // Ctrl+U
                             const viewport_height = self.display.terminal_rows - 1;
                             self.editor.scroll(.up, viewport_height);
+                            needs_render.* = true;
                             continue; // Process next sequence
                         }
                     }
@@ -169,7 +172,7 @@ pub const TerminalBackend = struct {
                             const cmd = self.editor.getCommandString();
                             if (std.mem.eql(u8, cmd, "q") or std.mem.eql(u8, cmd, "wq")) {
                                 // Execute the command in core (saves file if wq)
-                                try self.editor.executeKeys(input);
+                                _ = try self.editor.executeKeys(input);
                                 // Then quit (terminal-specific)
                                 return false;
                             }
@@ -177,7 +180,10 @@ pub const TerminalBackend = struct {
                     }
 
                     // 6. All other input: delegate to Editor core
-                    try self.editor.executeKeys(input);
+                    const state_changed = try self.editor.executeKeys(input);
+                    if (state_changed) {
+                        needs_render.* = true;
+                    }
 
                     // 7. CRITICAL: If a viewport command (H/M/L) is pending, we need to execute it with up-to-date viewport info
                     // The challenge: display.viewport_top is updated during render(), but we haven't rendered yet
@@ -205,7 +211,7 @@ pub const TerminalBackend = struct {
                             const viewport_height = text_rows;
                             const viewport_top = self.display.viewport_top;
                             self.editor.moveToViewportPosition(cmd, viewport_top, viewport_height);
-                            // needs_render already true from line 100, no need to set again
+                            needs_render.* = true;
                         }
                     }
 
@@ -228,7 +234,7 @@ pub const TerminalBackend = struct {
 
                             // Update display viewport
                             self.display.viewport_top = new_viewport_top;
-                            // needs_render already true from line 116, no need to set again
+                            needs_render.* = true;
                         }
                     }
 
@@ -401,14 +407,14 @@ pub const TerminalBackend = struct {
                         }
 
                         // PERFORMANCE FIX: Insert all paste content at once instead of char-by-char
-                        // Single insertSlice() is O(N) vs N×insert() which is O(N²) due to memory shifting
+                        // Single insert() is O(log N) for Rope vs N×insertChar() which would be O(N log N)
                         const start_offset = if (self.editor.buffer.active_transaction) |trans|
                             trans.current_offset
                         else
                             self.editor.buffer.getCursorOffset();
 
-                        // Insert entire paste content at once
-                        try self.editor.buffer.content.insertSlice(self.allocator, start_offset, paste_content);
+                        // Insert entire paste content at once (Rope API)
+                        try self.editor.buffer.content.insert(start_offset, paste_content);
 
                         // Update transaction state and cursor manually (since we bypassed insertChar loop)
                         if (self.editor.buffer.active_transaction) |*trans| {
@@ -433,16 +439,10 @@ pub const TerminalBackend = struct {
 
                         self.editor.buffer.modified = true;
 
-                        // PERFORMANCE FIX: Only rebuild line index if paste contains newlines
-                        // buildLineIndex() scans ENTIRE file (O(N) where N = file size)
-                        // For single-char pastes (like tabs), this causes massive freeze on large files
-                        // ROOT CAUSE: README.md is 4,423 bytes - pasting ONE tab scanned all 4,423 bytes!
-                        const contains_newline = std.mem.indexOfScalar(u8, paste_content, '\n') != null;
-                        if (contains_newline) {
-                            try self.editor.buffer.buildLineIndex();
-                        }
+                        // Rope automatically tracks lines - no manual index building needed!
+                        // (ArrayList required buildLineIndex() here, Rope handles it transparently)
 
-                        // CRITICAL FIX: Clamp cursor after paste (transaction still active, line_starts NOW FRESH)
+                        // CRITICAL FIX: Clamp cursor after paste (transaction still active, Rope lines updated)
                         // During transaction, cursor.row may have been incremented for newlines,
                         // but line_starts wasn't rebuilt. If cursor.row >= lineCount(), rendering will fail.
                         // Clamp cursor to valid range NOW, before rendering.
@@ -584,6 +584,7 @@ pub const TerminalBackend = struct {
             // Move cursor to clicked position (clamped to buffer bounds)
             if (buffer_row < self.editor.buffer.lineCount()) {
                 const line = self.editor.buffer.getLine(buffer_row) orelse return true;
+                defer self.editor.buffer.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
                 const line_len = if (line.len > 0 and line[line.len - 1] == '\n')
                     line.len - 1
                 else
@@ -606,19 +607,19 @@ pub const TerminalBackend = struct {
         if (self.editor.mode_manager.isInsert()) {
             switch (kind) {
                 .arrow_up => {
-                    movement_module.moveUp(&self.editor.buffer);
+                    _ = movement_module.moveUp(&self.editor.buffer);
                     return true;
                 },
                 .arrow_down => {
-                    movement_module.moveDown(&self.editor.buffer);
+                    _ = movement_module.moveDown(&self.editor.buffer);
                     return true;
                 },
                 .arrow_left => {
-                    movement_module.moveLeft(&self.editor.buffer);
+                    _ = movement_module.moveLeft(&self.editor.buffer);
                     return true;
                 },
                 .arrow_right => {
-                    movement_module.moveRight(&self.editor.buffer);
+                    _ = movement_module.moveRight(&self.editor.buffer);
                     return true;
                 },
                 else => return false,

@@ -70,6 +70,7 @@ pub fn findTextObject(
 /// Find word boundaries (vim 'word': letters, digits, underscore)
 fn findWord(buffer: *const Buffer, modifier: TextObjectModifier) ?Range {
     const line = buffer.getLine(buffer.cursor.row) orelse return null;
+    defer buffer.allocator.free(line);
     const cursor_col = buffer.cursor.col;
 
     if (cursor_col >= line.len) return null;
@@ -122,7 +123,7 @@ fn findWord(buffer: *const Buffer, modifier: TextObjectModifier) ?Range {
         return null;
     }
 
-    const line_start = buffer.line_starts.items[buffer.cursor.row];
+    const line_start = buffer.content.byteOfLine(buffer.cursor.row);
     return Range{
         .start = line_start + start,
         .end = line_start + end,
@@ -132,6 +133,7 @@ fn findWord(buffer: *const Buffer, modifier: TextObjectModifier) ?Range {
 /// Find WORD boundaries (vim 'WORD': everything except whitespace)
 fn findWORD(buffer: *const Buffer, modifier: TextObjectModifier) ?Range {
     const line = buffer.getLine(buffer.cursor.row) orelse return null;
+    defer buffer.allocator.free(line);
     const cursor_col = buffer.cursor.col;
 
     if (cursor_col >= line.len) return null;
@@ -166,7 +168,7 @@ fn findWORD(buffer: *const Buffer, modifier: TextObjectModifier) ?Range {
         }
     }
 
-    const line_start = buffer.line_starts.items[buffer.cursor.row];
+    const line_start = buffer.content.byteOfLine(buffer.cursor.row);
     return Range{
         .start = line_start + start,
         .end = line_start + end,
@@ -184,7 +186,8 @@ fn findPair(buffer: *const Buffer, open: u8, close: u8, modifier: TextObjectModi
     // First, try to find the pair on the current line
     const row = buffer.cursor.row;
     const line = buffer.getLine(row) orelse return null;
-    const line_start = buffer.line_starts.items[row];
+    defer buffer.allocator.free(line);
+    const line_start = buffer.content.byteOfLine(row);
 
     // Search backward from cursor for open delimiter
     var col: isize = @intCast(buffer.cursor.col);
@@ -239,7 +242,8 @@ fn findPair(buffer: *const Buffer, open: u8, close: u8, modifier: TextObjectModi
 /// Find matching quotes
 fn findQuote(buffer: *const Buffer, quote: u8, modifier: TextObjectModifier) ?Range {
     const line = buffer.getLine(buffer.cursor.row) orelse return null;
-    const line_start = buffer.line_starts.items[buffer.cursor.row];
+    defer buffer.allocator.free(line);
+    const line_start = buffer.content.byteOfLine(buffer.cursor.row);
 
     var start_offset: ?usize = null;
     var end_offset: ?usize = null;
@@ -314,12 +318,13 @@ test "TextObject: inner word" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "hello world\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../buffer/rope.zig").Rope.fromString(allocator, "hello world\n");
     buffer.cursor = .{ .row = 0, .col = 2 }; // Cursor on 'l' in "hello"
 
     const range = findWord(&buffer, .inner).?;
-    const text = range.getText(&buffer);
+    const text = try range.getText(&buffer);
+    defer allocator.free(text);
     try std.testing.expectEqualStrings("hello", text);
 }
 
@@ -328,12 +333,13 @@ test "TextObject: around word with trailing space" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "hello world\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../buffer/rope.zig").Rope.fromString(allocator, "hello world\n");
     buffer.cursor = .{ .row = 0, .col = 2 }; // Cursor on 'l' in "hello"
 
     const range = findWord(&buffer, .around).?;
-    const text = range.getText(&buffer);
+    const text = try range.getText(&buffer);
+    defer allocator.free(text);
     try std.testing.expectEqualStrings("hello ", text);
 }
 
@@ -342,12 +348,13 @@ test "TextObject: inner bracket" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "foo[bar]baz\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../buffer/rope.zig").Rope.fromString(allocator, "foo[bar]baz\n");
     buffer.cursor = .{ .row = 0, .col = 5 }; // Cursor on 'a' in "bar"
 
     const range = findPair(&buffer, '[', ']', .inner).?;
-    const text = range.getText(&buffer);
+    const text = try range.getText(&buffer);
+    defer allocator.free(text);
     try std.testing.expectEqualStrings("bar", text);
 }
 
@@ -356,12 +363,13 @@ test "TextObject: around bracket" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "foo[bar]baz\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../buffer/rope.zig").Rope.fromString(allocator, "foo[bar]baz\n");
     buffer.cursor = .{ .row = 0, .col = 5 }; // Cursor on 'a' in "bar"
 
     const range = findPair(&buffer, '[', ']', .around).?;
-    const text = range.getText(&buffer);
+    const text = try range.getText(&buffer);
+    defer allocator.free(text);
     try std.testing.expectEqualStrings("[bar]", text);
 }
 
@@ -371,12 +379,13 @@ test "TextObject: inner paren with cursor at colon - bug fix" {
     defer buffer.deinit();
 
     // Test case from bug: (line 293: src/core/editor.zig:293)
-    try buffer.content.appendSlice(allocator, "(line 293: src/core/editor.zig:293)\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../buffer/rope.zig").Rope.fromString(allocator, "(line 293: src/core/editor.zig:293)\n");
     buffer.cursor = .{ .row = 0, .col = 10 }; // Cursor on first ':'
 
     const range = findPair(&buffer, '(', ')', .inner).?;
-    const text = range.getText(&buffer);
+    const text = try range.getText(&buffer);
+    defer allocator.free(text);
     try std.testing.expectEqualStrings("line 293: src/core/editor.zig:293", text);
 }
 
@@ -385,14 +394,15 @@ test "TextObject: inner paren at different cursor positions" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "simple (content) test\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../buffer/rope.zig").Rope.fromString(allocator, "simple (content) test\n");
 
     // Test at start of content
     buffer.cursor = .{ .row = 0, .col = 8 }; // 'c' in content
     {
         const range = findPair(&buffer, '(', ')', .inner).?;
-        const text = range.getText(&buffer);
+        const text = try range.getText(&buffer);
+        defer allocator.free(text);
         try std.testing.expectEqualStrings("content", text);
     }
 
@@ -400,7 +410,8 @@ test "TextObject: inner paren at different cursor positions" {
     buffer.cursor = .{ .row = 0, .col = 11 }; // 't' in content
     {
         const range = findPair(&buffer, '(', ')', .inner).?;
-        const text = range.getText(&buffer);
+        const text = try range.getText(&buffer);
+        defer allocator.free(text);
         try std.testing.expectEqualStrings("content", text);
     }
 
@@ -408,7 +419,8 @@ test "TextObject: inner paren at different cursor positions" {
     buffer.cursor = .{ .row = 0, .col = 14 }; // 't' at end of content
     {
         const range = findPair(&buffer, '(', ')', .inner).?;
-        const text = range.getText(&buffer);
+        const text = try range.getText(&buffer);
+        defer allocator.free(text);
         try std.testing.expectEqualStrings("content", text);
     }
 }
@@ -418,13 +430,14 @@ test "TextObject: nested parens - innermost pair" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "nested (outer (inner) outer) test\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../buffer/rope.zig").Rope.fromString(allocator, "nested (outer (inner) outer) test\n");
 
     // Cursor inside 'inner' should find innermost pair
     buffer.cursor = .{ .row = 0, .col = 17 }; // 'i' in "inner"
     const range = findPair(&buffer, '(', ')', .inner).?;
-    const text = range.getText(&buffer);
+    const text = try range.getText(&buffer);
+    defer allocator.free(text);
     try std.testing.expectEqualStrings("inner", text);
 }
 
@@ -433,13 +446,14 @@ test "TextObject: nested parens - outer pair" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "nested (outer (inner) outer) test\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../buffer/rope.zig").Rope.fromString(allocator, "nested (outer (inner) outer) test\n");
 
     // Cursor in first 'outer' should find outer pair
     buffer.cursor = .{ .row = 0, .col = 9 }; // 'o' in first "outer"
     const range = findPair(&buffer, '(', ')', .inner).?;
-    const text = range.getText(&buffer);
+    const text = try range.getText(&buffer);
+    defer allocator.free(text);
     try std.testing.expectEqualStrings("outer (inner) outer", text);
 }
 
@@ -448,12 +462,13 @@ test "TextObject: around paren includes delimiters" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "test (content) here\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../buffer/rope.zig").Rope.fromString(allocator, "test (content) here\n");
     buffer.cursor = .{ .row = 0, .col = 8 }; // inside parens
 
     const range = findPair(&buffer, '(', ')', .around).?;
-    const text = range.getText(&buffer);
+    const text = try range.getText(&buffer);
+    defer allocator.free(text);
     try std.testing.expectEqualStrings("(content)", text);
 }
 
@@ -462,12 +477,13 @@ test "TextObject: braces work correctly" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "test {inside} end\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../buffer/rope.zig").Rope.fromString(allocator, "test {inside} end\n");
     buffer.cursor = .{ .row = 0, .col = 7 }; // 'i' in "inside"
 
     const range = findPair(&buffer, '{', '}', .inner).?;
-    const text = range.getText(&buffer);
+    const text = try range.getText(&buffer);
+    defer allocator.free(text);
     try std.testing.expectEqualStrings("inside", text);
 }
 
@@ -476,11 +492,12 @@ test "TextObject: quotes work correctly" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "quote \"text\" more\n");
-    try buffer.buildLineIndex();
+    buffer.content.deinit();
+    buffer.content = try @import("../../buffer/rope.zig").Rope.fromString(allocator, "quote \"text\" more\n");
     buffer.cursor = .{ .row = 0, .col = 9 }; // 't' in "text"
 
     const range = findQuote(&buffer, '"', .inner).?;
-    const text = range.getText(&buffer);
+    const text = try range.getText(&buffer);
+    defer allocator.free(text);
     try std.testing.expectEqualStrings("text", text);
 }

@@ -28,6 +28,7 @@ pub fn handleGetState(ctx: HandlerContext) !protocol.ResponseResult {
 
     for (0..ctx.buffer.lineCount()) |i| {
         if (ctx.buffer.getLine(i)) |line| {
+            defer ctx.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
             const owned = try ctx.allocator.dupe(u8, line);
             try buffer_lines.append(ctx.allocator, owned);
         }
@@ -55,6 +56,7 @@ pub fn handleGetState(ctx: HandlerContext) !protocol.ResponseResult {
 
         for (range.start.line..range.end.line + 1) |line_idx| {
             const line = ctx.buffer.getLine(line_idx) orelse continue;
+            defer ctx.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
             const owned = try ctx.allocator.dupe(u8, line);
             try text_lines.append(ctx.allocator, owned);
         }
@@ -226,6 +228,125 @@ pub const ExtendedHandlerContext = struct {
     editor_context: *@import("editor_context.zig").EditorContext, // For executeKeys access
 };
 
+/// Get vim option values (all or specific options)
+pub fn handleGetOptions(
+    ctx: ExtendedHandlerContext,
+    option_names: ?[]const []const u8,
+) !protocol.ResponseResult {
+    const allocator = ctx.base.allocator;
+    const editor = ctx.editor_context;
+
+    if (editor.options_manager) |opts_mgr| {
+        var entries = std.ArrayList(protocol.OptionEntry).empty;
+        defer entries.deinit(allocator);
+
+        if (option_names) |names| {
+            // Get specific options
+            for (names) |name| {
+                // Try to get the option value
+                if (opts_mgr.getBoolean(name)) |bool_val| {
+                    try entries.append(allocator, protocol.OptionEntry{
+                        .name = try allocator.dupe(u8, name),
+                        .value = .{ .boolean = bool_val },
+                        .scope = try allocator.dupe(u8, "auto"),
+                    });
+                } else if (opts_mgr.getNumber(name)) |num_val| {
+                    try entries.append(allocator, protocol.OptionEntry{
+                        .name = try allocator.dupe(u8, name),
+                        .value = .{ .number = num_val },
+                        .scope = try allocator.dupe(u8, "auto"),
+                    });
+                } else if (opts_mgr.getString(name)) |str_val| {
+                    try entries.append(allocator, protocol.OptionEntry{
+                        .name = try allocator.dupe(u8, name),
+                        .value = .{ .string = try allocator.dupe(u8, str_val) },
+                        .scope = try allocator.dupe(u8, "auto"),
+                    });
+                }
+            }
+        } else {
+            // Get all options - we need to query the option names from the manager
+            // For now, return a subset of commonly used options
+            const common_options = [_][]const u8{
+                "number",
+                "relativeNumber",
+                "cursorLine",
+                "cursorColumn",
+                "tabstop",
+                "shiftwidth",
+                "expandtab",
+                "wrap",
+                "list",
+                "listchars",
+            };
+
+            for (common_options) |name| {
+                if (opts_mgr.getBoolean(name)) |bool_val| {
+                    try entries.append(allocator, protocol.OptionEntry{
+                        .name = try allocator.dupe(u8, name),
+                        .value = .{ .boolean = bool_val },
+                        .scope = try allocator.dupe(u8, "auto"),
+                    });
+                } else if (opts_mgr.getNumber(name)) |num_val| {
+                    try entries.append(allocator, protocol.OptionEntry{
+                        .name = try allocator.dupe(u8, name),
+                        .value = .{ .number = num_val },
+                        .scope = try allocator.dupe(u8, "auto"),
+                    });
+                } else if (opts_mgr.getString(name)) |str_val| {
+                    try entries.append(allocator, protocol.OptionEntry{
+                        .name = try allocator.dupe(u8, name),
+                        .value = .{ .string = try allocator.dupe(u8, str_val) },
+                        .scope = try allocator.dupe(u8, "auto"),
+                    });
+                }
+            }
+        }
+
+        return .{ .options = protocol.OptionsState{
+            .options = try entries.toOwnedSlice(allocator),
+            .count = entries.items.len,
+        } };
+    } else {
+        // No options manager, return empty
+        return .{ .options = protocol.OptionsState{
+            .options = &[_]protocol.OptionEntry{},
+            .count = 0,
+        } };
+    }
+}
+
+/// Get module cache (for hot reload verification)
+pub fn handleGetModuleCache(ctx: ExtendedHandlerContext) !protocol.ResponseResult {
+    const allocator = ctx.base.allocator;
+    const jsi_api = @import("../../system/jsi/jsi_api.zig");
+
+    // Get module cache from JSI API
+    if (jsi_api.global_config_ctx) |ctx_ptr| {
+        var module_paths = std.ArrayList([]const u8).empty;
+        defer module_paths.deinit(allocator);
+
+        // Iterate through module cache
+        var iter = ctx_ptr.module_cache.iterator();
+        while (iter.next()) |entry| {
+            // entry.key_ptr.* is the absolute path ([]const u8)
+            const path_copy = try allocator.dupe(u8, entry.key_ptr.*);
+            try module_paths.append(allocator, path_copy);
+        }
+
+        return .{ .module_cache = protocol.ModuleCacheState{
+            .modules = try module_paths.toOwnedSlice(allocator),
+            .count = module_paths.items.len,
+        } };
+    } else {
+        // No JSI context, return empty
+        return .{ .module_cache = protocol.ModuleCacheState{
+            .modules = &[_][]const u8{},
+            .count = 0,
+        } };
+    }
+}
+
 /// Execute keys and capture render pipeline state DURING render (before swapBuffers)
 /// This is THE KEY to debugging terminal rendering bugs without a TTY
 ///
@@ -365,6 +486,7 @@ pub fn handleExecuteKeysWithRenderTrace(
 
     for (0..editor.buffer.lineCount()) |i| {
         if (editor.buffer.getLine(i)) |line| {
+            defer ctx.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
             const owned = try ctx.allocator.dupe(u8, line);
             try buffer_lines.append(ctx.allocator, owned);
         }

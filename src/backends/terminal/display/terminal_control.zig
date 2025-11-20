@@ -136,6 +136,64 @@ pub fn resetCursorColor(self: *Display) !void {
     try write(self, "\x1b]112\x07");
 }
 
+/// Begin synchronized update (DCS = 1 s)
+/// Batches all terminal output until endSynchronizedUpdate() is called
+/// This prevents tearing/flickering during rendering
+/// Supported terminals: iTerm2, Alacritty, WezTerm, tmux
+/// Reference: https://gist.github.com/christianparpart/d8a62cc1ab659194337d73e399004036
+pub fn beginSynchronizedUpdate(self: *Display) !void {
+    if (self.has_sync_mode) {
+        // DCS = 1 s ST (Device Control String with parameter 1 and command 's')
+        // \x1bP = DCS (Device Control String)
+        // = 1 s = synchronized update begin
+        // \x1b\\ = ST (String Terminator)
+        try write(self, "\x1bP=1s\x1b\\");
+    }
+}
+
+/// End synchronized update (DCS = 2 s)
+/// Flushes all batched terminal output atomically
+/// The terminal will update all changes in a single frame, eliminating flicker
+pub fn endSynchronizedUpdate(self: *Display) !void {
+    if (self.has_sync_mode) {
+        // DCS = 2 s ST (synchronized update end)
+        try write(self, "\x1bP=2s\x1b\\");
+    }
+}
+
+/// Set scrolling region (1-indexed, inclusive)
+/// CSI {top} ; {bottom} r
+/// Lines outside this region won't scroll when scroll commands are issued
+/// Used for fast scrolling: instead of re-rendering all lines, scroll the region
+/// and only render new lines that appear
+pub fn setScrollRegion(self: *Display, top: usize, bottom: usize) !void {
+    try print(self, "\x1b[{d};{d}r", .{ top + 1, bottom + 1 });
+}
+
+/// Reset scrolling region to full screen
+/// CSI r
+pub fn resetScrollRegion(self: *Display) !void {
+    try write(self, "\x1b[r");
+}
+
+/// Scroll content up by n lines (Pan Down - bottom lines become visible)
+/// CSI {n} S
+/// This makes content move UP, revealing new lines at the BOTTOM
+/// Example: Scrolling down in file (Ctrl+D) → content moves up
+pub fn scrollUp(self: *Display, lines: usize) !void {
+    if (lines == 0) return;
+    try print(self, "\x1b[{d}S", .{lines});
+}
+
+/// Scroll content down by n lines (Pan Up - top lines become visible)
+/// CSI {n} T
+/// This makes content move DOWN, revealing new lines at the TOP
+/// Example: Scrolling up in file (Ctrl+U) → content moves down
+pub fn scrollDown(self: *Display, lines: usize) !void {
+    if (lines == 0) return;
+    try print(self, "\x1b[{d}T", .{lines});
+}
+
 /// Helper to write bytes to stdout
 fn write(self: *Display, bytes: []const u8) !void {
     return self.stdout.writeAll(bytes);

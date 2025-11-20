@@ -141,6 +141,7 @@ fn updateBaseLayer(
 
         if (line_num < buffer.lineCount()) {
             const line = buffer.getLine(line_num).?;
+            defer buffer.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
             const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
             else
@@ -155,7 +156,7 @@ fn updateBaseLayer(
             const remaining = line_without_newline[start_col..];
 
             // Calculate absolute byte offset in buffer for tree-sitter
-            const line_byte_offset = buffer.line_starts.items[line_num];
+            const line_byte_offset = buffer.content.byteOfLine(line_num);
             const text_byte_offset = line_byte_offset + start_col;
 
             // Render text to base layer
@@ -293,6 +294,7 @@ fn updateSelectionLayer(
         if (line_num >= visual_range.start.line and line_num <= visual_range.end.line) {
             if (line_num < buffer.lineCount()) {
                 const line = buffer.getLine(line_num).?;
+                defer buffer.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
                 const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                     line[0 .. line.len - 1]
                 else
@@ -368,6 +370,7 @@ fn updateYankLayer(
         if (line_num >= yank_highlight.start.line and line_num <= yank_highlight.end.line) {
             if (line_num < buffer.lineCount()) {
                 const line = buffer.getLine(line_num).?;
+                defer buffer.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
                 const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                     line[0 .. line.len - 1]
                 else

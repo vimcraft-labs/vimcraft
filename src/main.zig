@@ -120,12 +120,44 @@ inline fn checkJavaScriptStateChanges(editor: anytype, needs_render: *bool) void
     }
 }
 
+/// Render throttle to prevent plugin spam
+/// Limits maximum render rate to prevent plugins from freezing the editor
+/// Default: 60 FPS (16.67ms per frame)
+pub const RenderThrottle = struct {
+    max_renders_per_sec: u64 = 60,
+    last_render_time_ns: i128 = 0,
+    min_frame_time_ns: i128,
+
+    pub fn init(max_fps: u64) RenderThrottle {
+        const fps = if (max_fps > 0) max_fps else 60;
+        return .{
+            .max_renders_per_sec = fps,
+            .min_frame_time_ns = @divTrunc(1_000_000_000, @as(i128, @intCast(fps))),
+        };
+    }
+
+    pub fn shouldRender(self: *RenderThrottle) bool {
+        const now = std.time.nanoTimestamp();
+        const elapsed = now - self.last_render_time_ns;
+        if (elapsed >= self.min_frame_time_ns) {
+            self.last_render_time_ns = now;
+            return true;
+        }
+        return false;
+    }
+
+    pub fn forceRender(self: *RenderThrottle) void {
+        self.last_render_time_ns = std.time.nanoTimestamp();
+    }
+};
+
 /// Render statistics for debugging and profiling
 pub const RenderStats = struct {
     total_renders: usize = 0,
     renders_from_input: usize = 0,
     renders_from_config: usize = 0,
     renders_from_timer: usize = 0,
+    throttled_renders: usize = 0,
     loop_iterations: usize = 0,
     start_time_ms: i64 = 0,
 
@@ -142,6 +174,10 @@ pub const RenderStats = struct {
             .config => self.renders_from_config += 1,
             .timer => self.renders_from_timer += 1,
         }
+    }
+
+    pub fn recordThrottle(self: *RenderStats) void {
+        self.throttled_renders += 1;
     }
 
     pub fn getRendersPerSecond(self: *const RenderStats) f64 {
@@ -177,6 +213,15 @@ const ReloadState = struct {
         // Clear all active timers (setInterval, setTimeout) before reloading
         // This prevents duplicate timers from accumulating across reloads
         jsi_api.clearAllTimers();
+
+        // CRITICAL FIX #9: Clear all event listeners before reloading
+        // This prevents duplicate callbacks when init.js is reloaded
+        jsi_api.clearAllEventListeners();
+
+        // CRITICAL FIX #10: Clear all cached modules before reloading
+        // This ensures require() returns fresh exports (hot reload support)
+        // Without this, require() would return stale cached exports
+        jsi_api.clearAllModuleCache();
 
         // Re-execute the configuration file
         if (self.debugger_state.runtime) |runtime| {
@@ -649,6 +694,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var running = true;
     var needs_render = false;
     var render_stats = RenderStats.init();
+    var render_throttle = RenderThrottle.init(60); // 60 FPS max (protection against plugin spam)
     var event_processor = EventLoopProcessor.init(allocator);
 
     while (running) {
@@ -684,19 +730,25 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         // Handle input via TerminalBackend (all vim logic in Editor core!)
         running = try backend.handleInput(10, &needs_render);
 
-        // Render if state changed
+        // Render if state changed (with throttling to protect against plugin spam)
         if (needs_render) {
-            const render_source: RenderSource = if (reload_state.needs_reload)
-                .config
-            else if (editor.yank_highlight.active)
-                .timer
-            else
-                .input;
-            render_stats.recordRender(render_source);
+            // Check if we should render based on frame rate limit
+            if (render_throttle.shouldRender()) {
+                const render_source: RenderSource = if (reload_state.needs_reload)
+                    .config
+                else if (editor.yank_highlight.active)
+                    .timer
+                else
+                    .input;
+                render_stats.recordRender(render_source);
 
-            try backend.render();
-            needs_render = false;
-            editor.js_state_dirty = false; // Reset flag after render completes
+                try backend.render();
+                needs_render = false;
+                editor.js_state_dirty = false; // Reset flag after render completes
+            } else {
+                // Throttled: Skip this render to maintain frame rate limit
+                render_stats.recordThrottle();
+            }
         }
     }
 
@@ -989,6 +1041,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     var running = true;
     var needs_render = false;
     var render_stats = RenderStats.init();
+    var render_throttle = RenderThrottle.init(60); // 60 FPS max (protection against plugin spam)
     var event_processor = EventLoopProcessor.init(allocator);
 
     while (running) {
@@ -1024,19 +1077,25 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         // Handle input via TerminalBackend
         running = try backend.handleInput(10, &needs_render);
 
-        // Render if needed
+        // Render if needed (with throttling to protect against plugin spam)
         if (needs_render) {
-            const render_source: RenderSource = if (reload_state.needs_reload)
-                .config
-            else if (editor.yank_highlight.active)
-                .timer
-            else
-                .input;
-            render_stats.recordRender(render_source);
+            // Check if we should render based on frame rate limit
+            if (render_throttle.shouldRender()) {
+                const render_source: RenderSource = if (reload_state.needs_reload)
+                    .config
+                else if (editor.yank_highlight.active)
+                    .timer
+                else
+                    .input;
+                render_stats.recordRender(render_source);
 
-            try backend.render();
-            needs_render = false;
-            editor.js_state_dirty = false; // Reset flag after render completes
+                try backend.render();
+                needs_render = false;
+                editor.js_state_dirty = false; // Reset flag after render completes
+            } else {
+                // Throttled: Skip this render to maintain frame rate limit
+                render_stats.recordThrottle();
+            }
         }
     }
 

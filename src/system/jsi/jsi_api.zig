@@ -36,12 +36,12 @@ pub const JSIContext = struct {
 };
 
 /// Global state for cleanup
-var global_config_ctx: ?*config_api.ConfigContext = null;
-var global_motion_ctx: ?*motion_api.MotionContext = null;
-var global_keymap_ctx: ?*keymap_api.KeymapContext = null;
-var global_highlight_ctx: ?*highlight_api.HighlightContext = null;
-var global_event_emitter: ?*EventEmitter = null;
-var global_allocator: ?std.mem.Allocator = null;
+pub var global_config_ctx: ?*config_api.ConfigContext = null;
+pub var global_motion_ctx: ?*motion_api.MotionContext = null;
+pub var global_keymap_ctx: ?*keymap_api.KeymapContext = null;
+pub var global_highlight_ctx: ?*highlight_api.HighlightContext = null;
+pub var global_event_emitter: ?*EventEmitter = null;
+pub var global_allocator: ?std.mem.Allocator = null;
 
 /// Initialize JSI runtime and register all host functions
 /// editor_or_context can be either *Editor or *EditorContext - both have logger field
@@ -197,10 +197,12 @@ pub fn registerConsoleWithDebugger(runtime: *c.OVHermesRuntime, debugger_ptr: *a
 /// Clean up JSI resources (called before runtime destruction)
 pub fn deinitJSI() void {
     if (global_config_ctx) |ctx| {
-        // Clean up module cache (destroy cached Hermes values)
+        // Clean up module cache (destroy cached Hermes values AND free keys)
         var iter = ctx.module_cache.iterator();
         while (iter.next()) |entry| {
             c.hermes_value_destroy(entry.value_ptr.exports);
+            // CRITICAL FIX: Free the cache key (allocated in module_api.zig:315)
+            ctx.allocator.free(entry.key_ptr.*);
         }
         ctx.module_cache.deinit();
 
@@ -235,6 +237,35 @@ pub fn deinitJSI() void {
     // Clean up filetype context (no deinit needed, just free the struct)
     filetype_api.deinit();
     global_allocator = null;
+}
+
+/// Clear all event listeners (for config reload)
+/// This prevents duplicate callbacks when init.js is reloaded
+pub fn clearAllEventListeners() void {
+    if (global_event_emitter) |emitter| {
+        emitter.removeAll();
+    }
+}
+
+/// Clear all cached modules (for config reload)
+/// This ensures require() returns fresh exports after reload
+/// Critical for hot reload: modules are re-executed on next require()
+pub fn clearAllModuleCache() void {
+    if (global_config_ctx) |ctx| {
+        // Iterate through all cached modules
+        var iter = ctx.module_cache.iterator();
+        while (iter.next()) |entry| {
+            // Destroy Hermes value (the exports object)
+            c.hermes_value_destroy(entry.value_ptr.exports);
+
+            // Free the cache key (allocated in module_api.zig:322)
+            ctx.allocator.free(entry.key_ptr.*);
+        }
+
+        // Clear HashMap but keep it ready for reuse
+        // (unlike deinit(), this allows new modules to be cached after reload)
+        ctx.module_cache.clearAndFree();
+    }
 }
 
 // Re-export commonly used functions from modules for backwards compatibility

@@ -68,6 +68,16 @@ pub const Display = struct {
     // Only send cursor shape codes when mode changes to prevent flickering
     last_cursor_shape: enum { block, bar, underline } = .block,
 
+    // Cursor position state (prevent redundant position codes during rapid input)
+    // Only send cursor position codes when cursor actually moves
+    last_cursor_row: usize = 0,
+    last_cursor_col: usize = 0,
+
+    // Terminal capabilities (detected at runtime)
+    // Synchronized updates (DCS = 1 s ... DCS = 2 s) for flicker-free rendering
+    // Supported by: iTerm2, Alacritty, WezTerm, tmux
+    has_sync_mode: bool = true, // Assume true, gracefully degrade if not supported
+
     pub fn init(allocator: std.mem.Allocator) !Display {
         const grid = try ScreenGrid.init(allocator, 80, 24);
         const gutter_mgr = gutter.GutterManager.init(allocator);
@@ -193,6 +203,40 @@ pub const Display = struct {
     /// Reset cursor color to terminal default
     pub fn resetCursorColor(self: *Display) !void {
         return terminal_control.resetCursorColor(self);
+    }
+
+    /// Begin synchronized update (prevents terminal flickering)
+    pub fn beginSynchronizedUpdate(self: *Display) !void {
+        return terminal_control.beginSynchronizedUpdate(self);
+    }
+
+    /// End synchronized update (flush all batched output atomically)
+    pub fn endSynchronizedUpdate(self: *Display) !void {
+        return terminal_control.endSynchronizedUpdate(self);
+    }
+
+    /// Set scroll region for fast scrolling (0-indexed)
+    /// NOTE: Infrastructure ready, integration into render pipeline pending Phase 6
+    pub fn setScrollRegion(self: *Display, top: usize, bottom: usize) !void {
+        return terminal_control.setScrollRegion(self, top, bottom);
+    }
+
+    /// Reset scroll region to full screen
+    /// NOTE: Infrastructure ready, integration into render pipeline pending Phase 6
+    pub fn resetScrollRegion(self: *Display) !void {
+        return terminal_control.resetScrollRegion(self);
+    }
+
+    /// Scroll content up by n lines (for scrolling down in file)
+    /// NOTE: Infrastructure ready, integration into render pipeline pending Phase 6
+    pub fn scrollUp(self: *Display, lines: usize) !void {
+        return terminal_control.scrollUp(self, lines);
+    }
+
+    /// Scroll content down by n lines (for scrolling up in file)
+    /// NOTE: Infrastructure ready, integration into render pipeline pending Phase 6
+    pub fn scrollDown(self: *Display, lines: usize) !void {
+        return terminal_control.scrollDown(self, lines);
     }
 
     /// Configure line number display
@@ -383,6 +427,7 @@ pub const Display = struct {
         // Use the padding-aware version to account for visual padding in grid
         const cursor_display_col = if (buffer.cursor.row < buffer.lineCount()) blk: {
             const line = buffer.getLine(buffer.cursor.row) orelse break :blk buffer.cursor.col;
+            defer buffer.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
             const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
             else
@@ -399,6 +444,11 @@ pub const Display = struct {
         // PERFORMANCE: Clear displayColumnToByte cache at start of each frame
         // Cache is only valid for one frame (same line may have different content next frame)
         char_width.clearCache();
+
+        // OPTIMIZATION: Begin synchronized update to prevent flickering
+        // All terminal output will be batched until endSynchronizedUpdate()
+        // This ensures atomic screen updates with zero tearing
+        try self.beginSynchronizedUpdate();
 
         // PHASE 2.5: Multi-layer rendering pipeline (ACTIVATED!)
         // STEP 1: Update all layers from buffer state
@@ -418,13 +468,18 @@ pub const Display = struct {
         const updates = try output.diff(self.allocator);
         defer self.allocator.free(updates);
 
-        // STEP 4: Render only changed cells with optimizations
+        // STEP 4: Hide cursor during rendering to prevent flicker
+        // This prevents the terminal cursor from being visible at the wrong position
+        // while we render grid updates (cursor ends up at last written cell)
+        try self.hideCursor();
+
+        // STEP 5: Render only changed cells with optimizations
         try output_renderer.renderUpdates(self, updates);
 
-        // STEP 5: Swap buffers (current becomes previous for next frame)
+        // STEP 6: Swap buffers (current becomes previous for next frame)
         output.swapBuffers();
 
-        // Position cursor at buffer cursor location or override (add gutter offset)
+        // STEP 7: Position cursor at buffer cursor location (add gutter offset)
         // Use cursor_override if provided (for animated cursor plugins)
         const cursor_row = if (cursor_override) |override| override.row else buffer.cursor.row;
         const cursor_col_display = if (cursor_override) |override|
@@ -444,7 +499,25 @@ pub const Display = struct {
 
         const screen_col = gutter_width + screen_col_text;
         const clamped_col = @min(screen_col, self.terminal_cols - 1);
-        try self.moveCursor(screen_row, clamped_col);
+
+        // OPTIMIZATION: Only move cursor if position changed (prevent redundant escape codes)
+        // This fixes the cursor flickering bug during rapid movement (holding l/j/k/h)
+        // Without this check, we send 4-5 cursor position codes PER keystroke!
+        if (self.last_cursor_row != screen_row or self.last_cursor_col != clamped_col) {
+            try self.moveCursor(screen_row, clamped_col);
+            self.last_cursor_row = screen_row;
+            self.last_cursor_col = clamped_col;
+        }
+
+        // STEP 8: Show cursor at correct position
+        // Now the cursor is at the right location, make it visible
+        try self.showCursor();
+
+        // STEP 9: End synchronized update and flush atomically
+        // This commits all batched terminal output in a single frame
+        // Prevents flickering and tearing during rapid updates
+        try self.endSynchronizedUpdate();
+        try self.flush();
     }
 
     /// Headless render: Update compositor state WITHOUT writing to stdout
@@ -481,6 +554,7 @@ pub const Display = struct {
         // Convert cursor byte position to display column (account for wide chars like emoji)
         const cursor_display_col = if (buffer.cursor.row < buffer.lineCount()) blk: {
             const line = buffer.getLine(buffer.cursor.row) orelse break :blk buffer.cursor.col;
+            defer buffer.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
             const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
             else
@@ -564,6 +638,11 @@ pub const Display = struct {
         const clamped_col = @min(screen_col, self.terminal_cols - 1);
 
         // Just move cursor - no grid update, no diff
-        try self.moveCursor(screen_row, clamped_col);
+        // Also update tracking to prevent redundant moves in next full render
+        if (self.last_cursor_row != screen_row or self.last_cursor_col != clamped_col) {
+            try self.moveCursor(screen_row, clamped_col);
+            self.last_cursor_row = screen_row;
+            self.last_cursor_col = clamped_col;
+        }
     }
 };

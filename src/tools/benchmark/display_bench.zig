@@ -35,12 +35,12 @@ fn benchRender(
     display: *Display,
     editor: *MockEditor,
     status: []const u8,
-    config: *highlights.HighlightConfig,
+    cursorline_enabled: bool,
     visual_state: *VisualState,
     yank_highlight: *YankHighlight,
 ) !void {
     const listchars = ListChars{};
-    try display.render(editor, status, config, visual_state, yank_highlight, null, false, &listchars);
+    try display.render(editor, status, cursorline_enabled, visual_state, yank_highlight, null, false, &listchars);
 }
 
 /// Run display rendering benchmarks
@@ -112,7 +112,7 @@ pub fn runDisplayBenchmarks(allocator: std.mem.Allocator) !void {
             "Render small file (50 lines)",
             500,
             benchRender,
-            .{ &display, &editor, status, &config, &visual_state, &yank_highlight },
+            .{ &display, &editor, status, false, &visual_state, &yank_highlight },
         );
         try suite.add(result);
     }
@@ -130,7 +130,7 @@ pub fn runDisplayBenchmarks(allocator: std.mem.Allocator) !void {
             "Render medium file (500 lines)",
             200,
             benchRender,
-            .{ &display, &editor, status, &config, &visual_state, &yank_highlight },
+            .{ &display, &editor, status, false, &visual_state, &yank_highlight },
         );
         try suite.add(result);
     }
@@ -148,7 +148,7 @@ pub fn runDisplayBenchmarks(allocator: std.mem.Allocator) !void {
             "Render large file (5000 lines)",
             100,
             benchRender,
-            .{ &display, &editor, status, &config, &visual_state, &yank_highlight },
+            .{ &display, &editor, status, false, &visual_state, &yank_highlight },
         );
         try suite.add(result);
     }
@@ -173,7 +173,7 @@ pub fn runDisplayBenchmarks(allocator: std.mem.Allocator) !void {
             "Render with visual selection",
             200,
             benchRender,
-            .{ &display, &editor, status, &config, &visual_state, &yank_highlight },
+            .{ &display, &editor, status, false, &visual_state, &yank_highlight },
         );
         try suite.add(result);
 
@@ -199,7 +199,7 @@ pub fn runDisplayBenchmarks(allocator: std.mem.Allocator) !void {
             // Simulate scrolling by changing viewport
             display.viewport_top = scroll_test_count * 10;
             editor.buffer.cursor.row = display.viewport_top + 10;
-            try display.render(&editor, status, &config, &visual_state, &yank_highlight, null, false, &listchars);
+            try display.render(&editor, status, false, &visual_state, &yank_highlight, null, false, &listchars);
         }
 
         const end = std.time.nanoTimestamp();

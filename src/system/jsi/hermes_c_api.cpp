@@ -30,7 +30,12 @@ struct OVHermesRuntime {
     std::unique_ptr<facebook::hermes::HermesRuntime> runtime;
     std::string last_exception_message;
 
-    OVHermesRuntime() = default;
+    // Error throwing support (Phase 4)
+    bool pending_throw;          // True if host function wants to throw
+    std::string pending_throw_message;  // Error message
+    std::string pending_throw_type;     // "Error", "TypeError", "RangeError", etc.
+
+    OVHermesRuntime() : pending_throw(false), pending_throw_type("Error") {}
     ~OVHermesRuntime() = default;
 };
 
@@ -253,6 +258,24 @@ const char* hermes_get_exception_message(OVHermesRuntime* runtime) {
     return runtime->last_exception_message.c_str();
 }
 
+void hermes_throw_error(OVHermesRuntime* runtime, const char* message) {
+    if (!runtime || !message) return;
+
+    // Set pending throw flag and message
+    runtime->pending_throw = true;
+    runtime->pending_throw_message = std::string(message);
+    runtime->pending_throw_type = "Error";
+}
+
+void hermes_throw_type_error(OVHermesRuntime* runtime, const char* message) {
+    if (!runtime || !message) return;
+
+    // Set pending throw flag and message
+    runtime->pending_throw = true;
+    runtime->pending_throw_message = std::string(message);
+    runtime->pending_throw_type = "TypeError";
+}
+
 //
 // Host Function Registration
 //
@@ -312,6 +335,30 @@ void hermes_register_host_function(
                 // Clean up arg wrappers
                 for (auto* wrapper : arg_wrappers) {
                     delete wrapper;
+                }
+
+                // Check if callback requested throw (Phase 4 - Error Throwing)
+                if (ctx.runtime->pending_throw) {
+                    ctx.runtime->pending_throw = false;  // Reset flag
+
+                    try {
+                        // Get Error constructor (Error, TypeError, etc.)
+                        auto ErrorCtor = rt.global().getPropertyAsFunction(rt,
+                            ctx.runtime->pending_throw_type.c_str());
+
+                        // Create Error object with message
+                        auto error = ErrorCtor.callAsConstructor(rt,
+                            String::createFromUtf8(rt, ctx.runtime->pending_throw_message));
+
+                        // Throw JSError (propagates to JavaScript)
+                        throw JSError(rt, std::move(error));
+                    } catch (const JSError&) {
+                        // Re-throw JSError
+                        throw;
+                    } catch (...) {
+                        // Fallback: throw generic error if constructor failed
+                        throw JSError(rt, String::createFromUtf8(rt, ctx.runtime->pending_throw_message));
+                    }
                 }
 
                 // Return result
@@ -522,6 +569,30 @@ OVHermesValue* hermes_create_function(
                 // Clean up arg wrappers
                 for (auto* wrapper : arg_wrappers) {
                     delete wrapper;
+                }
+
+                // Check if callback requested throw (Phase 4 - Error Throwing)
+                if (ctx.runtime->pending_throw) {
+                    ctx.runtime->pending_throw = false;  // Reset flag
+
+                    try {
+                        // Get Error constructor (Error, TypeError, etc.)
+                        auto ErrorCtor = rt.global().getPropertyAsFunction(rt,
+                            ctx.runtime->pending_throw_type.c_str());
+
+                        // Create Error object with message
+                        auto error = ErrorCtor.callAsConstructor(rt,
+                            String::createFromUtf8(rt, ctx.runtime->pending_throw_message));
+
+                        // Throw JSError (propagates to JavaScript)
+                        throw JSError(rt, std::move(error));
+                    } catch (const JSError&) {
+                        // Re-throw JSError
+                        throw;
+                    } catch (...) {
+                        // Fallback: throw generic error if constructor failed
+                        throw JSError(rt, String::createFromUtf8(rt, ctx.runtime->pending_throw_message));
+                    }
                 }
 
                 // Return result

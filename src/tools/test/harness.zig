@@ -120,10 +120,10 @@ pub const TestHarness = struct {
         if (input.len == 1) {
             const char = input[0];
             switch (char) {
-                'h' => movement.moveLeft(self.buffer),
-                'j' => movement.moveDown(self.buffer),
-                'k' => movement.moveUp(self.buffer),
-                'l' => movement.moveRight(self.buffer),
+                'h' => _ = movement.moveLeft(self.buffer),
+                'j' => _ = movement.moveDown(self.buffer),
+                'k' => _ = movement.moveUp(self.buffer),
+                'l' => _ = movement.moveRight(self.buffer),
                 '0' => movement.moveToLineStart(self.buffer),
                 '$' => movement.moveToLineEnd(self.buffer),
                 'w' => movement.moveWordForward(self.buffer),
@@ -136,7 +136,7 @@ pub const TestHarness = struct {
                 'u' => try self.buffer.undo(),
                 'i' => self.mode_manager.enterInsert(),
                 'a' => {
-                    movement.moveRight(self.buffer);
+                    _ = movement.moveRight(self.buffer);
                     self.mode_manager.enterInsert();
                 },
                 'A' => {
@@ -193,6 +193,7 @@ pub const TestHarness = struct {
         // Show each line with line numbers
         for (0..self.buffer.lineCount()) |i| {
             const line = self.buffer.getLine(i).?;
+            defer self.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
             const line_clean = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
             else
@@ -223,6 +224,7 @@ pub const TestHarness = struct {
 
         for (0..self.buffer.lineCount()) |i| {
             const line = self.buffer.getLine(i).?;
+            defer self.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
             const line_clean = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
             else
@@ -289,6 +291,7 @@ pub const TestHarness = struct {
             try self.print("\n❌ ASSERTION FAILED: Line {} does not exist\n", .{line_num});
             return error.AssertionFailed;
         };
+        defer self.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
 
         const line_clean = if (line.len > 0 and line[line.len - 1] == '\n')
             line[0 .. line.len - 1]

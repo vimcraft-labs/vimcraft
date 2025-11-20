@@ -44,34 +44,31 @@ fn deleteCharWise(buffer: *Buffer, start: Position, end: Position) !void {
     const cursor_before = buffer.cursor;
 
     // Calculate byte offsets
-    const start_offset = buffer.line_starts.items[start.line] + start.col;
+    const start_offset = buffer.content.byteOfLine(start.line) + start.col;
     var end_offset: usize = undefined;
 
-    if (end.line >= buffer.line_starts.items.len) {
-        end_offset = buffer.content.items.len;
-    } else if (end.line + 1 < buffer.line_starts.items.len) {
-        end_offset = buffer.line_starts.items[end.line] + end.col + 1; // +1 for inclusive
+    if (end.line >= buffer.lineCount()) {
+        end_offset = buffer.content.len();
+    } else if (end.line + 1 < buffer.lineCount()) {
+        end_offset = buffer.content.byteOfLine(end.line) + end.col + 1; // +1 for inclusive
     } else {
-        end_offset = @min(buffer.line_starts.items[end.line] + end.col + 1, buffer.content.items.len);
+        end_offset = @min(buffer.content.byteOfLine(end.line) + end.col + 1, buffer.content.len());
     }
 
     // Ensure end_offset doesn't exceed content length
-    end_offset = @min(end_offset, buffer.content.items.len);
+    end_offset = @min(end_offset, buffer.content.len());
 
     if (start_offset >= end_offset) return; // Nothing to delete
 
-    // Save deleted text for undo
-    const deleted_text = try buffer.allocator.dupe(u8, buffer.content.items[start_offset..end_offset]);
+    // Save deleted text for undo (extract from Rope)
+    var deleted_rope = try buffer.content.slice(start_offset, end_offset);
+    defer deleted_rope.deinit();
+    const deleted_text = try deleted_rope.toString();
 
-    // Delete the range
-    var i: usize = end_offset;
-    while (i > start_offset) {
-        i -= 1;
-        _ = buffer.content.orderedRemove(start_offset);
-    }
+    // Delete the range using Rope (automatic line tracking!)
+    try buffer.content.delete(start_offset, end_offset);
 
-    // Rebuild line index
-    try buffer.buildLineIndex();
+    // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
     // Position cursor at start of deletion
     buffer.cursor = Cursor{
@@ -109,26 +106,23 @@ fn deleteLineWise(buffer: *Buffer, start_line: usize, end_line: usize) !void {
     const cursor_before = buffer.cursor;
 
     // Calculate byte offsets for entire lines
-    const start_offset = buffer.line_starts.items[start_line];
-    const end_offset = if (end_line + 1 < buffer.line_starts.items.len)
-        buffer.line_starts.items[end_line + 1]
+    const start_offset = buffer.content.byteOfLine(start_line);
+    const end_offset = if (end_line + 1 < buffer.lineCount())
+        buffer.content.byteOfLine(end_line + 1)
     else
-        buffer.content.items.len;
+        buffer.content.len();
 
     if (start_offset >= end_offset) return;
 
-    // Save deleted text for undo
-    const deleted_text = try buffer.allocator.dupe(u8, buffer.content.items[start_offset..end_offset]);
+    // Save deleted text for undo (extract from Rope)
+    var deleted_rope = try buffer.content.slice(start_offset, end_offset);
+    defer deleted_rope.deinit();
+    const deleted_text = try deleted_rope.toString();
 
-    // Delete the lines
-    var i: usize = end_offset;
-    while (i > start_offset) {
-        i -= 1;
-        _ = buffer.content.orderedRemove(start_offset);
-    }
+    // Delete the lines using Rope (automatic line tracking!)
+    try buffer.content.delete(start_offset, end_offset);
 
-    // Rebuild line index
-    try buffer.buildLineIndex();
+    // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
     // Position cursor at start of deletion (or previous line if we deleted last line)
     buffer.cursor = Cursor{
@@ -160,31 +154,40 @@ fn deleteBlockWise(buffer: *Buffer, start: Position, end: Position) !void {
     const start_col = @min(start.col, end.col);
     const end_col = @max(start.col, end.col);
 
-    // Delete from each line
-    var line_num = start.line;
-    while (line_num <= end.line) : (line_num += 1) {
-        if (line_num >= buffer.lineCount()) break;
+    // Delete from each line (from bottom to top to preserve offsets)
+    var line_num: usize = @min(end.line, buffer.lineCount() - 1);
+    while (true) {
+        if (line_num >= buffer.lineCount()) {
+            if (line_num == 0) break;
+            line_num -= 1;
+            continue;
+        }
 
-        const line = buffer.getLine(line_num) orelse continue;
-        const line_start_offset = buffer.line_starts.items[line_num];
+        const line = buffer.getLine(line_num) orelse {
+            if (line_num == 0 or line_num < start.line) break;
+            line_num -= 1;
+            continue;
+        };
+        defer buffer.allocator.free(line); // getLine() returns owned memory
+
+        const line_start_offset = buffer.content.byteOfLine(line_num);
 
         // Calculate actual deletion range on this line
         const actual_start = @min(start_col, line.len);
         const actual_end = @min(end_col + 1, line.len); // +1 for inclusive
 
-        if (actual_start >= actual_end) continue;
-
-        // Delete the segment
-        const delete_offset = line_start_offset + actual_start;
-        const delete_count = actual_end - actual_start;
-
-        for (0..delete_count) |_| {
-            _ = buffer.content.orderedRemove(delete_offset);
+        if (actual_start < actual_end) {
+            // Delete the segment using Rope (automatic line tracking!)
+            const delete_offset = line_start_offset + actual_start;
+            const delete_end = line_start_offset + actual_end;
+            try buffer.content.delete(delete_offset, delete_end);
         }
+
+        if (line_num == 0 or line_num < start.line) break;
+        line_num -= 1;
     }
 
-    // Rebuild line index
-    try buffer.buildLineIndex();
+    // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
     // Position cursor at start of block
     buffer.cursor = Cursor{
@@ -257,6 +260,7 @@ test "visual_ops: delete single line character-wise" {
 
     // Check result: "Hello \n"
     const line = buffer.getLine(0).?;
+    defer allocator.free(line); // getLine() returns owned memory
     try std.testing.expectEqualStrings("Hello \n", line);
 
     // Check cursor is at start of deletion (col 6)
@@ -297,6 +301,7 @@ test "visual_ops: delete line-wise" {
     // Check result: "Line 3\n"
     try std.testing.expectEqual(@as(usize, 1), buffer.lineCount());
     const line = buffer.getLine(0).?;
+    defer allocator.free(line); // getLine() returns owned memory
     try std.testing.expectEqualStrings("Line 3\n", line);
 
     // Check cursor at start of remaining line
@@ -337,6 +342,7 @@ test "visual_ops: change character-wise enters insert mode" {
 
     // Check content deleted
     const line = buffer.getLine(0).?;
+    defer allocator.free(line); // getLine() returns owned memory
     try std.testing.expectEqualStrings("Hello \n", line);
 
     // Check cursor positioned for insertion

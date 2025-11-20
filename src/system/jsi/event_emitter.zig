@@ -48,16 +48,28 @@ pub const EventEmitter = struct {
             return error.NotAFunction;
         }
 
+        // CRITICAL FIX #6: Copy event name to owned memory
+        // event_name comes from hermes_value_get_string() which uses a SHARED buffer
+        // that gets overwritten on next call. HashMap doesn't own keys, so we must allocate.
+        const owned_key = try self.allocator.dupe(u8, event_name);
+        errdefer self.allocator.free(owned_key);
+
         // Get or create callback list for this event
-        const entry = try self.callbacks.getOrPut(event_name);
+        const entry = try self.callbacks.getOrPut(owned_key);
         if (!entry.found_existing) {
             // First listener for this event - create new list
             entry.value_ptr.* = .empty;
+        } else {
+            // Key already exists in HashMap, free our duplicate
+            self.allocator.free(owned_key);
         }
 
         // Clone callback to keep reference alive
         // (JavaScript GC won't collect it while we hold the reference)
         const callback_clone = c.hermes_value_clone(self.runtime, callback) orelse return error.CloneFailed;
+        // CRITICAL FIX #8a: If append fails, must destroy cloned value to prevent leak
+        errdefer c.hermes_value_destroy(callback_clone);
+
         try entry.value_ptr.append(self.allocator, callback_clone);
     }
 
@@ -69,26 +81,38 @@ pub const EventEmitter = struct {
     pub fn off(self: *Self, event_name: []const u8, callback: *c.OVHermesValue) !void {
         _ = callback; // TODO: Use for comparison when C API supports it
 
-        const list = self.callbacks.getPtr(event_name) orelse return; // No listeners for this event
+        // CRITICAL FIX #8b: Must remove entire entry from HashMap and free key
+        // Previous code cleared callbacks but left empty ArrayList + leaked key
+        if (self.callbacks.fetchRemove(event_name)) |kv| {
+            // Free callbacks
+            for (kv.value.items) |cb| {
+                c.hermes_value_destroy(cb);
+            }
+            // Free ArrayList
+            var list = kv.value;
+            list.clearAndFree(self.allocator);
 
-        // TODO: Find and remove only matching callback
-        // For now, remove all callbacks for this event
-        for (list.items) |cb| {
-            c.hermes_value_destroy(cb);
+            // Free owned key (allocated in on())
+            self.allocator.free(kv.key);
         }
-        list.clearAndFree(self.allocator);
     }
 
     /// Remove all callbacks for an event
     /// JavaScript: vim.removeAllListeners('BufEnter')
     pub fn removeAllListeners(self: *Self, event_name: []const u8) void {
-        const list = self.callbacks.getPtr(event_name) orelse return;
+        // CRITICAL FIX #6: Must fetch key before removing to free it
+        if (self.callbacks.fetchRemove(event_name)) |kv| {
+            // Free callbacks
+            for (kv.value.items) |callback| {
+                c.hermes_value_destroy(callback);
+            }
+            // Copy items to free them (kv.value is const)
+            var list = kv.value;
+            list.clearAndFree(self.allocator);
 
-        for (list.items) |callback| {
-            c.hermes_value_destroy(callback);
+            // Free owned key (allocated in on())
+            self.allocator.free(kv.key);
         }
-        list.clearAndFree(self.allocator);
-        _ = self.callbacks.remove(event_name);
     }
 
     /// Emit an event with arguments
@@ -149,16 +173,19 @@ pub const EventEmitter = struct {
     /// Remove all callbacks for all events
     /// Called on config reload to clean up old listeners
     pub fn removeAll(self: *Self) void {
-        var iter = self.callbacks.valueIterator();
-        while (iter.next()) |list| {
+        var iter = self.callbacks.iterator();
+        while (iter.next()) |entry| {
             // Destroy Hermes values (callbacks)
-            for (list.items) |callback| {
+            for (entry.value_ptr.items) |callback| {
                 c.hermes_value_destroy(callback);
             }
-            // Clear the ArrayList items, but don't deinit (HashMap owns it)
-            list.clearAndFree(self.allocator);
+            // Clear the ArrayList items
+            entry.value_ptr.clearAndFree(self.allocator);
+
+            // CRITICAL FIX #6: Free owned key (allocated in on())
+            self.allocator.free(entry.key_ptr.*);
         }
-        // Now clear the HashMap (will free the ArrayLists)
+        // Now clear the HashMap (ArrayLists already freed above)
         self.callbacks.clearAndFree();
     }
 

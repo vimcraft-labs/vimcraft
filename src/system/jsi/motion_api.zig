@@ -40,7 +40,7 @@ pub export fn moveLeft(
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
 
-    movement.moveLeft(ctx.buffer);
+    _ = movement.moveLeft(ctx.buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -57,7 +57,7 @@ pub export fn moveRight(
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
 
-    movement.moveRight(ctx.buffer);
+    _ = movement.moveRight(ctx.buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -74,7 +74,7 @@ pub export fn moveUp(
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
 
-    movement.moveUp(ctx.buffer);
+    _ = movement.moveUp(ctx.buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -91,7 +91,7 @@ pub export fn moveDown(
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
 
-    movement.moveDown(ctx.buffer);
+    _ = movement.moveDown(ctx.buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }

@@ -397,6 +397,7 @@ pub const Server = struct {
 
                 for (range.start.line..range.end.line + 1) |line_idx| {
                     const line = self.editor.buffer.getLine(line_idx) orelse continue;
+                    defer self.allocator.free(line);
                     const owned = try self.allocator.dupe(u8, line);
                     try text_lines.append(self.allocator, owned);
                 }
@@ -797,7 +798,7 @@ pub const Server = struct {
                 return .{ .buffer_info = .{
                     .modified = self.editor.buffer.modified,
                     .filepath = if (self.editor.buffer.filepath) |fp| try self.allocator.dupe(u8, fp) else null,
-                    .size = self.editor.buffer.content.items.len,
+                    .size = self.editor.buffer.content.len(),
                     .line_count = self.editor.buffer.lineCount(),
                 } };
             },
@@ -858,39 +859,35 @@ pub const Server = struct {
                     }
                 }
 
-                return .{ .file_saved = .{ .bytes_written = self.editor.buffer.content.items.len } };
+                return .{ .file_saved = .{ .bytes_written = self.editor.buffer.content.len() } };
             },
 
             .set_buffer => {
                 const lines = cmd.args.set_buffer.lines;
                 const cursor_pos = cmd.args.set_buffer.cursor;
+                const Rope = @import("../../editor/buffer/rope.zig").Rope;
 
-                // Use transactional pattern for safe buffer replacement
-                var new_content = std.ArrayList(u8).empty;
-                errdefer new_content.deinit(self.editor.buffer.allocator);
+                // Build new buffer content string (temporarily in ArrayList)
+                var content_builder = std.ArrayList(u8).empty;
+                errdefer content_builder.deinit(self.editor.buffer.allocator);
 
                 // Build new buffer content (Vim buffers always end lines with \n)
                 for (lines) |line| {
-                    try new_content.appendSlice(self.editor.buffer.allocator, line);
+                    try content_builder.appendSlice(self.editor.buffer.allocator, line);
                     if (line.len == 0 or line[line.len - 1] != '\n') {
-                        try new_content.append(self.editor.buffer.allocator, '\n');
+                        try content_builder.append(self.editor.buffer.allocator, '\n');
                     }
                 }
 
-                // Save old content for rollback
-                var old_content = self.editor.buffer.content;
+                // Create new Rope from content string
+                const new_content = try Rope.fromString(self.editor.buffer.allocator, content_builder.items);
+                content_builder.deinit(self.editor.buffer.allocator); // Free temporary builder
+
+                // Replace buffer content
+                self.editor.buffer.content.deinit();
                 self.editor.buffer.content = new_content;
-                self.editor.buffer.line_starts.clearRetainingCapacity();
 
-                // Rebuild line index - if this fails, restore old content
-                self.editor.buffer.buildLineIndex() catch |err| {
-                    var corrupted = self.editor.buffer.content;
-                    self.editor.buffer.content = old_content;
-                    corrupted.deinit(self.editor.buffer.allocator);
-                    return err;
-                };
-
-                // Success - now safe to clear undo/redo and free old content
+                // Clear undo/redo stacks
                 for (self.editor.buffer.undo_stack.items) |*change| {
                     change.deinit(self.editor.buffer.allocator);
                 }
@@ -900,9 +897,6 @@ pub const Server = struct {
                     change.deinit(self.editor.buffer.allocator);
                 }
                 self.editor.buffer.redo_stack.clearRetainingCapacity();
-
-                // Free old content
-                old_content.deinit(self.editor.buffer.allocator);
 
                 // Set cursor position if specified
                 if (cursor_pos) |pos| {
@@ -932,6 +926,7 @@ pub const Server = struct {
                 }
 
                 const line = self.editor.buffer.getLine(pos.line) orelse return error.InvalidLine;
+                defer self.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
                 const line_len = if (line.len > 0 and line[line.len - 1] == '\n')
                     line.len - 1
                 else
@@ -1061,6 +1056,34 @@ pub const Server = struct {
                     .truncated = truncated,
                     .bytes_used = bytes_used,
                 } };
+            },
+
+            .get_options => {
+                const ext_ctx = handlers.ExtendedHandlerContext{
+                    .base = handlers.HandlerContext{
+                        .allocator = self.allocator,
+                        .buffer = &self.editor.buffer,
+                        .mode_manager = &self.editor.mode_manager,
+                        .visual_state = &self.editor.visual_state,
+                        .display = &self.editor.display,
+                    },
+                    .editor_context = self.editor,
+                };
+                return try handlers.handleGetOptions(ext_ctx, cmd.args.get_options.names);
+            },
+
+            .get_module_cache => {
+                const ext_ctx = handlers.ExtendedHandlerContext{
+                    .base = handlers.HandlerContext{
+                        .allocator = self.allocator,
+                        .buffer = &self.editor.buffer,
+                        .mode_manager = &self.editor.mode_manager,
+                        .visual_state = &self.editor.visual_state,
+                        .display = &self.editor.display,
+                    },
+                    .editor_context = self.editor,
+                };
+                return try handlers.handleGetModuleCache(ext_ctx);
             },
 
             // Commands - execute keys in the editor
@@ -1312,6 +1335,7 @@ pub const Server = struct {
                         .diff = diff,
                     } };
                 };
+                defer self.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
 
                 // Remove trailing newline if present
                 const actual_text = if (line.len > 0 and line[line.len - 1] == '\n')

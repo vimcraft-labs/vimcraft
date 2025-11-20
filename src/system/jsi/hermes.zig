@@ -239,13 +239,15 @@ export fn nvimBufferGetLine(
     // Get line from Zig buffer
     if (editor.getBuffer(buffer_id)) |buffer| {
         if (buffer.getLine(line)) |text| {
+            defer editor.allocator.free(text); // ✅ FIX: Free owned memory from getLine()
+
             std.debug.print("[Native] Read line {d} from buffer {d}: '{s}'\n", .{
                 line,
                 buffer_id,
                 text,
             });
 
-            // Return string to JavaScript (zero-copy pointer!)
+            // Return string to JavaScript (creates a COPY, so we can free `text`)
             return c.hermes_value_create_string(runtime, text.ptr, text.len);
         }
     }

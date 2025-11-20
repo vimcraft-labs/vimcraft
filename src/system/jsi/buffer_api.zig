@@ -64,18 +64,42 @@ pub export fn getBufferContent(
     const rt = runtime orelse return null;
     const buffer: *Buffer = @ptrCast(@alignCast(context.?));
 
-    // Get current buffer content
-    const content = buffer.content.items;
+    // Get current buffer content as contiguous string (Rope → owned slice)
+    // NOTE: This allocates memory! We need a finalizer to free it.
+    const content = buffer.content.toString() catch return c.hermes_value_create_null(rt);
 
-    // Return External ArrayBuffer (zero-copy!)
-    // Finalizer is NULL because buffer owns the memory
-    // JavaScript gets read-only view into native ArrayList
+    // Create finalizer context (allocator to free the string)
+    const FreeContext = struct {
+        slice: []u8,
+        allocator: std.mem.Allocator,
+    };
+    const free_ctx = buffer.allocator.create(FreeContext) catch {
+        buffer.allocator.free(content);
+        return c.hermes_value_create_null(rt);
+    };
+    free_ctx.* = .{
+        .slice = content,
+        .allocator = buffer.allocator,
+    };
+
+    // Finalizer function
+    const finalizer = struct {
+        fn free(data: ?*anyopaque, ctx: ?*anyopaque) callconv(.c) void {
+            _ = data;
+            const free_context: *FreeContext = @ptrCast(@alignCast(ctx.?));
+            free_context.allocator.free(free_context.slice);
+            free_context.allocator.destroy(free_context);
+        }
+    }.free;
+
+    // Return External ArrayBuffer with finalizer
+    // Finalizer will be called when JavaScript GC collects the ArrayBuffer
     return c.hermes_value_create_arraybuffer_external(
         rt,
         @ptrCast(@constCast(content.ptr)),
         content.len,
-        null, // No finalizer - buffer owns the memory
-        null, // No finalizer context
+        finalizer,
+        @ptrCast(free_ctx),
     );
 }
 
@@ -121,16 +145,40 @@ pub export fn getLineContent(
     const line_num_val = args[0] orelse return c.hermes_value_create_null(rt);
     const line_num = @as(usize, @intFromFloat(c.hermes_value_get_number(line_num_val)));
 
-    // Get line slice
+    // Get line slice (now returns OWNED memory after Rope migration)
     const line = buffer.getLine(line_num) orelse return c.hermes_value_create_null(rt);
 
-    // Return External ArrayBuffer (zero-copy!)
+    // ✅ FIX: Create finalizer context (allocator to free the line)
+    const FreeContext = struct {
+        slice: []const u8,
+        allocator: std.mem.Allocator,
+    };
+    const free_ctx = buffer.allocator.create(FreeContext) catch {
+        buffer.allocator.free(line); // Clean up on allocation failure
+        return c.hermes_value_create_null(rt);
+    };
+    free_ctx.* = .{
+        .slice = line,
+        .allocator = buffer.allocator,
+    };
+
+    // ✅ FIX: Finalizer function to free line when JS GC collects ArrayBuffer
+    const finalizer = struct {
+        fn free(data: ?*anyopaque, ctx: ?*anyopaque) callconv(.c) void {
+            _ = data;
+            const free_context: *FreeContext = @ptrCast(@alignCast(ctx.?));
+            free_context.allocator.free(free_context.slice);
+            free_context.allocator.destroy(free_context);
+        }
+    }.free;
+
+    // Return External ArrayBuffer WITH finalizer (memory will be freed by JS GC)
     return c.hermes_value_create_arraybuffer_external(
         rt,
         @ptrCast(@constCast(line.ptr)),
         line.len,
-        null, // No finalizer - buffer owns the memory
-        null, // No finalizer context
+        finalizer, // ✅ FIX: Finalizer added
+        @ptrCast(free_ctx), // ✅ FIX: Context added
     );
 }
 
@@ -148,7 +196,7 @@ pub export fn getBufferLength(
     const rt = runtime orelse return null;
     const buffer: *Buffer = @ptrCast(@alignCast(context.?));
 
-    return c.hermes_value_create_number(rt, @floatFromInt(buffer.content.items.len));
+    return c.hermes_value_create_number(rt, @floatFromInt(buffer.content.len()));
 }
 
 /// vim.buffer.getLineCount() -> number

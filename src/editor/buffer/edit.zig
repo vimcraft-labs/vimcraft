@@ -18,8 +18,8 @@ pub const Range = struct {
 
     /// Create a range from two cursor positions
     pub fn fromCursors(buffer: *const Buffer, start_cursor: Cursor, end_cursor: Cursor) Range {
-        const start_offset = buffer.line_starts.items[start_cursor.row] + start_cursor.col;
-        const end_offset = buffer.line_starts.items[end_cursor.row] + end_cursor.col;
+        const start_offset = buffer.content.byteOfLine(start_cursor.row) + start_cursor.col;
+        const end_offset = buffer.content.byteOfLine(end_cursor.row) + end_cursor.col;
 
         return .{
             .start = @min(start_offset, end_offset),
@@ -39,15 +39,15 @@ pub const Range = struct {
     /// Create a range for current line (includes newline)
     pub fn forLine(buffer: *const Buffer, line_num: usize) Range {
         if (line_num >= buffer.lineCount()) {
-            const content_len = buffer.content.items.len;
+            const content_len = buffer.content.len();
             return .{ .start = content_len, .end = content_len };
         }
 
-        const line_start = buffer.line_starts.items[line_num];
-        const line_end = if (line_num + 1 < buffer.line_starts.items.len)
-            buffer.line_starts.items[line_num + 1]
+        const line_start = buffer.content.byteOfLine(line_num);
+        const line_end = if (line_num + 1 < buffer.lineCount())
+            buffer.content.byteOfLine(line_num + 1)
         else
-            buffer.content.items.len;
+            buffer.content.len();
 
         return .{
             .start = line_start,
@@ -56,10 +56,16 @@ pub const Range = struct {
     }
 
     /// Get the text content for this range
-    pub fn getText(self: Range, buffer: *const Buffer) []const u8 {
-        const start = @min(self.start, buffer.content.items.len);
-        const end = @min(self.end, buffer.content.items.len);
-        return buffer.content.items[start..end];
+    /// Returns owned memory (caller must free with buffer's allocator)
+    pub fn getText(self: Range, buffer: *const Buffer) ![]const u8 {
+        const start = @min(self.start, buffer.content.len());
+        const end = @min(self.end, buffer.content.len());
+
+        // Extract text from Rope
+        var text_rope = try buffer.content.slice(start, end);
+        defer text_rope.deinit();
+
+        return try text_rope.toString();
     }
 
     /// Check if range is empty
@@ -109,18 +115,13 @@ pub const EditOps = struct {
 
         const cursor_before = buffer.cursor;
 
-        // Save deleted text
-        const deleted_text = try self.allocator.dupe(u8, range.getText(buffer));
+        // Save deleted text (getText now returns owned memory)
+        const deleted_text = try range.getText(buffer);
 
-        // Delete the text
-        var i: usize = range.end;
-        while (i > range.start) {
-            i -= 1;
-            _ = buffer.content.orderedRemove(range.start);
-        }
+        // Delete the text using Rope (automatic line tracking - O(log n)!)
+        try buffer.content.delete(range.start, range.end);
 
-        // Rebuild line index (offsets have shifted)
-        try buffer.buildLineIndex();
+        // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
         // Determine cursor position after delete
         const cursor_after = try self.calculateCursorAfterDelete(buffer, range, motion_type, cursor_before);
@@ -165,11 +166,18 @@ pub const EditOps = struct {
                 var cursor = cursor_before;
 
                 // Find which line contains the deletion point
-                for (buffer.line_starts.items, 0..) |line_start, line_num| {
-                    if (line_start <= range.start) {
+                // With Rope, we can iterate through lines to find which contains the offset
+                var line_num: usize = 0;
+                while (line_num < buffer.lineCount()) : (line_num += 1) {
+                    const line_start = buffer.content.byteOfLine(line_num);
+                    const line_end = if (line_num + 1 < buffer.lineCount())
+                        buffer.content.byteOfLine(line_num + 1)
+                    else
+                        buffer.content.len();
+
+                    if (range.start >= line_start and range.start < line_end) {
                         cursor.row = line_num;
                         cursor.col = range.start - line_start;
-                    } else {
                         break;
                     }
                 }
@@ -193,10 +201,11 @@ pub const EditOps = struct {
 
                 // Find which line the deletion started at
                 var line_num: usize = 0;
-                for (buffer.line_starts.items, 0..) |line_start, i| {
-                    if (line_start <= range.start) {
-                        line_num = i;
-                    } else {
+                while (line_num < buffer.lineCount()) : (line_num += 1) {
+                    const line_start = buffer.content.byteOfLine(line_num);
+                    if (line_start > range.start) {
+                        // We've passed the deletion point, so it was on the previous line
+                        if (line_num > 0) line_num -= 1;
                         break;
                     }
                 }
@@ -242,11 +251,11 @@ pub const EditOps = struct {
         }
 
         // Calculate range spanning multiple lines
-        const range_start = buffer.line_starts.items[start_line];
-        const range_end = if (end_line < buffer.line_starts.items.len)
-            buffer.line_starts.items[end_line]
+        const range_start = buffer.content.byteOfLine(start_line);
+        const range_end = if (end_line < buffer.lineCount())
+            buffer.content.byteOfLine(end_line)
         else
-            buffer.content.items.len;
+            buffer.content.len();
 
         const range = Range{ .start = range_start, .end = range_end };
         return try self.deleteRange(buffer, range, .line);
@@ -260,6 +269,7 @@ pub const EditOps = struct {
                 .cursor_after = buffer.cursor,
             };
         };
+        defer buffer.allocator.free(line); // getLine() returns owned memory
 
         const start_offset = buffer.getCursorOffset();
         var col = buffer.cursor.col;
@@ -281,7 +291,7 @@ pub const EditOps = struct {
             }
         }
 
-        const end_offset = buffer.line_starts.items[buffer.cursor.row] + col;
+        const end_offset = buffer.content.byteOfLine(buffer.cursor.row) + col;
         const range = Range{ .start = start_offset, .end = end_offset };
 
         return try self.deleteRange(buffer, range, .char);
@@ -295,9 +305,10 @@ pub const EditOps = struct {
                 .cursor_after = buffer.cursor,
             };
         };
+        defer buffer.allocator.free(line); // getLine() returns owned memory
 
         const start_offset = buffer.getCursorOffset();
-        const line_start = buffer.line_starts.items[buffer.cursor.row];
+        const line_start = buffer.content.byteOfLine(buffer.cursor.row);
 
         // Delete to end of line (excluding newline)
         var end_col = line.len;
@@ -313,7 +324,7 @@ pub const EditOps = struct {
 
     /// Delete to start of line (d0 command)
     pub fn deleteToStartOfLine(self: *EditOps, buffer: *Buffer) !DeleteResult {
-        const line_start = buffer.line_starts.items[buffer.cursor.row];
+        const line_start = buffer.content.byteOfLine(buffer.cursor.row);
         const cursor_offset = buffer.getCursorOffset();
 
         const range = Range{ .start = line_start, .end = cursor_offset };
@@ -336,6 +347,7 @@ pub const EditOps = struct {
         const line = buffer.getLine(buffer.cursor.row) orelse {
             return try self.allocator.alloc(u8, 0);
         };
+        defer buffer.allocator.free(line); // getLine() returns owned memory
 
         const start_col = buffer.cursor.col;
         var end_col = line.len;
@@ -358,6 +370,7 @@ pub const EditOps = struct {
         const line = buffer.getLine(buffer.cursor.row) orelse {
             return try self.allocator.alloc(u8, 0);
         };
+        defer buffer.allocator.free(line); // getLine() returns owned memory
 
         const end_col = @min(buffer.cursor.col, line.len);
         return try self.allocator.dupe(u8, line[0..end_col]);
@@ -369,6 +382,7 @@ pub const EditOps = struct {
         const line = buffer.getLine(buffer.cursor.row) orelse {
             return try self.allocator.alloc(u8, 0);
         };
+        defer buffer.allocator.free(line); // getLine() returns owned memory
 
         const start_col = buffer.cursor.col;
         var col = start_col;
@@ -417,9 +431,9 @@ test "EditOps: delete single char" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    // Setup buffer with content
-    try buffer.content.appendSlice(allocator, "Hello\n");
-    try buffer.buildLineIndex();
+    // Setup buffer with content using Rope
+    buffer.content.deinit();
+    buffer.content = try @import("rope.zig").Rope.fromString(allocator, "Hello\n");
     buffer.cursor = .{ .row = 0, .col = 1 }; // Cursor on 'e'
 
     var edit_ops = EditOps.init(allocator);
@@ -427,7 +441,11 @@ test "EditOps: delete single char" {
     defer allocator.free(result.deleted_text);
 
     try std.testing.expectEqualStrings("e", result.deleted_text);
-    try std.testing.expectEqualStrings("Hllo\n", buffer.content.items);
+
+    // Verify buffer content
+    const content = try buffer.content.toString();
+    defer allocator.free(content);
+    try std.testing.expectEqualStrings("Hllo\n", content);
 }
 
 test "EditOps: delete line" {
@@ -435,8 +453,9 @@ test "EditOps: delete line" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "Line1\nLine2\nLine3\n");
-    try buffer.buildLineIndex();
+    // Setup buffer with content using Rope
+    buffer.content.deinit();
+    buffer.content = try @import("rope.zig").Rope.fromString(allocator, "Line1\nLine2\nLine3\n");
     buffer.cursor = .{ .row = 1, .col = 0 }; // Cursor on Line2
 
     var edit_ops = EditOps.init(allocator);
@@ -444,7 +463,12 @@ test "EditOps: delete line" {
     defer allocator.free(result.deleted_text);
 
     try std.testing.expectEqualStrings("Line2\n", result.deleted_text);
-    try std.testing.expectEqualStrings("Line1\nLine3\n", buffer.content.items);
+
+    // Verify buffer content
+    const content = try buffer.content.toString();
+    defer allocator.free(content);
+    try std.testing.expectEqualStrings("Line1\nLine3\n", content);
+
     try std.testing.expectEqual(@as(usize, 1), result.cursor_after.row);
     try std.testing.expectEqual(@as(usize, 0), result.cursor_after.col);
 }
@@ -454,8 +478,9 @@ test "EditOps: delete word" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    try buffer.content.appendSlice(allocator, "Hello World\n");
-    try buffer.buildLineIndex();
+    // Setup buffer with content using Rope
+    buffer.content.deinit();
+    buffer.content = try @import("rope.zig").Rope.fromString(allocator, "Hello World\n");
     buffer.cursor = .{ .row = 0, .col = 0 }; // Cursor on 'H'
 
     var edit_ops = EditOps.init(allocator);
@@ -463,5 +488,9 @@ test "EditOps: delete word" {
     defer allocator.free(result.deleted_text);
 
     try std.testing.expectEqualStrings("Hello ", result.deleted_text);
-    try std.testing.expectEqualStrings("World\n", buffer.content.items);
+
+    // Verify buffer content
+    const content = try buffer.content.toString();
+    defer allocator.free(content);
+    try std.testing.expectEqualStrings("World\n", content);
 }

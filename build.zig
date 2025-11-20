@@ -507,6 +507,8 @@ pub fn build(b: *std.Build) void {
     // Add vimcraft modules as imports (with uucode dependency)
     const vimcraft_module_for_bench = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = .ReleaseFast, // Match bench optimization level
     });
     vimcraft_module_for_bench.addImport("uucode", uucode_module);
     vimcraft_module_for_bench.addImport("animation", animation_module);
@@ -516,6 +518,30 @@ pub fn build(b: *std.Build) void {
     vimcraft_module_for_bench.addAnonymousImport("unicode_tables", .{
         .root_source_file = unicode_tables,
     });
+
+    // CRITICAL: Add C include paths to vimcraft module for @cImport to work
+    vimcraft_module_for_bench.addIncludePath(b.path("vendor/ghostty/src"));
+    vimcraft_module_for_bench.addIncludePath(b.path("src"));
+    vimcraft_module_for_bench.addIncludePath(b.path("vendor/hermes/API"));
+    vimcraft_module_for_bench.addIncludePath(b.path("vendor/hermes/API/jsi"));
+    vimcraft_module_for_bench.addIncludePath(b.path("vendor/hermes/public"));
+    vimcraft_module_for_bench.addIncludePath(b.path("vendor/libuv/include"));
+    vimcraft_module_for_bench.addIncludePath(b.path("vendor/tree-sitter/lib/include"));
+    vimcraft_module_for_bench.addIncludePath(b.path("vendor/tree-sitter/lib/src"));
+
+    // Add tree-sitter language parser include paths
+    vimcraft_module_for_bench.addIncludePath(b.path("vendor/tree-sitter-c/src"));
+    vimcraft_module_for_bench.addIncludePath(b.path("vendor/tree-sitter-zig/src"));
+    vimcraft_module_for_bench.addIncludePath(b.path("vendor/tree-sitter-javascript/src"));
+    vimcraft_module_for_bench.addIncludePath(b.path("vendor/tree-sitter-typescript/typescript/src"));
+    vimcraft_module_for_bench.addIncludePath(b.path("vendor/tree-sitter-typescript/tsx/src"));
+    vimcraft_module_for_bench.addIncludePath(b.path("vendor/tree-sitter-markdown/tree-sitter-markdown/src"));
+    vimcraft_module_for_bench.addIncludePath(b.path("vendor/tree-sitter-markdown/tree-sitter-markdown-inline/src"));
+
+    // Add POSIX macros (required for tree-sitter)
+    vimcraft_module_for_bench.addCMacro("_POSIX_C_SOURCE", "200112L");
+    vimcraft_module_for_bench.addCMacro("_DEFAULT_SOURCE", "");
+    vimcraft_module_for_bench.addCMacro("_DARWIN_C_SOURCE", "");
 
     bench_root_module.addImport("vimcraft", vimcraft_module_for_bench);
 
@@ -687,9 +713,8 @@ pub fn build(b: *std.Build) void {
         bench.linkSystemLibrary("dl");
     }
 
-    // FIXME: Benchmark build has C import path issues
-    // Comment out for now - doesn't affect main editor functionality
-    // b.installArtifact(bench);
+    // Re-enabled after fixing display.render() API signature mismatch
+    b.installArtifact(bench);
 
     const run_bench = b.addRunArtifact(bench);
     run_bench.step.dependOn(b.getInstallStep());
@@ -917,8 +942,21 @@ pub fn build(b: *std.Build) void {
     // PTY tests require vimc to be built first
     run_pty_tests.step.dependOn(b.getInstallStep());
 
+    // Rendering optimization PTY tests
+    const rendering_opt_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/backends/terminal/tests/rendering_optimization_tests.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    const run_rendering_opt_tests = b.addRunArtifact(rendering_opt_tests);
+    run_rendering_opt_tests.step.dependOn(b.getInstallStep());
+
     const pty_test_step = b.step("pty_tests", "Run PTY integration tests (requires vimc built)");
     pty_test_step.dependOn(&run_pty_tests.step);
+    pty_test_step.dependOn(&run_rendering_opt_tests.step);
 
     // ============================================================================
     // JSI HostObject Performance Benchmark

@@ -27,6 +27,8 @@ pub const CommandType = enum {
     get_buffer_info, // NEW: Get buffer metadata (modified flag, path, size)
     get_gutter_state, // NEW: Get gutter/line number configuration and state
     get_terminal_updates, // NEW: Get Terminal ANSI output for debugging (Terminal mode only)
+    get_options, // NEW: Get vim option values (all or specific options)
+    get_module_cache, // NEW: Get cached module paths (for hot reload verification)
 
     // Commands
     execute_keys,
@@ -90,6 +92,9 @@ pub const CommandArgs = union(enum) {
         level: ?[]const u8, // Filter by level: "debug", "info", "warning", "err" (null = all)
         max_bytes: ?usize, // Maximum response size in bytes (null = unlimited, but recommended for LLM: 4096-8192)
     },
+    get_options: struct {
+        names: ?[]const []const u8, // Specific option names (null = all options)
+    },
     execute_keys: struct { keys: []const u8 },
     execute_keys_with_render_trace: struct { keys: []const u8 },
     load_file: struct { path: []const u8 },
@@ -151,6 +156,14 @@ pub const Command = struct {
             .get_logs => |a| {
                 if (a.level) |level| allocator.free(level);
             },
+            .get_options => |a| {
+                if (a.names) |names| {
+                    for (names) |name| {
+                        allocator.free(name);
+                    }
+                    allocator.free(names);
+                }
+            },
             .assert_mode => |a| allocator.free(a.mode),
             .assert_visual_mode => |a| allocator.free(a.mode),
             .assert_register => |a| {
@@ -196,6 +209,8 @@ pub const ResponseResult = union(enum) {
     gutter_state: GutterState, // NEW: Gutter configuration and state
     terminal_updates: TerminalUpdates, // NEW: Terminal ANSI output for debugging
     render_trace: RenderTrace, // NEW: Render pipeline trace (captured DURING render)
+    options: OptionsState, // NEW: Vim option values
+    module_cache: ModuleCacheState, // NEW: Cached module paths
     file_saved: struct { bytes_written: usize }, // NEW: File save confirmation
     execute_keys: struct { keys_processed: usize },
     assertion: AssertionResult,
@@ -357,6 +372,23 @@ pub const Response = struct {
                     allocator.free(rt.buffer_lines);
                     // Free mode string
                     allocator.free(rt.mode);
+                },
+                .options => |opts| {
+                    for (opts.options) |entry| {
+                        allocator.free(entry.name);
+                        allocator.free(entry.scope);
+                        switch (entry.value) {
+                            .string => |s| allocator.free(s),
+                            else => {},
+                        }
+                    }
+                    allocator.free(opts.options);
+                },
+                .module_cache => |mc| {
+                    for (mc.modules) |module_path| {
+                        allocator.free(module_path);
+                    }
+                    allocator.free(mc.modules);
                 },
                 // Other types either don't allocate or have different ownership
                 else => {},
@@ -664,6 +696,25 @@ pub const TerminalUpdates = struct {
     ansi_bytes: []const u8, // Complete ANSI output (exact bytes sent to Terminal)
     ansi_breakdown: []const AnsiCommand, // Human-readable breakdown of ANSI sequences
     optimizations: AnsiOptimizations, // Statistics on optimizations applied
+};
+
+/// Single vim option value
+pub const OptionEntry = struct {
+    name: []const u8,
+    value: OptionValue,
+    scope: []const u8, // "global", "local", "auto"
+};
+
+/// Vim options state
+pub const OptionsState = struct {
+    options: []const OptionEntry,
+    count: usize,
+};
+
+/// Module cache state (for hot reload verification)
+pub const ModuleCacheState = struct {
+    modules: []const []const u8, // Array of absolute file paths
+    count: usize,
 };
 
 // Tests

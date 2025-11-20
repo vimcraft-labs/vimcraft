@@ -80,15 +80,15 @@ fn pasteSingleLineAfter(buffer: *Buffer, text: []const u8, cursor_before: Cursor
 
     // Move one character forward (paste AFTER cursor)
     const line = buffer.getLine(buffer.cursor.row) orelse return cursor_before;
+    defer buffer.allocator.free(line); // getLine() returns owned memory
     if (buffer.cursor.col < line.len and line[buffer.cursor.col] != '\n') {
         insert_offset += 1;
     }
 
-    // Insert the text
-    try buffer.content.insertSlice(buffer.allocator, insert_offset, text);
+    // Insert the text using Rope (automatic line tracking - O(log n)!)
+    try buffer.content.insert(insert_offset, text);
 
-    // Rebuild line index
-    try buffer.buildLineIndex();
+    // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
     // Update cursor to end of pasted text
     const new_cursor = Cursor{
@@ -122,11 +122,10 @@ fn pasteSingleLineBefore(buffer: *Buffer, text: []const u8, cursor_before: Curso
     // Calculate insertion offset (at cursor)
     const insert_offset = buffer.getCursorOffset();
 
-    // Insert the text
-    try buffer.content.insertSlice(buffer.allocator, insert_offset, text);
+    // Insert the text using Rope (automatic line tracking!)
+    try buffer.content.insert(insert_offset, text);
 
-    // Rebuild line index
-    try buffer.buildLineIndex();
+    // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
     // Update cursor to end of pasted text
     const new_cursor = Cursor{
@@ -159,6 +158,7 @@ fn pasteMultiLineCharWiseAfter(buffer: *Buffer, lines: []const []const u8, curso
 
     // Get current line
     const current_line = buffer.getLine(buffer.cursor.row) orelse return cursor_before;
+    defer buffer.allocator.free(current_line); // getLine() returns owned memory
 
     // Calculate insertion offset (after cursor)
     var insert_offset = buffer.getCursorOffset();
@@ -186,11 +186,10 @@ fn pasteMultiLineCharWiseAfter(buffer: *Buffer, lines: []const []const u8, curso
         }
     }
 
-    // Insert the text
-    try buffer.content.insertSlice(buffer.allocator, insert_offset, paste_text);
+    // Insert the text using Rope (automatic line tracking!)
+    try buffer.content.insert(insert_offset, paste_text);
 
-    // Rebuild line index (multi-line paste requires full rebuild)
-    try buffer.buildLineIndex();
+    // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
     // Calculate new cursor position (end of pasted text)
     // Multi-line: cursor lands on last line at the end of last pasted text
@@ -246,11 +245,10 @@ fn pasteMultiLineCharWiseBefore(buffer: *Buffer, lines: []const []const u8, curs
         }
     }
 
-    // Insert the text
-    try buffer.content.insertSlice(buffer.allocator, insert_offset, paste_text);
+    // Insert the text using Rope (automatic line tracking!)
+    try buffer.content.insert(insert_offset, paste_text);
 
-    // Rebuild line index (multi-line paste requires full rebuild)
-    try buffer.buildLineIndex();
+    // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
     // Calculate new cursor position (end of pasted text)
     // Multi-line: cursor lands on last line at the end of last pasted text
@@ -290,6 +288,7 @@ fn pasteLineWiseAfter(buffer: *Buffer, reg: *const YankReg) !Cursor {
 
     // Move to end of current line
     const current_line = buffer.getLine(buffer.cursor.row) orelse return buffer.cursor;
+    defer buffer.allocator.free(current_line); // getLine() returns owned memory
     const line_end_offset = buffer.getCursorOffset() + (current_line.len - buffer.cursor.col);
 
     // Build text to insert (lines with newlines)
@@ -312,11 +311,10 @@ fn pasteLineWiseAfter(buffer: *Buffer, reg: *const YankReg) !Cursor {
 
     const final_paste_text = paste_text;
 
-    // Insert at end of current line
-    try buffer.content.insertSlice(buffer.allocator, line_end_offset, final_paste_text);
+    // Insert at end of current line using Rope (automatic line tracking!)
+    try buffer.content.insert(line_end_offset, final_paste_text);
 
-    // Rebuild line index
-    try buffer.buildLineIndex();
+    // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
     // Move cursor to first character of first pasted line
     const new_cursor = Cursor{
@@ -351,10 +349,10 @@ fn pasteLineWiseBefore(buffer: *Buffer, reg: *const YankReg) !Cursor {
     const cursor_before = buffer.cursor;
 
     // Move to start of current line
-    const line_start_offset = if (buffer.cursor.row < buffer.line_starts.items.len)
-        buffer.line_starts.items[buffer.cursor.row]
+    const line_start_offset = if (buffer.cursor.row < buffer.lineCount())
+        buffer.content.byteOfLine(buffer.cursor.row)
     else
-        buffer.content.items.len;
+        buffer.content.len();
 
     // Build text to insert (lines with newlines)
     var total_len: usize = 0;
@@ -373,11 +371,10 @@ fn pasteLineWiseBefore(buffer: *Buffer, reg: *const YankReg) !Cursor {
         pos += 1;
     }
 
-    // Insert at start of current line
-    try buffer.content.insertSlice(buffer.allocator, line_start_offset, paste_text);
+    // Insert at start of current line using Rope (automatic line tracking!)
+    try buffer.content.insert(line_start_offset, paste_text);
 
-    // Rebuild line index
-    try buffer.buildLineIndex();
+    // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
     // Move cursor to first character of first pasted line (which is now at current row)
     const new_cursor = Cursor{
@@ -425,18 +422,15 @@ fn pasteBlockWiseAfter(buffer: *Buffer, reg: *const YankReg) !Cursor {
 
         // Ensure target line exists
         while (buffer.lineCount() <= target_row) {
-            const offset = buffer.content.items.len;
-            try buffer.content.append(buffer.allocator, '\n');
-            try buffer.line_starts.append(buffer.allocator, offset);
+            const offset = buffer.content.len();
+            try buffer.content.insert(offset, "\n");
         }
 
         const target_line = buffer.getLine(target_row) orelse continue;
+        defer buffer.allocator.free(target_line); // getLine() returns owned memory
 
         // Calculate offset for insertion
-        var line_start_offset: usize = 0;
-        if (target_row < buffer.line_starts.items.len) {
-            line_start_offset = buffer.line_starts.items[target_row];
-        }
+        const line_start_offset = buffer.content.byteOfLine(target_row);
 
         // If line is shorter than start_col, pad with spaces
         const line_len_without_newline = if (target_line.len > 0 and target_line[target_line.len - 1] == '\n')
@@ -456,16 +450,15 @@ fn pasteBlockWiseAfter(buffer: *Buffer, reg: *const YankReg) !Cursor {
             @memset(padded_text[0..padding_needed], ' ');
             @memcpy(padded_text[padding_needed..], block_text);
 
-            try buffer.content.insertSlice(buffer.allocator, insert_offset, padded_text);
+            try buffer.content.insert(insert_offset, padded_text);
         } else {
             // Insert at start_col
             const insert_offset = line_start_offset + start_col;
-            try buffer.content.insertSlice(buffer.allocator, insert_offset, block_text);
+            try buffer.content.insert(insert_offset, block_text);
         }
     }
 
-    // Rebuild line index
-    try buffer.buildLineIndex();
+    // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
     // Cursor lands at start of pasted block
     const new_cursor = Cursor{
@@ -500,18 +493,15 @@ fn pasteBlockWiseBefore(buffer: *Buffer, reg: *const YankReg) !Cursor {
 
         // Ensure target line exists
         while (buffer.lineCount() <= target_row) {
-            const offset = buffer.content.items.len;
-            try buffer.content.append(buffer.allocator, '\n');
-            try buffer.line_starts.append(buffer.allocator, offset);
+            const offset = buffer.content.len();
+            try buffer.content.insert(offset, "\n");
         }
 
         const target_line = buffer.getLine(target_row) orelse continue;
+        defer buffer.allocator.free(target_line); // getLine() returns owned memory
 
         // Calculate offset for insertion
-        var line_start_offset: usize = 0;
-        if (target_row < buffer.line_starts.items.len) {
-            line_start_offset = buffer.line_starts.items[target_row];
-        }
+        const line_start_offset = buffer.content.byteOfLine(target_row);
 
         // If line is shorter than start_col, pad with spaces
         const line_len_without_newline = if (target_line.len > 0 and target_line[target_line.len - 1] == '\n')
@@ -531,16 +521,15 @@ fn pasteBlockWiseBefore(buffer: *Buffer, reg: *const YankReg) !Cursor {
             @memset(padded_text[0..padding_needed], ' ');
             @memcpy(padded_text[padding_needed..], block_text);
 
-            try buffer.content.insertSlice(buffer.allocator, insert_offset, padded_text);
+            try buffer.content.insert(insert_offset, padded_text);
         } else {
             // Insert at start_col
             const insert_offset = line_start_offset + start_col;
-            try buffer.content.insertSlice(buffer.allocator, insert_offset, block_text);
+            try buffer.content.insert(insert_offset, block_text);
         }
     }
 
-    // Rebuild line index
-    try buffer.buildLineIndex();
+    // NOTE: With Rope, line tracking is automatic - no rebuild needed!
 
     // Cursor lands at start of pasted block (same as before)
     const new_cursor = Cursor{
@@ -586,6 +575,7 @@ test "paste: single line after cursor" {
 
     // Check result: "Hello XXXWorld\n"
     const line = buffer.getLine(0).?;
+    defer allocator.free(line); // getLine() returns owned memory
     try std.testing.expectEqualStrings("HelloXXX World\n", line);
 
     // Check cursor position (should be on last 'X')
@@ -624,6 +614,7 @@ test "paste: single line before cursor" {
 
     // Check result: "Hello XXX World\n"
     const line = buffer.getLine(0).?;
+    defer allocator.free(line); // getLine() returns owned memory
     try std.testing.expectEqualStrings("Hello XXXWorld\n", line);
 
     // Check cursor position (should be on last 'X')
@@ -664,7 +655,9 @@ test "paste: multi-line character-wise after cursor" {
     // Line 0: "Line AAA\n"
     // Line 1: "BBB 1\n"
     const line0 = buffer.getLine(0).?;
+    defer allocator.free(line0); // getLine() returns owned memory
     const line1 = buffer.getLine(1).?;
+    defer allocator.free(line1); // getLine() returns owned memory
     try std.testing.expectEqualStrings("Line AAA\n", line0);
     try std.testing.expectEqualStrings("BBB 1\n", line1);
 
@@ -737,8 +730,11 @@ test "paste: block-wise after cursor" {
     // Line 1: "ghiYYYjkl\n"
     // Line 2: "mnoZZZpqr\n"
     const line0 = buffer.getLine(0).?;
+    defer allocator.free(line0); // getLine() returns owned memory
     const line1 = buffer.getLine(1).?;
+    defer allocator.free(line1); // getLine() returns owned memory
     const line2 = buffer.getLine(2).?;
+    defer allocator.free(line2); // getLine() returns owned memory
 
     try std.testing.expectEqualStrings("abcXXXdef\n", line0);
     try std.testing.expectEqualStrings("ghiYYYjkl\n", line1);
@@ -783,8 +779,11 @@ test "paste: block-wise before cursor" {
     // Line 1: "ghYYYijkl\n"
     // Line 2: "mnZZZopqr\n"
     const line0 = buffer.getLine(0).?;
+    defer allocator.free(line0); // getLine() returns owned memory
     const line1 = buffer.getLine(1).?;
+    defer allocator.free(line1); // getLine() returns owned memory
     const line2 = buffer.getLine(2).?;
+    defer allocator.free(line2); // getLine() returns owned memory
 
     try std.testing.expectEqualStrings("abXXXcdef\n", line0);
     try std.testing.expectEqualStrings("ghYYYijkl\n", line1);
@@ -829,8 +828,11 @@ test "paste: block-wise with padding (short lines)" {
     // Line 1: "cd    YYY\n"
     // Line 2: "ef    ZZZ\n"
     const line0 = buffer.getLine(0).?;
+    defer allocator.free(line0); // getLine() returns owned memory
     const line1 = buffer.getLine(1).?;
+    defer allocator.free(line1); // getLine() returns owned memory
     const line2 = buffer.getLine(2).?;
+    defer allocator.free(line2); // getLine() returns owned memory
 
     try std.testing.expectEqualStrings("ab    XXX\n", line0);
     try std.testing.expectEqualStrings("cd    YYY\n", line1);

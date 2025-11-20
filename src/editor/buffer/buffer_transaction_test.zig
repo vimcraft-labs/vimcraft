@@ -6,9 +6,9 @@ test "Transaction grouping: multiple insertions become single undo" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    // Create initial content
-    try buffer.content.appendSlice(allocator, "Hello\n");
-    try buffer.buildLineIndex();
+    // Create initial content using Rope
+    buffer.content.deinit();
+    buffer.content = try @import("rope.zig").Rope.fromString(allocator, "Hello\n");
 
     // Move cursor to end of line (before newline)
     buffer.cursor.row = 0;
@@ -29,7 +29,9 @@ test "Transaction grouping: multiple insertions become single undo" {
     try buffer.commitTransaction();
 
     // Verify content
-    try std.testing.expectEqualStrings("Hello World\n", buffer.content.items);
+    const content1 = try buffer.content.toString();
+    defer allocator.free(content1);
+    try std.testing.expectEqualStrings("Hello World\n", content1);
 
     // Verify cursor position (after 'd')
     try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
@@ -42,7 +44,9 @@ test "Transaction grouping: multiple insertions become single undo" {
     try buffer.undo();
 
     // Verify ALL characters were removed
-    try std.testing.expectEqualStrings("Hello\n", buffer.content.items);
+    const content2 = try buffer.content.toString();
+    defer allocator.free(content2);
+    try std.testing.expectEqualStrings("Hello\n", content2);
 
     // Verify cursor is back to original position
     try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
@@ -60,9 +64,9 @@ test "Transaction grouping: without transaction each char creates undo entry" {
     var buffer = Buffer.init(allocator);
     defer buffer.deinit();
 
-    // Create initial content
-    try buffer.content.appendSlice(allocator, "Hello\n");
-    try buffer.buildLineIndex();
+    // Create initial content using Rope
+    buffer.content.deinit();
+    buffer.content = try @import("rope.zig").Rope.fromString(allocator, "Hello\n");
 
     buffer.cursor.row = 0;
     buffer.cursor.col = 5;
@@ -73,20 +77,36 @@ test "Transaction grouping: without transaction each char creates undo entry" {
     try buffer.insertChar('o');
 
     // Verify content
-    try std.testing.expectEqualStrings("Hello Wo\n", buffer.content.items);
+    {
+        const content = try buffer.content.toString();
+        defer allocator.free(content);
+        try std.testing.expectEqualStrings("Hello Wo\n", content);
+    }
 
     // Verify undo stack has THREE entries (one per character)
     try std.testing.expectEqual(@as(usize, 3), buffer.undo_stack.items.len);
 
     // Single undo should only remove last character ('o')
     try buffer.undo();
-    try std.testing.expectEqualStrings("Hello W\n", buffer.content.items);
+    {
+        const content = try buffer.content.toString();
+        defer allocator.free(content);
+        try std.testing.expectEqualStrings("Hello W\n", content);
+    }
 
     // Undo again should remove 'W'
     try buffer.undo();
-    try std.testing.expectEqualStrings("Hello \n", buffer.content.items);
+    {
+        const content = try buffer.content.toString();
+        defer allocator.free(content);
+        try std.testing.expectEqualStrings("Hello \n", content);
+    }
 
     // Undo again should remove ' '
     try buffer.undo();
-    try std.testing.expectEqualStrings("Hello\n", buffer.content.items);
+    {
+        const content = try buffer.content.toString();
+        defer allocator.free(content);
+        try std.testing.expectEqualStrings("Hello\n", content);
+    }
 }

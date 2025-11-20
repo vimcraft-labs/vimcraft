@@ -62,6 +62,9 @@ pub export fn vim_filetype_match(
 
         // Smart content detection: if filename matches current buffer's filepath,
         // use buffer content for better accuracy (helps disambiguate .rs, .h, etc.)
+        var content_owned: ?[]u8 = null;
+        defer if (content_owned) |content| ctx.allocator.free(content);
+
         const content = blk: {
             if (ctx.buffer.filepath) |buf_path| {
                 // Check if filename matches buffer path (basename or full path)
@@ -71,10 +74,12 @@ pub export fn vim_filetype_match(
                 if (std.mem.eql(u8, filename, buf_path) or
                     std.mem.eql(u8, filename_basename, buf_basename)) {
                     // Filename matches loaded buffer - use content for accuracy
-                    break :blk if (ctx.buffer.content.items.len > 0)
-                        ctx.buffer.content.items
-                    else
-                        null;
+                    if (ctx.buffer.content.len() > 0) {
+                        content_owned = ctx.buffer.content.toString() catch break :blk null;
+                        break :blk content_owned.?;
+                    } else {
+                        break :blk null;
+                    }
                 }
             }
             // No match - filename-only detection
@@ -119,10 +124,13 @@ pub export fn vim_filetype_match(
         };
 
         // Get buffer content for language detection (helps with ambiguous extensions)
-        const content = if (ctx.buffer.content.items.len > 0)
-            ctx.buffer.content.items
-        else
-            null;
+        var content_owned: ?[]u8 = null;
+        defer if (content_owned) |content| ctx.allocator.free(content);
+
+        const content = if (ctx.buffer.content.len() > 0) blk: {
+            content_owned = ctx.buffer.content.toString() catch break :blk null;
+            break :blk content_owned.?;
+        } else null;
 
         // Detect language using go-enry (filename + content for best accuracy)
         const language = enry.detectLanguage(ctx.allocator, path, content) catch {

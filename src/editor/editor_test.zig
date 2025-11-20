@@ -41,7 +41,8 @@ test "Editor: js_state_dirty flag persists across operations" {
     editor.js_state_dirty = true;
 
     // Perform some buffer operations (flag should remain true)
-    try editor.buffer.content.appendSlice(allocator, "test");
+    editor.buffer.content.deinit();
+    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "test");
     try testing.expect(editor.js_state_dirty);
 
     // Reset flag

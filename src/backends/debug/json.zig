@@ -72,6 +72,18 @@ fn serializeCommandArgs(args: protocol.CommandArgs, writer: anytype) !void {
             }
             try writer.writeAll("}");
         },
+        .get_options => |a| {
+            if (a.names) |names| {
+                try writer.writeAll("{\"names\":[");
+                for (names, 0..) |name, i| {
+                    if (i > 0) try writer.writeAll(",");
+                    try writer.print("\"{s}\"", .{name});
+                }
+                try writer.writeAll("]}");
+            } else {
+                try writer.writeAll("{}");
+            }
+        },
         .execute_keys => |a| {
             try writer.print("{{\"keys\":\"{s}\"}}", .{a.keys});
         },
@@ -254,6 +266,12 @@ fn serializeResponseResult(result: protocol.ResponseResult, writer: anytype) !vo
         },
         .render_trace => |rt| {
             try serializeRenderTrace(rt, writer);
+        },
+        .options => |opts| {
+            try serializeOptionsState(opts, writer);
+        },
+        .module_cache => |mc| {
+            try serializeModuleCacheState(mc, writer);
         },
     }
 }
@@ -471,6 +489,33 @@ fn serializeOutputGrid(og: protocol.OutputGrid, writer: anytype) !void {
     try writer.writeAll("]}");
 }
 
+fn serializeOptionsState(opts: protocol.OptionsState, writer: anytype) !void {
+    try writer.writeAll("{\"options\":[");
+    for (opts.options, 0..) |entry, i| {
+        if (i > 0) try writer.writeAll(",");
+        try writer.print("{{\"name\":\"{s}\",", .{entry.name});
+        try writer.writeAll("\"value\":");
+        switch (entry.value) {
+            .boolean => |b| try writer.print("{}", .{b}),
+            .number => |n| try writer.print("{d}", .{n}),
+            .string => |s| try writer.print("\"{s}\"", .{s}),
+        }
+        try writer.print(",\"scope\":\"{s}\"}}", .{entry.scope});
+    }
+    try writer.writeAll("],");
+    try writer.print("\"count\":{d}}}", .{opts.count});
+}
+
+fn serializeModuleCacheState(mc: protocol.ModuleCacheState, writer: anytype) !void {
+    try writer.writeAll("{\"modules\":[");
+    for (mc.modules, 0..) |module_path, i| {
+        if (i > 0) try writer.writeAll(",");
+        try writer.print("\"{s}\"", .{module_path});
+    }
+    try writer.writeAll("],");
+    try writer.print("\"count\":{d}}}", .{mc.count});
+}
+
 /// Parse Command from JSON
 pub fn parseCommand(json_str: []const u8, allocator: std.mem.Allocator) !protocol.Command {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
@@ -497,7 +542,35 @@ pub fn parseCommand(json_str: []const u8, allocator: std.mem.Allocator) !protoco
 
 fn parseCommandArgs(cmd: protocol.CommandType, args_obj: std.json.Value, allocator: std.mem.Allocator) !protocol.CommandArgs {
     return switch (cmd) {
-        .ping, .shutdown, .get_state, .get_cursor, .get_mode, .get_visual, .get_registers, .get_buffer, .get_layers, .get_undo_stack, .get_redo_stack, .get_transaction, .get_buffer_info, .get_gutter_state, .get_terminal_updates => .{ .none = {} },
+        .ping, .shutdown, .get_state, .get_cursor, .get_mode, .get_visual, .get_registers, .get_buffer, .get_layers, .get_undo_stack, .get_redo_stack, .get_transaction, .get_buffer_info, .get_gutter_state, .get_terminal_updates, .get_module_cache => .{ .none = {} },
+
+        .get_options => blk: {
+            // Optional "names" field - array of option names to query
+            var names_list: ?[][]const u8 = null;
+            if (args_obj.object.get("names")) |names_val| {
+                if (names_val == .array) {
+                    var names = std.ArrayList([]const u8).empty;
+                    errdefer {
+                        for (names.items) |name| {
+                            allocator.free(name);
+                        }
+                        names.deinit(allocator);
+                    }
+
+                    for (names_val.array.items) |name_val| {
+                        const name_str = name_val.string;
+                        const owned = try allocator.dupe(u8, name_str);
+                        try names.append(allocator, owned);
+                    }
+
+                    names_list = try names.toOwnedSlice(allocator);
+                }
+            }
+
+            break :blk protocol.CommandArgs{
+                .get_options = .{ .names = names_list },
+            };
+        },
 
         .get_logs => blk: {
             const count = if (args_obj.object.get("count")) |c| @as(usize, @intCast(c.integer)) else null;

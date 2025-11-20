@@ -221,45 +221,73 @@ pub export fn hermesRequire(
     const ctx = @as(*config_api.ConfigContext, @ptrCast(@alignCast(context.?)));
 
     // Arg 0: module path (string)
-    if (arg_count < 1 or args[0] == null or !c.hermes_value_is_string(args[0])) {
-        // TODO: Throw error instead of returning undefined (Phase 4 - Error Throwing)
-        return c.hermes_value_create_undefined(runtime);
+    if (arg_count < 1) {
+        c.hermes_throw_type_error(runtime, "require() expects 1 argument (module path)");
+        return null;
+    }
+
+    if (args[0] == null or !c.hermes_value_is_string(args[0])) {
+        c.hermes_throw_type_error(runtime, "require() expects string argument");
+        return null;
     }
 
     var path_len: usize = 0;
     const path_ptr = c.hermes_value_get_string(runtime, args[0], &path_len);
     if (path_ptr == null) {
-        return c.hermes_value_create_undefined(runtime);
+        c.hermes_throw_error(runtime, "Failed to extract string from argument");
+        return null;
     }
 
     // Validate input: reject empty strings
     if (path_len == 0) {
-        // TODO: Throw error "require() path cannot be empty"
-        return c.hermes_value_create_undefined(runtime);
+        c.hermes_throw_error(runtime, "require() path cannot be empty");
+        return null;
+    }
+
+    // CRITICAL FIX #7: Check length BEFORE allocating buffer
+    // Previous code had logic error: checked length but still used buffer
+    if (path_len >= 2048) {
+        c.hermes_throw_error(runtime, "Module path too long (max 2048 characters)");
+        return null;
     }
 
     // Copy path to avoid shared buffer corruption
     // Use 2048 bytes to support macOS PATH_MAX (1024) with .js extension
     var path_buf: [2048]u8 = undefined;
-    if (path_len >= path_buf.len) {
-        // Path too long (>2048 chars)
-        // TODO: Throw error instead of returning undefined
-        return c.hermes_value_create_undefined(runtime);
-    }
     @memcpy(path_buf[0..path_len], path_ptr[0..path_len]);
     const path = path_buf[0..path_len];
 
     // Validate input: reject null bytes (security - prevents null byte injection)
     if (std.mem.indexOfScalar(u8, path, 0) != null) {
-        // TODO: Throw error "require() path contains null byte"
-        return c.hermes_value_create_undefined(runtime);
+        c.hermes_throw_error(runtime, "require() path contains null byte (security violation)");
+        return null;
     }
 
     // Resolve to absolute path
-    const abs_path = resolveModulePath(ctx.allocator, path, ctx.current_file_path) catch {
-        // Module not found - return undefined for now
-        // TODO: Throw error with helpful message (Phase 4)
-        return c.hermes_value_create_undefined(runtime);
+    const abs_path = resolveModulePath(ctx.allocator, path, ctx.current_file_path) catch |err| {
+        // Build helpful error message with search paths
+        var error_msg_buf: [1024]u8 = undefined;
+        const error_msg = switch (err) {
+            error.ModuleNotFound => std.fmt.bufPrint(&error_msg_buf,
+                \\Module not found: '{s}'
+                \\Search paths:
+                \\  - ~/.config/vimcraft/plugins/{s}.js
+                \\  - ~/.config/vimcraft/plugins/{s}/init.js
+                \\  - ~/.local/share/vimcraft/plugins/{s}.js
+                \\  - ~/.local/share/vimcraft/plugins/{s}/init.js
+            , .{ path, path, path, path, path }) catch "Module not found",
+
+            error.PathTraversalAttempt => std.fmt.bufPrint(&error_msg_buf,
+                "Security violation: require() path '{s}' attempts directory traversal"
+            , .{path}) catch "Path traversal attempt",
+
+            else => std.fmt.bufPrint(&error_msg_buf,
+                "Failed to resolve module path: {s}"
+            , .{@errorName(err)}) catch "Module resolution failed",
+        };
+
+        c.hermes_throw_error(runtime, error_msg.ptr);
+        return null;
     };
     defer ctx.allocator.free(abs_path);
 
@@ -267,8 +295,13 @@ pub export fn hermesRequire(
     if (ctx.module_cache.get(abs_path)) |entry| {
         if (entry.loading) {
             // Circular dependency detected!
-            // TODO: Throw error with cycle path (Phase 4)
-            return c.hermes_value_create_undefined(runtime);
+            var error_msg_buf: [512]u8 = undefined;
+            const error_msg = std.fmt.bufPrint(&error_msg_buf,
+                "Circular dependency detected when loading module '{s}'"
+            , .{abs_path}) catch "Circular dependency detected";
+
+            c.hermes_throw_error(runtime, error_msg.ptr);
+            return null;
         }
 
         // Return cached exports
@@ -276,31 +309,53 @@ pub export fn hermesRequire(
     }
 
     // Mark as loading (circular dependency detection)
+    // CRITICAL FIX: Initialize exports with safe placeholder (prevents undefined behavior)
     const loading_entry = config_api.ModuleEntry{
-        .exports = undefined, // Will be set after execution
+        .exports = c.hermes_value_create_undefined(runtime) orelse {
+            c.hermes_throw_error(runtime, "Failed to create placeholder for module loading");
+            return null;
+        },
         .loading = true,
     };
 
     // Add to cache (using owned copy of abs_path)
     const cache_key = ctx.allocator.dupe(u8, abs_path) catch {
-        return c.hermes_value_create_undefined(runtime);
+        c.hermes_throw_error(runtime, "Out of memory: failed to allocate module cache key");
+        return null;
     };
     errdefer ctx.allocator.free(cache_key);
 
     ctx.module_cache.put(cache_key, loading_entry) catch {
         ctx.allocator.free(cache_key);
-        return c.hermes_value_create_undefined(runtime);
+        c.hermes_throw_error(runtime, "Out of memory: failed to add module to cache");
+        return null;
     };
 
     // Execute module
-    const exports = executeModule(ctx.allocator, runtime, abs_path, ctx) catch {
-        // Execution failed - remove from cache
-        _ = ctx.module_cache.remove(cache_key);
+    const exports = executeModule(ctx.allocator, runtime, abs_path, ctx) catch |err| {
+        // Execution failed - remove from cache and cleanup
+        // CRITICAL FIX: Destroy placeholder value before removing
+        if (ctx.module_cache.fetchRemove(cache_key)) |removed| {
+            c.hermes_value_destroy(removed.value.exports);
+        }
         ctx.allocator.free(cache_key);
-        return c.hermes_value_create_undefined(runtime);
+
+        // Build error message
+        var error_msg_buf: [512]u8 = undefined;
+        const error_msg = std.fmt.bufPrint(&error_msg_buf,
+            "Failed to execute module '{s}': {s}"
+        , .{ abs_path, @errorName(err) }) catch "Module execution failed";
+
+        c.hermes_throw_error(runtime, error_msg.ptr);
+        return null;
     };
 
     // Update cache entry with final exports
+    // CRITICAL FIX: Destroy placeholder value before replacing
+    if (ctx.module_cache.get(cache_key)) |old_entry| {
+        c.hermes_value_destroy(old_entry.exports);
+    }
+
     const final_entry = config_api.ModuleEntry{
         .exports = exports,
         .loading = false,
@@ -309,7 +364,8 @@ pub export fn hermesRequire(
     ctx.module_cache.put(cache_key, final_entry) catch {
         c.hermes_value_destroy(exports);
         ctx.allocator.free(cache_key);
-        return c.hermes_value_create_undefined(runtime);
+        c.hermes_throw_error(runtime, "Out of memory: failed to update module cache");
+        return null;
     };
 
     return exports;

@@ -49,6 +49,7 @@ fn benchDeleteLine(buffer: *Buffer) !void {
 fn benchYankLine(buffer: *Buffer, register_mgr: *RegisterManager) !void {
     const line_num = buffer.cursor.row;
     const line = buffer.getLine(line_num) orelse return;
+    defer buffer.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
 
     const text = if (line.len > 0 and line[line.len - 1] == '\n')
         line[0 .. line.len - 1]
@@ -72,11 +73,6 @@ fn benchMoveCursor(buffer: *Buffer) void {
         buffer.cursor.col = 0;
         buffer.cursor.row = @min(buffer.cursor.row + 1, buffer.lineCount() - 1);
     }
-}
-
-/// Benchmark: Build line index
-fn benchBuildLineIndex(buffer: *Buffer) !void {
-    try buffer.buildLineIndex();
 }
 
 /// Run all buffer benchmarks
@@ -233,18 +229,6 @@ pub fn runBufferBenchmarks(allocator: std.mem.Allocator) !void {
                 "Move cursor",
                 10000,
                 benchMoveCursor,
-                .{&buffer},
-            );
-            try suite.add(result);
-        }
-
-        // Build line index
-        {
-            const result = try benchmark.benchmark(
-                allocator,
-                "Build line index (1000 lines)",
-                100,
-                benchBuildLineIndex,
                 .{&buffer},
             );
             try suite.add(result);
