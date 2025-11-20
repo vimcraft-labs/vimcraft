@@ -69,9 +69,6 @@ pub fn parse(allocator: std.mem.Allocator) !ParseResult {
                 i += 1;
                 result.file_path = try allocator.dupe(u8, args[i]);
             }
-        } else if (std.mem.eql(u8, arg, "--repl")) {
-            result.command = try allocator.dupe(u8, arg);
-            return result;
         } else if (std.mem.startsWith(u8, arg, "-")) {
             // Unknown flag
             std.debug.print("Unknown flag: {s}\n", .{arg});

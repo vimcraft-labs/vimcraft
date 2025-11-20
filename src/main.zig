@@ -968,11 +968,17 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     // Auto-launch Chrome DevTools
     launchChromeDevTools(9229) catch {};
 
-    // Wait for debugger to connect
+    // Wait for debugger to connect (increased timeout for slower Chrome launches)
     var wait_count: usize = 0;
-    while (wait_count < 50 and !debugger.isConnected()) {
+    while (wait_count < 100 and !debugger.isConnected()) {
         std.Thread.sleep(100 * std.time.ns_per_ms);
         wait_count += 1;
+    }
+
+    // Give Chrome a moment to fully initialize after connection
+    // This prevents race condition where messages are sent before Chrome Console is ready
+    if (debugger.isConnected()) {
+        std.Thread.sleep(200 * std.time.ns_per_ms);
     }
 
     // Load configuration from init.ts (but NOT plugins yet - TypeScript-only)
