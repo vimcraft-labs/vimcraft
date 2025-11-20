@@ -9,31 +9,8 @@
 
 const std = @import("std");
 
-/// Default tsconfig.json content
-const TSCONFIG_JSON =
-    \\{
-    \\  "compilerOptions": {
-    \\    "target": "ES2020",
-    \\    "module": "CommonJS",
-    \\    "lib": ["ES2020"],
-    \\    "strict": true,
-    \\    "esModuleInterop": true,
-    \\    "skipLibCheck": true,
-    \\    "forceConsistentCasingInFileNames": true,
-    \\    "moduleResolution": "node",
-    \\    "resolveJsonModule": true,
-    \\    "types": ["./vim.d.ts"]
-    \\  },
-    \\  "include": [
-    \\    "init.ts",
-    \\    "plugins/**/*.ts"
-    \\  ],
-    \\  "exclude": [
-    \\    ".vimcraft"
-    \\  ]
-    \\}
-    \\
-;
+/// Default tsconfig.json content (loaded from tsconfig.template.json at compile time)
+const TSCONFIG_JSON = @embedFile("tsconfig.template.json");
 
 /// Default init.ts content (if doesn't exist)
 const INIT_TS =
