@@ -29,7 +29,7 @@ pub const LoadError = error{
 
 /// Loader configuration
 pub const LoaderConfig = struct {
-    /// Cache directory (default: ~/.cache/vimcraft/bytecode)
+    /// Cache directory (default: ~/.config/vimcraft/bytecode)
     cache_dir: []const u8,
 
     /// Enable cache (can be disabled for debugging)
@@ -56,7 +56,6 @@ pub fn loadFromSource(
     source: []const u8,
     source_path: []const u8, // Original path for cache key
 ) LoadError![]const u8 {
-    std.log.info("Loading from in-memory source (cache key: {s})", .{source_path});
 
     // Validate source path (but don't read from it)
     try validatePath(source_path);
@@ -83,7 +82,6 @@ pub fn loadFromSource(
     // When content changes → different cache_key → different cache_path → cache miss
     if (config.enable_cache) {
         if (cache.loadFromCache(allocator, cache_path)) |bytecode| {
-            std.log.info("Cache hit: {s}", .{cache_path});
             config.stats.recordHit();
             return bytecode;
         } else |_| {
@@ -92,7 +90,6 @@ pub fn loadFromSource(
     }
 
     // Cache miss: Transpile in-memory source
-    std.log.info("Cache miss: Transpiling in-memory source", .{});
 
     // Determine loader based on source path extension
     const ext = std.fs.path.extension(source_path);
@@ -111,7 +108,6 @@ pub fn loadFromSource(
     };
     defer allocator.free(js);
 
-    std.log.info("Transpiled: {d} bytes JavaScript", .{js.len});
 
     // Compile JavaScript → Hermes Bytecode
     const hbc = hermes.compile(allocator, js) catch |err| {
@@ -120,13 +116,89 @@ pub fn loadFromSource(
     };
     errdefer allocator.free(hbc);
 
-    std.log.info("Compiled: {d} bytes HBC bytecode", .{hbc.len});
 
     // Save to cache (if enabled)
     if (config.enable_cache) {
         cache.saveToCache(cache_path, hbc) catch |err| {
             std.log.warn("Cache save failed (non-fatal): {}", .{err});
             // Continue - we still have the bytecode
+        };
+    }
+
+    config.stats.recordMiss(hbc.len);
+
+    return hbc;
+}
+
+/// Load and bundle TypeScript config file with runtime wrapper
+/// This function:
+/// 1. Checks cache based on source file mtime (BEFORE expensive bundling!)
+/// 2. If cache miss: bundles the config file using esbuild.build() (resolves imports)
+/// 3. Wraps the bundle with runtime wrapper
+/// 4. Compiles to Hermes bytecode
+/// 5. Saves to cache
+///
+/// Use this for index.ts that may have imports. For simple plugins without imports,
+/// use loadFromSource() directly.
+pub fn loadConfigWithBundle(
+    allocator: std.mem.Allocator,
+    config: LoaderConfig,
+    filepath: []const u8,
+    runtime_wrapper: []const u8,
+) LoadError![]const u8 {
+    // 1. Compute cache key based on source file path + mtime (BEFORE bundling)
+    // This avoids expensive bundling when source hasn't changed
+    const cache_key = cache.computeCacheKey(allocator, filepath) catch |err| {
+        std.log.err("Failed to compute cache key for {s}: {}", .{ filepath, err });
+        return LoadError.CacheFailed;
+    };
+    defer allocator.free(cache_key);
+
+    const cache_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}.hbc",
+        .{ config.cache_dir, cache_key },
+    );
+    defer allocator.free(cache_path);
+
+    // 2. Check cache freshness BEFORE expensive bundling
+    if (config.enable_cache and cache.isCacheFresh(filepath, cache_path)) {
+        if (cache.loadFromCache(allocator, cache_path)) |bytecode| {
+            config.stats.recordHit();
+            return bytecode;
+        } else |_| {
+            // Cache read failed - rebuild
+        }
+    }
+
+    // 3. Cache miss: Bundle user config (resolves all imports)
+    // Use buildWithCacheDir for better performance and cross-platform compatibility
+    const bundled_js = esbuild.buildWithCacheDir(allocator, filepath, config.cache_dir) catch |err| {
+        std.log.err("esbuild bundle failed for {s}: {}", .{ filepath, err });
+        return LoadError.TranspileFailed;
+    };
+    defer allocator.free(bundled_js);
+
+    // 4. Wrap bundled output with runtime wrapper
+    const wrapped_source = try std.fmt.allocPrint(allocator,
+        \\{s}
+        \\
+        \\// User config (bundled)
+        \\{s}
+    , .{ runtime_wrapper, bundled_js });
+    defer allocator.free(wrapped_source);
+
+    // 5. Compile wrapped bundle to Hermes bytecode
+    const hbc = hermes.compile(allocator, wrapped_source) catch |err| {
+        std.log.err("Hermes compilation failed: {}", .{err});
+        return LoadError.CompileFailed;
+    };
+    errdefer allocator.free(hbc);
+
+    // 6. Save to cache
+    if (config.enable_cache) {
+        cache.saveToCache(cache_path, hbc) catch |err| {
+            std.log.warn("Cache save failed (non-fatal): {}", .{err});
         };
     }
 
@@ -166,7 +238,6 @@ pub fn loadModule(
     config: LoaderConfig,
     path: []const u8,
 ) LoadError![]const u8 {
-    std.log.info("Loading module: {s}", .{path});
 
     // Expand ~ to home directory if needed
     const expanded_path = if (std.mem.startsWith(u8, path, "~/"))
@@ -196,7 +267,6 @@ pub fn loadModule(
 
     // 2. Check cache freshness (if enabled)
     if (config.enable_cache and cache.isCacheFresh(expanded_path, cache_path)) {
-        std.log.info("Cache hit: {s}", .{cache_path});
 
         if (cache.loadFromCache(allocator, cache_path)) |bytecode| {
             config.stats.recordHit();
@@ -208,7 +278,6 @@ pub fn loadModule(
     }
 
     // 3. Cache miss: Build pipeline
-    std.log.info("Cache miss: Building {s}", .{expanded_path});
 
     // 3a. Determine if single file or directory
     const stat = std.fs.cwd().statFile(expanded_path) catch |err| {
@@ -220,8 +289,8 @@ pub fn loadModule(
 
     // 3b. Transpile TypeScript → JavaScript
     const js = if (is_dir) blk: {
-        std.log.info("Bundling directory: {s}", .{expanded_path});
-        break :blk esbuild.build(allocator, expanded_path) catch |err| {
+        // Use buildWithCacheDir for cross-platform compatibility
+        break :blk esbuild.buildWithCacheDir(allocator, expanded_path, config.cache_dir) catch |err| {
             std.log.err("esbuild bundle failed: {}", .{err});
             return LoadError.TranspileFailed;
         };
@@ -248,7 +317,6 @@ pub fn loadModule(
         else
             "js";
 
-        std.log.info("Transpiling {s} file: {s}", .{ loader, expanded_path });
         break :blk esbuild.transpile(allocator, source, loader) catch |err| {
             std.log.err("esbuild transpile failed: {}", .{err});
             return LoadError.TranspileFailed;
@@ -256,7 +324,6 @@ pub fn loadModule(
     };
     defer allocator.free(js);
 
-    std.log.info("Transpiled: {d} bytes JavaScript", .{js.len});
 
     // 3c. Compile JavaScript → Hermes Bytecode
     const hbc = hermes.compile(allocator, js) catch |err| {
@@ -265,7 +332,6 @@ pub fn loadModule(
     };
     errdefer allocator.free(hbc);
 
-    std.log.info("Compiled: {d} bytes HBC bytecode", .{hbc.len});
 
     // 3d. Save to cache (if enabled)
     if (config.enable_cache) {

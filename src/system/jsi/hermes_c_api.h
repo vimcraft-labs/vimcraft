@@ -379,10 +379,12 @@ typedef void (*OVHermesArrayBufferFinalizer)(
  * @return ArrayBuffer value wrapping the external memory
  *
  * Example (zero-copy buffer access):
- *   const content = buffer.content.items;
+ *   const content = try buffer.content.toString(); // Rope → string
+ *   defer allocator.free(content);
  *   const ab = hermes_value_create_arraybuffer_external(
- *       runtime, content.ptr, content.len, NULL, NULL);
+ *       runtime, content.ptr, content.len, finalizer, finalizer_ctx);
  *   // JavaScript can now read 'content' directly via ArrayBuffer!
+ *   // Finalizer will free the memory when JS GC collects the ArrayBuffer
  */
 OVHermesValue* hermes_value_create_arraybuffer_external(
     OVHermesRuntime* runtime,

@@ -125,7 +125,7 @@ const config = loader.LoaderConfig{
 };
 
 // Load TypeScript file
-const bytecode = try loader.loadModule(allocator, config, "~/.config/vimcraft/init.ts");
+const bytecode = try loader.loadModule(allocator, config, "~/.config/vimcraft/index.ts");
 defer allocator.free(bytecode);
 
 // Execute in Hermes runtime
@@ -288,7 +288,7 @@ vendor/hermes/build/bin/
 
 3. **Test with real plugins**:
    ```typescript
-   // ~/.config/vimcraft/init.ts
+   // ~/.config/vimcraft/index.ts
    const smearCursor = require('~/.config/vimcraft/plugins/smear-cursor');
    smearCursor.setup({ enabled: true });
    ```

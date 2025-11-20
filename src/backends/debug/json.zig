@@ -273,6 +273,9 @@ fn serializeResponseResult(result: protocol.ResponseResult, writer: anytype) !vo
         .module_cache => |mc| {
             try serializeModuleCacheState(mc, writer);
         },
+        .render_stats => |rs| {
+            try serializeRenderStats(rs, writer);
+        },
     }
 }
 
@@ -516,6 +519,36 @@ fn serializeModuleCacheState(mc: protocol.ModuleCacheState, writer: anytype) !vo
     try writer.print("\"count\":{d}}}", .{mc.count});
 }
 
+fn serializeRenderStats(rs: protocol.RenderStats, writer: anytype) !void {
+    try writer.writeAll("{");
+    try writer.print("\"last_render_duration_ms\":{d:.2},", .{rs.last_render_duration_ms});
+    try writer.print("\"avg_render_duration_ms\":{d:.2},", .{rs.avg_render_duration_ms});
+    try writer.print("\"max_render_duration_ms\":{d:.2},", .{rs.max_render_duration_ms});
+    try writer.print("\"total_renders\":{d},", .{rs.total_renders});
+    try writer.print("\"throttle_max_fps\":{d},", .{rs.throttle_max_fps});
+    try writer.print("\"throttle_enabled\":{},", .{rs.throttle_enabled});
+    try writer.print("\"renders_throttled\":{d},", .{rs.renders_throttled});
+    try writer.print("\"renders_executed\":{d},", .{rs.renders_executed});
+    try writer.print("\"cursor_hide_codes\":{d},", .{rs.cursor_hide_codes});
+    try writer.print("\"cursor_show_codes\":{d},", .{rs.cursor_show_codes});
+    try writer.print("\"cursor_shape_codes\":{d},", .{rs.cursor_shape_codes});
+    try writer.print("\"cursor_position_codes\":{d},", .{rs.cursor_position_codes});
+    try writer.print("\"sync_update_begin_codes\":{d},", .{rs.sync_update_begin_codes});
+    try writer.print("\"sync_update_end_codes\":{d},", .{rs.sync_update_end_codes});
+    try writer.print("\"input_poll_timeout_ms\":{d},", .{rs.input_poll_timeout_ms});
+    try writer.print("\"keys_processed_total\":{d},", .{rs.keys_processed_total});
+    try writer.print("\"layers_composited_last\":{d},", .{rs.layers_composited_last});
+    try writer.print("\"cells_updated_last\":{d},", .{rs.cells_updated_last});
+    try writer.print("\"cells_blended_last\":{d},", .{rs.cells_blended_last});
+    try writer.print("\"performance_assessment\":\"{s}\",", .{rs.performance_assessment});
+    try writer.writeAll("\"recommendations\":[");
+    for (rs.recommendations, 0..) |rec, i| {
+        if (i > 0) try writer.writeAll(",");
+        try writer.print("\"{s}\"", .{rec});
+    }
+    try writer.writeAll("]}");
+}
+
 /// Parse Command from JSON
 pub fn parseCommand(json_str: []const u8, allocator: std.mem.Allocator) !protocol.Command {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
@@ -542,7 +575,7 @@ pub fn parseCommand(json_str: []const u8, allocator: std.mem.Allocator) !protoco
 
 fn parseCommandArgs(cmd: protocol.CommandType, args_obj: std.json.Value, allocator: std.mem.Allocator) !protocol.CommandArgs {
     return switch (cmd) {
-        .ping, .shutdown, .get_state, .get_cursor, .get_mode, .get_visual, .get_registers, .get_buffer, .get_layers, .get_undo_stack, .get_redo_stack, .get_transaction, .get_buffer_info, .get_gutter_state, .get_terminal_updates, .get_module_cache => .{ .none = {} },
+        .ping, .shutdown, .get_state, .get_cursor, .get_mode, .get_visual, .get_registers, .get_buffer, .get_layers, .get_undo_stack, .get_redo_stack, .get_transaction, .get_buffer_info, .get_gutter_state, .get_terminal_updates, .get_module_cache, .get_render_stats => .{ .none = {} },
 
         .get_options => blk: {
             // Optional "names" field - array of option names to query

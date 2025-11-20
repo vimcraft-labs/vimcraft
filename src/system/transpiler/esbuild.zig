@@ -72,6 +72,10 @@ pub fn transpile(
 /// Build and bundle TypeScript files using esbuild Build API
 /// This bundles ALL imports into a single JavaScript file
 ///
+/// NOTE: This function writes a temporary bundle file to the system temp directory.
+/// The temp file is deleted after reading. For cross-platform compatibility,
+/// use buildWithCacheDir() to write to a specific directory instead.
+///
 /// Example:
 /// ```zig
 /// // Bundle entire plugin directory
@@ -82,11 +86,82 @@ pub fn build(
     allocator: std.mem.Allocator,
     entry_point: []const u8,
 ) TranspileError![]const u8 {
-    // Create temp output file
+    // Get system temp directory (cross-platform)
+    const temp_dir_path = std.posix.getenv("TMPDIR") orelse
+        std.posix.getenv("TEMP") orelse
+        std.posix.getenv("TMP") orelse
+        "/tmp"; // Fallback for Unix systems
+
+    // Create temp output file in system temp directory
     const temp_out = try std.fmt.allocPrint(
         allocator,
-        "/tmp/vimcraft-bundle-{d}.js",
-        .{std.time.milliTimestamp()},
+        "{s}{c}vimcraft-bundle-{d}.js",
+        .{ temp_dir_path, std.fs.path.sep, std.time.milliTimestamp() },
+    );
+    defer allocator.free(temp_out);
+
+    // Prepare C-compatible strings
+    const entry_z = allocator.dupeZ(u8, entry_point) catch return TranspileError.OutOfMemory;
+    defer allocator.free(entry_z);
+
+    const out_z = allocator.dupeZ(u8, temp_out) catch return TranspileError.OutOfMemory;
+    defer allocator.free(out_z);
+
+    // Call esbuild Build API via C FFI
+    const result_ptr = c.esbuild_build(
+        @ptrCast(entry_z.ptr),
+        @ptrCast(out_z.ptr),
+    );
+
+    if (result_ptr == null) {
+        std.log.err("esbuild_build returned null", .{});
+        return TranspileError.TranspileFailed;
+    }
+
+    // Convert C string to Zig slice
+    const result_c_str = std.mem.span(result_ptr);
+
+    // Check if result starts with "Error:"
+    if (std.mem.startsWith(u8, result_c_str, "Error:")) {
+        std.log.err("esbuild_build failed: {s}", .{result_c_str});
+        std.c.free(result_ptr);
+        return TranspileError.TranspileFailed;
+    }
+
+    // Copy bundled JavaScript to Zig-owned memory
+    const bundled = allocator.dupe(u8, result_c_str) catch {
+        std.c.free(result_ptr);
+        return TranspileError.OutOfMemory;
+    };
+
+    // Free the C-allocated string
+    std.c.free(result_ptr);
+
+    // Clean up temp file
+    std.fs.cwd().deleteFile(temp_out) catch {};
+
+    return bundled;
+}
+
+/// Build and bundle TypeScript files using esbuild Build API (cache directory version)
+/// This is more efficient than build() because it writes to the cache directory,
+/// avoiding cross-partition operations and keeping all temp files in one place.
+///
+/// Example:
+/// ```zig
+/// const bundled = try buildWithCacheDir(allocator, entry_point, cache_dir);
+/// defer allocator.free(bundled);
+/// ```
+pub fn buildWithCacheDir(
+    allocator: std.mem.Allocator,
+    entry_point: []const u8,
+    cache_dir: []const u8,
+) TranspileError![]const u8 {
+    // Create temp output file in cache directory
+    const temp_out = try std.fmt.allocPrint(
+        allocator,
+        "{s}{c}bundle-{d}.js",
+        .{ cache_dir, std.fs.path.sep, std.time.milliTimestamp() },
     );
     defer allocator.free(temp_out);
 

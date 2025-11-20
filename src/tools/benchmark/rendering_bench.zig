@@ -41,7 +41,7 @@ fn benchSingleRender(
     yank_highlight: *YankHighlight,
 ) !void {
     const listchars = ListChars{};
-    try display.render(editor, status, cursorline_enabled, visual_state, yank_highlight, null, false, &listchars);
+    try display.render(editor, status, cursorline_enabled, visual_state, yank_highlight, false, &listchars);
 }
 
 /// Benchmark: Rapid sequential renders (tests throttling + batching)
@@ -57,7 +57,7 @@ fn benchRapidRenders(
     const listchars = ListChars{};
     var i: usize = 0;
     while (i < count) : (i += 1) {
-        try display.render(editor, status, cursorline_enabled, visual_state, yank_highlight, null, false, &listchars);
+        try display.render(editor, status, cursorline_enabled, visual_state, yank_highlight, false, &listchars);
     }
 }
 
@@ -80,7 +80,7 @@ fn benchCursorMovements(
             editor.buffer.cursor.col = 0;
             editor.buffer.cursor.row += 1;
         }
-        try display.render(editor, status, cursorline_enabled, visual_state, yank_highlight, null, false, &listchars);
+        try display.render(editor, status, cursorline_enabled, visual_state, yank_highlight, false, &listchars);
     }
     // Reset cursor
     editor.buffer.cursor.row = 0;
@@ -103,7 +103,7 @@ fn benchScrolling(
         // Simulate scrolling down
         display.viewport_top += 1;
         editor.buffer.cursor.row = display.viewport_top + 10;
-        try display.render(editor, status, cursorline_enabled, visual_state, yank_highlight, null, false, &listchars);
+        try display.render(editor, status, cursorline_enabled, visual_state, yank_highlight, false, &listchars);
     }
     // Reset viewport
     display.viewport_top = 0;
@@ -127,7 +127,7 @@ fn benchVisualMode(
     editor.buffer.cursor.row = 10;
     editor.buffer.cursor.col = 50;
 
-    try display.render(editor, status, cursorline_enabled, visual_state, yank_highlight, null, false, &listchars);
+    try display.render(editor, status, cursorline_enabled, visual_state, yank_highlight, false, &listchars);
 
     // Disable visual mode
     visual_state.active = false;

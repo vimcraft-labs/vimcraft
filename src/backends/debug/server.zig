@@ -588,6 +588,37 @@ pub const Server = struct {
 
             .get_layer_cells => {
                 const layer_name = cmd.args.get_layer_cells.name;
+
+                // CRITICAL FIX: Trigger headless render to get FRESH layer state
+                // Same as get_layers - ensures layers show current state
+                const list_enabled = if (self.editor.options_manager) |opts|
+                    opts.getBoolean("list") orelse false
+                else
+                    false;
+
+                const listchars = if (self.editor.options_manager) |opts| blk: {
+                    const lcs_str = opts.getString("listchars") orelse "tab:> ,trail:-,nbsp:+";
+                    break :blk try ListChars.parse(self.allocator, lcs_str);
+                } else
+                    ListChars{};
+
+                // Get cursorline option
+                const cursorline_enabled = if (self.editor.options_manager) |opts|
+                    opts.getBoolean("cursorLine") orelse false
+                else
+                    false;
+
+                try self.editor.display.renderHeadless(
+                    self.editor,
+                    self.editor.mode_manager.getModeString(),
+                    cursorline_enabled,
+                    &self.editor.visual_state,
+                    &self.editor.yank_highlight,
+                    list_enabled,
+                    &listchars,
+                );
+
+                // Now get FRESH layer state
                 const display = &self.editor.display;
                 const layer_mgr = &display.layer_manager;
 
@@ -1084,6 +1115,86 @@ pub const Server = struct {
                     .editor_context = self.editor,
                 };
                 return try handlers.handleGetModuleCache(ext_ctx);
+            },
+
+            .get_render_stats => {
+                const stats = &self.editor.display.render_stats;
+
+                // Convert nanosecond timings to milliseconds
+                const last_render_ms = stats.getLastRenderDurationMs();
+                const avg_render_ms = stats.getAverageRenderDurationMs();
+                const max_render_ms = stats.getMaxRenderDurationMs();
+
+                // Calculate performance assessment
+                const assessment_str = if (avg_render_ms < 20.0)
+                    "EXCELLENT"
+                else if (avg_render_ms < 50.0)
+                    "ACCEPTABLE"
+                else if (avg_render_ms < 100.0)
+                    "SLUGGISH"
+                else
+                    "CRITICAL";
+
+                // Generate recommendations based on detected issues
+                var recommendations = std.ArrayList([]const u8).empty;
+                defer recommendations.deinit(self.allocator);
+
+                // Check for excessive cursor codes
+                const total_cursor_codes = stats.cursor_hide_codes + stats.cursor_show_codes +
+                                          stats.cursor_shape_codes + stats.cursor_position_codes;
+                if (total_cursor_codes > stats.total_renders * 3) {
+                    try recommendations.append(self.allocator,
+                        try self.allocator.dupe(u8, "Excessive cursor escape codes detected - check cursor state tracking"));
+                }
+
+                // Check for slow renders
+                if (avg_render_ms > 50.0) {
+                    try recommendations.append(self.allocator,
+                        try self.allocator.dupe(u8, "Average render time >50ms - consider optimizing compositor or diff algorithm"));
+                }
+
+                // Check for missing synchronized updates
+                if (stats.total_renders > 10 and stats.sync_update_begin_codes == 0) {
+                    try recommendations.append(self.allocator,
+                        try self.allocator.dupe(u8, "Synchronized updates not working - terminal may not support DCS sequences"));
+                }
+
+                // Check for mismatched sync updates
+                if (stats.sync_update_begin_codes != stats.sync_update_end_codes) {
+                    try recommendations.append(self.allocator,
+                        try std.fmt.allocPrint(self.allocator, "Mismatched sync updates: {} begin / {} end",
+                            .{stats.sync_update_begin_codes, stats.sync_update_end_codes}));
+                }
+
+                // Add success message if no issues detected
+                if (recommendations.items.len == 0) {
+                    try recommendations.append(self.allocator,
+                        try self.allocator.dupe(u8, "No performance issues detected - rendering pipeline is healthy"));
+                }
+
+                return .{ .render_stats = .{
+                    .last_render_duration_ms = last_render_ms,
+                    .avg_render_duration_ms = avg_render_ms,
+                    .max_render_duration_ms = max_render_ms,
+                    .total_renders = stats.total_renders,
+                    .throttle_max_fps = 60, // TODO: Get from main.zig RenderThrottle if accessible
+                    .throttle_enabled = true, // TODO: Get from main.zig RenderThrottle if accessible
+                    .renders_throttled = 0, // TODO: Get from main.zig RenderThrottle if accessible
+                    .renders_executed = stats.total_renders,
+                    .cursor_hide_codes = stats.cursor_hide_codes,
+                    .cursor_show_codes = stats.cursor_show_codes,
+                    .cursor_shape_codes = stats.cursor_shape_codes,
+                    .cursor_position_codes = stats.cursor_position_codes,
+                    .sync_update_begin_codes = stats.sync_update_begin_codes,
+                    .sync_update_end_codes = stats.sync_update_end_codes,
+                    .input_poll_timeout_ms = 1, // TODO: Get from main.zig if accessible
+                    .keys_processed_total = 0, // TODO: Track in editor if needed
+                    .layers_composited_last = stats.layers_composited_last,
+                    .cells_updated_last = stats.cells_updated_last,
+                    .cells_blended_last = stats.cells_blended_last,
+                    .performance_assessment = try self.allocator.dupe(u8, assessment_str),
+                    .recommendations = try recommendations.toOwnedSlice(self.allocator),
+                } };
             },
 
             // Commands - execute keys in the editor

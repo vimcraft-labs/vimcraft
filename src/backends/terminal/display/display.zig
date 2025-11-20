@@ -9,7 +9,6 @@ const Update = @import("screen_grid.zig").Update;
 const VisualState = @import("../visual/visual.zig").VisualState;
 const YankHighlight = @import("../visual/yank_highlight.zig").YankHighlight;
 const Position = @import("../visual/visual.zig").Position;
-const CursorPosition = @import("../../../editor/editor.zig").CursorPosition;
 const char_width = @import("char_width.zig");
 const gutter = @import("gutter.zig");
 const VirtualTextRenderer = @import("virtual_text.zig").VirtualTextRenderer;
@@ -25,6 +24,66 @@ const Compositor = @import("compositor.zig").Compositor;
 const terminal_control = @import("terminal_control.zig");
 const layer_renderer = @import("layer_renderer.zig");
 const output_renderer = @import("output_renderer.zig");
+
+/// Rendering performance statistics
+/// Tracks real-time metrics for debug protocol get_render_stats command
+pub const RenderStatistics = struct {
+    // Frame timing
+    last_render_start_ns: i128 = 0,
+    last_render_duration_ns: i128 = 0,
+    total_render_time_ns: i128 = 0,
+    max_render_duration_ns: i128 = 0,
+    total_renders: usize = 0,
+
+    // Cursor escape codes sent (for flickering diagnosis)
+    cursor_hide_codes: usize = 0,
+    cursor_show_codes: usize = 0,
+    cursor_shape_codes: usize = 0,
+    cursor_position_codes: usize = 0,
+
+    // Synchronized update codes sent
+    sync_update_begin_codes: usize = 0,
+    sync_update_end_codes: usize = 0,
+
+    // Compositor stats from last render
+    layers_composited_last: usize = 0,
+    cells_updated_last: usize = 0,
+    cells_blended_last: usize = 0,
+
+    pub fn recordRenderStart(self: *RenderStatistics) void {
+        self.last_render_start_ns = std.time.nanoTimestamp();
+    }
+
+    pub fn recordRenderEnd(self: *RenderStatistics) void {
+        const end_ns = std.time.nanoTimestamp();
+        self.last_render_duration_ns = end_ns - self.last_render_start_ns;
+        self.total_render_time_ns += self.last_render_duration_ns;
+        self.total_renders += 1;
+
+        if (self.last_render_duration_ns > self.max_render_duration_ns) {
+            self.max_render_duration_ns = self.last_render_duration_ns;
+        }
+    }
+
+    pub fn getAverageRenderDurationMs(self: *const RenderStatistics) f64 {
+        if (self.total_renders == 0) return 0.0;
+        const avg_ns = @as(f64, @floatFromInt(self.total_render_time_ns)) / @as(f64, @floatFromInt(self.total_renders));
+        return avg_ns / 1_000_000.0; // Convert ns to ms
+    }
+
+    pub fn getLastRenderDurationMs(self: *const RenderStatistics) f64 {
+        const ns = @as(f64, @floatFromInt(self.last_render_duration_ns));
+        return ns / 1_000_000.0;
+    }
+
+    pub fn getMaxRenderDurationMs(self: *const RenderStatistics) f64 {
+        const ns = @as(f64, @floatFromInt(self.max_render_duration_ns));
+        return ns / 1_000_000.0;
+    }
+};
+
+/// Sentinel value for uninitialized cursor position (forces first cursor move on launch)
+const CURSOR_POS_UNINITIALIZED: usize = std.math.maxInt(usize);
 
 /// Terminal display manager
 /// Handles rendering buffer content to terminal using ANSI escape codes
@@ -70,13 +129,22 @@ pub const Display = struct {
 
     // Cursor position state (prevent redundant position codes during rapid input)
     // Only send cursor position codes when cursor actually moves
-    last_cursor_row: usize = 0,
-    last_cursor_col: usize = 0,
+    // CRITICAL: Initialize to sentinel values to force first cursor move on launch
+    last_cursor_row: usize = CURSOR_POS_UNINITIALIZED,
+    last_cursor_col: usize = CURSOR_POS_UNINITIALIZED,
+
+    // Cursor visibility state (prevent redundant hide/show codes)
+    // Track whether cursor is currently visible to avoid flickering
+    // Sending hide/show on every frame (60 FPS) causes rapid toggling
+    last_cursor_visible: bool = true, // Assume visible at startup
 
     // Terminal capabilities (detected at runtime)
     // Synchronized updates (DCS = 1 s ... DCS = 2 s) for flicker-free rendering
     // Supported by: iTerm2, Alacritty, WezTerm, tmux
     has_sync_mode: bool = true, // Assume true, gracefully degrade if not supported
+
+    // Performance statistics (for debug protocol get_render_stats)
+    render_stats: RenderStatistics = .{},
 
     pub fn init(allocator: std.mem.Allocator) !Display {
         const grid = try ScreenGrid.init(allocator, 80, 24);
@@ -171,13 +239,25 @@ pub const Display = struct {
     }
 
     /// Hide cursor
+    /// OPTIMIZATION: Only send hide code if cursor is currently visible
+    /// This prevents redundant hide codes from causing flickering during rapid rendering
     pub fn hideCursor(self: *Display) !void {
-        return terminal_control.hideCursor(self);
+        if (self.last_cursor_visible) {
+            try terminal_control.hideCursor(self);
+            self.last_cursor_visible = false;
+            self.render_stats.cursor_hide_codes += 1; // Track for performance debugging
+        }
     }
 
     /// Show cursor
+    /// OPTIMIZATION: Only send show code if cursor is currently hidden
+    /// This prevents redundant show codes from causing flickering during rapid rendering
     pub fn showCursor(self: *Display) !void {
-        return terminal_control.showCursor(self);
+        if (!self.last_cursor_visible) {
+            try terminal_control.showCursor(self);
+            self.last_cursor_visible = true;
+            self.render_stats.cursor_show_codes += 1; // Track for performance debugging
+        }
     }
 
     /// Set cursor to block shape (normal mode)
@@ -207,12 +287,18 @@ pub const Display = struct {
 
     /// Begin synchronized update (prevents terminal flickering)
     pub fn beginSynchronizedUpdate(self: *Display) !void {
-        return terminal_control.beginSynchronizedUpdate(self);
+        try terminal_control.beginSynchronizedUpdate(self);
+        if (self.has_sync_mode) {
+            self.render_stats.sync_update_begin_codes += 1;
+        }
     }
 
     /// End synchronized update (flush all batched output atomically)
     pub fn endSynchronizedUpdate(self: *Display) !void {
-        return terminal_control.endSynchronizedUpdate(self);
+        try terminal_control.endSynchronizedUpdate(self);
+        if (self.has_sync_mode) {
+            self.render_stats.sync_update_end_codes += 1;
+        }
     }
 
     /// Set scroll region for fast scrolling (0-indexed)
@@ -389,7 +475,6 @@ pub const Display = struct {
 
     /// Render buffer content to screen using grid-based rendering
     /// This is the main rendering function following Neovim's architecture
-    /// If cursor_override is provided and active, it will be used instead of buffer.cursor for cursor positioning
     /// Generic over Editor/EditorContext types (both have same fields)
     pub fn render(
         self: *Display,
@@ -398,11 +483,15 @@ pub const Display = struct {
         cursorline_enabled: bool,
         visual_state: *const VisualState,
         yank_highlight: *const YankHighlight,
-        cursor_override: ?CursorPosition,
         list_enabled: bool,
         listchars: *const ListChars,
     ) !void {
-        const buffer = &editor.buffer;
+        // Get buffer from editor (handles both Editor and EditorContext types)
+        const T = @TypeOf(editor);
+        const buffer = if (T == *@import("../../../editor/editor.zig").Editor)
+            editor.getCurrentBuffer() orelse return error.NoCurrentBuffer
+        else
+            &editor.buffer;
 
         // Update terminal size (handles resize and ensures correct dimensions)
         try self.getTerminalSize();
@@ -445,10 +534,26 @@ pub const Display = struct {
         // Cache is only valid for one frame (same line may have different content next frame)
         char_width.clearCache();
 
+        // STATISTICS: Record render start time
+        self.render_stats.recordRenderStart();
+
         // OPTIMIZATION: Begin synchronized update to prevent flickering
         // All terminal output will be batched until endSynchronizedUpdate()
         // This ensures atomic screen updates with zero tearing
         try self.beginSynchronizedUpdate();
+
+        // CRITICAL: Ensure synchronized update is ALWAYS ended, even on error
+        // If we return early due to error, terminal state becomes broken (cursor flickering!)
+        // Use errdefer to cleanup on error, and explicit end at function exit
+        errdefer {
+            self.endSynchronizedUpdate() catch {};
+            self.flush() catch {};
+        }
+
+        // CRITICAL FIX: Hide cursor during rendering to prevent flickering
+        // Without this, user sees cursor at "last cell" position before final cursor positioning
+        // This happens because output_renderer.renderUpdates() moves cursor to each cell as it renders
+        try self.hideCursor();
 
         // PHASE 2.5: Multi-layer rendering pipeline (ACTIVATED!)
         // STEP 1: Update all layers from buffer state
@@ -468,24 +573,15 @@ pub const Display = struct {
         const updates = try output.diff(self.allocator);
         defer self.allocator.free(updates);
 
-        // STEP 4: Hide cursor during rendering to prevent flicker
-        // This prevents the terminal cursor from being visible at the wrong position
-        // while we render grid updates (cursor ends up at last written cell)
-        try self.hideCursor();
-
-        // STEP 5: Render only changed cells with optimizations
+        // STEP 4: Render only changed cells (cursor invisible, so no flickering)
         try output_renderer.renderUpdates(self, updates);
 
-        // STEP 6: Swap buffers (current becomes previous for next frame)
+        // STEP 5: Swap buffers (current becomes previous for next frame)
         output.swapBuffers();
 
-        // STEP 7: Position cursor at buffer cursor location (add gutter offset)
-        // Use cursor_override if provided (for animated cursor plugins)
-        const cursor_row = if (cursor_override) |override| override.row else buffer.cursor.row;
-        const cursor_col_display = if (cursor_override) |override|
-            override.col
-        else
-            cursor_display_col;
+        // STEP 6: Position cursor at buffer cursor location (add gutter offset)
+        const cursor_row = buffer.cursor.row;
+        const cursor_col_display = cursor_display_col;
 
         const screen_row = if (cursor_row >= self.viewport_top)
             cursor_row - self.viewport_top
@@ -507,17 +603,22 @@ pub const Display = struct {
             try self.moveCursor(screen_row, clamped_col);
             self.last_cursor_row = screen_row;
             self.last_cursor_col = clamped_col;
+            self.render_stats.cursor_position_codes += 1; // Track for performance debugging
         }
 
-        // STEP 8: Show cursor at correct position
-        // Now the cursor is at the right location, make it visible
-        try self.showCursor();
+        // Cursor is now at the correct final position
+        // Synchronized update will flush everything atomically
 
-        // STEP 9: End synchronized update and flush atomically
-        // This commits all batched terminal output in a single frame
-        // Prevents flickering and tearing during rapid updates
-        try self.endSynchronizedUpdate();
-        try self.flush();
+        // NOTE: Synchronized update is NOT ended here!
+        // backend.render() will set cursor shape AFTER this returns,
+        // so we let backend.render() call endSynchronizedUpdate() after cursor shape is set
+
+        // STATISTICS: Record render end time and compositor stats
+        self.render_stats.recordRenderEnd();
+        self.render_stats.layers_composited_last = self.layer_manager.layers.items.len;
+        self.render_stats.cells_updated_last = updates.len;
+        // TODO: Get blended cell count from compositor when stats are available
+        // self.render_stats.cells_blended_last = compositor_stats.cells_blended;
     }
 
     /// Headless render: Update compositor state WITHOUT writing to stdout
@@ -534,7 +635,12 @@ pub const Display = struct {
         list_enabled: bool,
         listchars: *const ListChars,
     ) !void {
-        const buffer = &editor.buffer;
+        // Get buffer from editor (handles both Editor and EditorContext types)
+        const T = @TypeOf(editor);
+        const buffer = if (T == *@import("../../../editor/editor.zig").Editor)
+            editor.getCurrentBuffer() orelse return error.NoCurrentBuffer
+        else
+            &editor.buffer;
 
         // Update gutter cache (Neovim optimization: invalidate on line count change)
         self.updateGutterCache(buffer);
@@ -610,39 +716,184 @@ pub const Display = struct {
         }
     }
 
-    /// Flush output buffer
-    pub fn flush(_: *Display) !void {
-        const stdout = std.fs.File.stdout();
-        try stdout.sync();
-    }
+    /// LIGHTWEIGHT: Render cursor position ONLY (no compositor, no diff, no layers)
+    /// This is used when only the cursor moved (buffer content unchanged)
+    /// Performance: 1 cursor position code instead of 457!
+    /// Generic over Editor/EditorContext types (both have same fields)
+    pub fn renderCursorOnly(self: *Display, editor: anytype) !void {
+        // Get buffer from editor (handles both Editor and EditorContext types)
+        const T = @TypeOf(editor);
+        const buffer = if (T == *@import("../../../editor/editor.zig").Editor)
+            editor.getCurrentBuffer() orelse return error.NoCurrentBuffer
+        else
+            &editor.buffer;
 
-    /// Update cursor position only (lightweight, for animations)
-    /// This bypasses the full render pipeline and just moves the cursor
-    /// Used by animated cursor plugins to avoid expensive grid updates
-    pub fn updateCursorOnly(self: *Display, row: usize, col: usize) !void {
-        // Get gutter width
+        // Adjust viewport to keep cursor visible
+        self.adjustViewport(buffer);
+
+        // Get gutter width for horizontal positioning
         const gutter_width = self.gutter_manager.getTotalWidth();
 
-        // Calculate screen position
-        const screen_row = if (row >= self.viewport_top)
-            row - self.viewport_top
+        // Calculate text area width (account for gutter)
+        const text_cols = if (self.terminal_cols > gutter_width)
+            self.terminal_cols - gutter_width
+        else
+            self.terminal_cols;
+
+        // Convert cursor byte position to display column (account for wide chars)
+        const cursor_display_col = if (buffer.cursor.row < buffer.lineCount()) blk: {
+            const line = buffer.getLine(buffer.cursor.row) orelse break :blk buffer.cursor.col;
+            defer buffer.allocator.free(line);
+            const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
+                line[0 .. line.len - 1]
+            else
+                line;
+            break :blk char_width.byteToDisplayColumn(line_without_newline, buffer.cursor.col);
+        } else buffer.cursor.col;
+
+        // Adjust horizontal scroll if needed
+        if (cursor_display_col >= self.viewport_left + text_cols) {
+            self.viewport_left = cursor_display_col - text_cols + 1;
+        } else if (cursor_display_col < self.viewport_left) {
+            self.viewport_left = cursor_display_col;
+        }
+
+        // Calculate screen position (relative to viewport)
+        const screen_row = if (buffer.cursor.row >= self.viewport_top)
+            buffer.cursor.row - self.viewport_top
         else
             0;
 
-        const screen_col_text = if (col >= self.viewport_left)
-            col - self.viewport_left
+        const screen_col_text = if (cursor_display_col >= self.viewport_left)
+            cursor_display_col - self.viewport_left
         else
             0;
 
         const screen_col = gutter_width + screen_col_text;
         const clamped_col = @min(screen_col, self.terminal_cols - 1);
 
-        // Just move cursor - no grid update, no diff
-        // Also update tracking to prevent redundant moves in next full render
+        // Begin synchronized update (atomic cursor move)
+        try self.beginSynchronizedUpdate();
+
+        // CRITICAL: Ensure synchronized update is ALWAYS ended
+        errdefer {
+            self.endSynchronizedUpdate() catch {};
+            self.flush() catch {};
+        }
+
+        // ONLY move cursor if position changed (prevent redundant codes)
         if (self.last_cursor_row != screen_row or self.last_cursor_col != clamped_col) {
             try self.moveCursor(screen_row, clamped_col);
             self.last_cursor_row = screen_row;
             self.last_cursor_col = clamped_col;
+            self.render_stats.cursor_position_codes += 1;
         }
+
+        // End synchronized update and flush
+        try self.endSynchronizedUpdate();
+        try self.flush();
+    }
+
+    /// VISUAL MODE OPTIMIZATION: Render cursor + selection layer ONLY
+    /// Used when cursor moves in Visual mode (selection changes but buffer doesn't)
+    /// Performance: Skips rebuilding base/gutter layers, only updates selection
+    pub fn renderVisualCursorMovement(self: *Display, editor: *Editor, visual_state: *const VisualState) !void {
+        const buffer = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+
+        // Adjust viewport to keep cursor visible
+        self.adjustViewport(buffer);
+
+        // Get gutter width for horizontal positioning
+        const gutter_width = self.gutter_manager.getTotalWidth();
+
+        // Calculate text area width (account for gutter)
+        const text_cols = if (self.terminal_cols > gutter_width)
+            self.terminal_cols - gutter_width
+        else
+            self.terminal_cols;
+
+        // Convert cursor byte position to display column (account for wide chars)
+        const cursor_display_col = if (buffer.cursor.row < buffer.lineCount()) blk: {
+            const line = buffer.getLine(buffer.cursor.row) orelse break :blk buffer.cursor.col;
+            defer buffer.allocator.free(line);
+            const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
+                line[0 .. line.len - 1]
+            else
+                line;
+            break :blk char_width.byteToDisplayColumn(line_without_newline, buffer.cursor.col);
+        } else buffer.cursor.col;
+
+        // Adjust horizontal scroll if needed
+        if (cursor_display_col >= self.viewport_left + text_cols) {
+            self.viewport_left = cursor_display_col - text_cols + 1;
+        } else if (cursor_display_col < self.viewport_left) {
+            self.viewport_left = cursor_display_col;
+        }
+
+        // Calculate screen position (relative to viewport)
+        const screen_row = if (buffer.cursor.row >= self.viewport_top)
+            buffer.cursor.row - self.viewport_top
+        else
+            0;
+
+        const screen_col_text = if (cursor_display_col >= self.viewport_left)
+            cursor_display_col - self.viewport_left
+        else
+            0;
+
+        const screen_col = gutter_width + screen_col_text;
+        const clamped_col = @min(screen_col, self.terminal_cols - 1);
+
+        // Begin synchronized update (atomic rendering)
+        try self.beginSynchronizedUpdate();
+
+        // CRITICAL: Ensure synchronized update is ALWAYS ended
+        errdefer {
+            self.endSynchronizedUpdate() catch {};
+            self.flush() catch {};
+        }
+
+        // STEP 1: Hide cursor to prevent flickering during updates
+        // Without this, user sees cursor jump to intermediate positions as cells are rendered
+        try self.hideCursor();
+
+        // STEP 2: Update ONLY selection layer (skip base/gutter - they haven't changed)
+        const text_rows = if (self.terminal_rows > 1) self.terminal_rows - 1 else 1;
+        try layer_renderer.updateSelectionLayer(self, buffer, visual_state, &editor.highlight_registry, text_rows);
+
+        // STEP 3: Composite layers (selection layer marked dirty, others cached)
+        try self.compositor.composite(self.layer_manager.layers.items);
+
+        // STEP 4: Get composited output and compute diff
+        const output = self.compositor.getOutput();
+        const updates = try output.diff(self.allocator);
+        defer self.allocator.free(updates);
+
+        // STEP 5: Render only changed cells (cursor invisible, so no flickering)
+        try output_renderer.renderUpdates(self, updates);
+
+        // STEP 6: Swap buffers
+        output.swapBuffers();
+
+        // STEP 7: Move cursor to final position if changed
+        if (self.last_cursor_row != screen_row or self.last_cursor_col != clamped_col) {
+            try self.moveCursor(screen_row, clamped_col);
+            self.last_cursor_row = screen_row;
+            self.last_cursor_col = clamped_col;
+            self.render_stats.cursor_position_codes += 1;
+        }
+
+        // STEP 8: Show cursor at final position (no flickering!)
+        try self.showCursor();
+
+        // End synchronized update and flush
+        try self.endSynchronizedUpdate();
+        try self.flush();
+    }
+
+    /// Flush output buffer
+    pub fn flush(_: *Display) !void {
+        const stdout = std.fs.File.stdout();
+        try stdout.sync();
     }
 };

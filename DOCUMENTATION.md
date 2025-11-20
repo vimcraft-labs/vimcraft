@@ -178,7 +178,7 @@ Each category has its own README for navigation:
 - ✅ **README.md** - Project introduction (GitHub page)
 - ✅ **CLAUDE.md** - Project context for AI assistants
 - ✅ **DOCUMENTATION.md** - This file (organization summary)
-- ✅ **init.ts** - Example configuration
+- ✅ **index.ts** - Example configuration
 - ✅ **package.json** - NPM config
 - ✅ **tsconfig.json** - TypeScript config
 - ✅ **build.zig** - Build configuration

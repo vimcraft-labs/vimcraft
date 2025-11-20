@@ -89,7 +89,7 @@ return LoadError.InvalidPath;
 ```
 
 **Allows**:
-- ✅ `/Users/user/.config/vimcraft/init.ts`
+- ✅ `/Users/user/.config/vimcraft/index.ts`
 - ✅ `/Users/user/project/plugin.ts` (if cwd = /Users/user/project)
 - ✅ `/tmp/test.ts` (testing only, with warning)
 
@@ -120,7 +120,7 @@ test "path traversal protection" {
     try std.testing.expectError(LoadError.InvalidPath, loadModule(config, "/etc/passwd"));
 
     // Test 3: Valid config path allowed
-    const valid = "/Users/user/.config/vimcraft/init.ts";
+    const valid = "/Users/user/.config/vimcraft/index.ts";
     const bytecode = try loadModule(config, valid);
     defer allocator.free(bytecode);
 }
@@ -131,7 +131,7 @@ test "path traversal protection" {
 ```
 === Path Validation Unit Tests ===
 ✓ Allowed: /tmp/test.ts
-✓ Allowed: /Users/le/.config/vimcraft/init.ts
+✓ Allowed: /Users/le/.config/vimcraft/index.ts
 ✓ Allowed: /Users/le/vimcraft/editor/plugin.ts
 ✓ Blocked: /tmp/../etc/passwd (traversal)
 ✓ Blocked: /tmp/test/../secret.ts (traversal)

@@ -20,6 +20,7 @@
 /// - Add runtime validation via Proxy wrappers in JavaScript
 const std = @import("std");
 const Buffer = @import("../../editor/buffer/buffer.zig").Buffer;
+const Editor = @import("../../editor/editor.zig").Editor;
 const helpers = @import("helpers.zig");
 
 // Import shared Hermes C API
@@ -62,7 +63,8 @@ pub export fn getBufferContent(
     _ = count;
 
     const rt = runtime orelse return null;
-    const buffer: *Buffer = @ptrCast(@alignCast(context.?));
+    const editor: *Editor = @ptrCast(@alignCast(context.?));
+    const buffer = editor.getCurrentBuffer() orelse return c.hermes_value_create_null(rt);
 
     // Get current buffer content as contiguous string (Rope → owned slice)
     // NOTE: This allocates memory! We need a finalizer to free it.
@@ -138,7 +140,8 @@ pub export fn getLineContent(
     count: usize,
 ) callconv(.c) ?*c.OVHermesValue {
     const rt = runtime orelse return null;
-    const buffer: *Buffer = @ptrCast(@alignCast(context.?));
+    const editor: *Editor = @ptrCast(@alignCast(context.?));
+    const buffer = editor.getCurrentBuffer() orelse return c.hermes_value_create_null(rt);
 
     if (count < 1) return c.hermes_value_create_null(rt);
 
@@ -194,7 +197,8 @@ pub export fn getBufferLength(
     _ = count;
 
     const rt = runtime orelse return null;
-    const buffer: *Buffer = @ptrCast(@alignCast(context.?));
+    const editor: *Editor = @ptrCast(@alignCast(context.?));
+    const buffer = editor.getCurrentBuffer() orelse return c.hermes_value_create_null(rt);
 
     return c.hermes_value_create_number(rt, @floatFromInt(buffer.content.len()));
 }
@@ -211,7 +215,8 @@ pub export fn getBufferLineCount(
     _ = count;
 
     const rt = runtime orelse return null;
-    const buffer: *Buffer = @ptrCast(@alignCast(context.?));
+    const editor: *Editor = @ptrCast(@alignCast(context.?));
+    const buffer = editor.getCurrentBuffer() orelse return c.hermes_value_create_null(rt);
 
     return c.hermes_value_create_number(rt, @floatFromInt(buffer.lineCount()));
 }
@@ -247,7 +252,8 @@ pub export fn getBufferChangedTick(
     _ = count;
 
     const rt = runtime orelse return null;
-    const buffer: *Buffer = @ptrCast(@alignCast(context.?));
+    const editor: *Editor = @ptrCast(@alignCast(context.?));
+    const buffer = editor.getCurrentBuffer() orelse return c.hermes_value_create_null(rt);
 
     return c.hermes_value_create_number(rt, @floatFromInt(buffer.version));
 }
@@ -322,37 +328,39 @@ pub export fn bufferHostObjectEnumerator(
 /// Register buffer API as HostObject (zero-copy ArrayBuffer access)
 /// JavaScript usage: vim.buffer.getContent(), vim.buffer.getLineContent(5)
 /// Note: getContentCopy deliberately NOT exposed (misleading name, deprecated)
-pub fn register(runtime: *c.OVHermesRuntime, buffer: *Buffer) void {
+/// Context is now Editor (not Buffer) - functions call getCurrentBuffer() internally
+pub fn register(runtime: *c.OVHermesRuntime, editor: *Editor) void {
     c.hermes_register_host_object(
         runtime,
         "vimBuffer",
         bufferHostObjectGet,
         null, // No setter (read-only methods for now)
         bufferHostObjectEnumerator,
-        @ptrCast(buffer),
+        @ptrCast(editor),
     );
 }
 
 /// Legacy registration (backwards compatibility)
 /// ⚠️ DEPRECATED: getBufferContentCopy has misleading name (doesn't copy)
 /// TODO: Remove after all examples/tests updated to use HostObject API
-pub fn registerLegacy(runtime: *c.OVHermesRuntime, buffer: *Buffer) void {
+/// Context is now Editor (not Buffer) - functions call getCurrentBuffer() internally
+pub fn registerLegacy(runtime: *c.OVHermesRuntime, editor: *Editor) void {
     c.hermes_register_host_function(
         runtime,
         "getBufferContent",
         getBufferContent,
-        @ptrCast(buffer),
+        @ptrCast(editor),
     );
     c.hermes_register_host_function(
         runtime,
         "getBufferContentCopy",
         getBufferContentCopy, // ⚠️ DEPRECATED: Misleading name
-        @ptrCast(buffer),
+        @ptrCast(editor),
     );
     c.hermes_register_host_function(
         runtime,
         "getLineContent",
         getLineContent,
-        @ptrCast(buffer),
+        @ptrCast(editor),
     );
 }

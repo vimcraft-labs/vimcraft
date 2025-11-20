@@ -94,8 +94,6 @@ pub fn compile(
     // Clean up temp output file
     std.fs.cwd().deleteFile(temp_out) catch {};
 
-    std.log.info("Compiled {d} bytes JS → {d} bytes HBC", .{ source.len, bytecode.len });
-
     return bytecode;
 }
 

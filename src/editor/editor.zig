@@ -23,6 +23,16 @@ const Syntax = @import("treesitter/syntax.zig").Syntax;
 const Parser = @import("treesitter/parser.zig").Parser;
 const languages = @import("treesitter/languages.zig");
 
+/// Buffer identifier (Helix-style architecture)
+/// Wraps u64 for type safety (prevents accidental mixing with line numbers, etc.)
+pub const BufferId = struct {
+    id: u64,
+
+    pub fn eql(self: BufferId, other: BufferId) bool {
+        return self.id == other.id;
+    }
+};
+
 /// Pending command for multi-key sequences (like dd, dw)
 const PendingCommand = struct {
     char: ?u8 = null,
@@ -127,44 +137,19 @@ const CommandBuffer = struct {
     }
 };
 
-/// Cursor position for override (for animated cursor plugins)
-pub const CursorPosition = struct {
-    row: usize,
-    col: usize,
-};
-
-/// Cursor render position override (for animated cursor plugins)
-pub const CursorRenderOverride = struct {
-    active: bool = false,
-    row: usize = 0,
-    col: usize = 0,
-
-    pub fn clear(self: *CursorRenderOverride) void {
-        self.active = false;
-    }
-
-    pub fn set(self: *CursorRenderOverride, row: usize, col: usize) void {
-        self.active = true;
-        self.row = row;
-        self.col = col;
-    }
-
-    pub fn get(self: *const CursorRenderOverride) ?CursorPosition {
-        if (self.active) {
-            return CursorPosition{ .row = self.row, .col = self.col };
-        }
-        return null;
-    }
-};
-
 /// Headless editor core - no I/O, pure state and logic
 /// This is the single source of truth for editor behavior
 /// Both Terminal backend and Debug backend use this
 pub const Editor = struct {
     allocator: std.mem.Allocator,
 
+    // Buffer management (Helix-style HashMap architecture)
+    buffers: std.AutoHashMap(BufferId, Buffer),
+    current_buffer_id: ?BufferId,
+    next_buffer_id: u64,
+    cwd: []const u8, // Working directory (owned, must be freed in deinit)
+
     // Core state (backends can access these directly)
-    buffer: Buffer,
     mode_manager: ModeManager,
     edit_ops: EditOps,
     register_mgr: RegisterManager,
@@ -193,9 +178,6 @@ pub const Editor = struct {
     // Null until JSI runtime is available (terminal backend sets this during JSI setup)
     event_emitter: ?*EventEmitter = null,
 
-    // Cursor rendering override (for animated cursor plugins)
-    cursor_render_override: CursorRenderOverride = .{},
-
     // JavaScript state change flag (for plugins that modify state via timers/callbacks)
     // Set this to true when JavaScript APIs modify editor state to trigger re-render
     js_state_dirty: bool = false,
@@ -220,8 +202,21 @@ pub const Editor = struct {
     viewport_left: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) !Editor {
-        var buffer = Buffer.init(allocator);
-        errdefer buffer.deinit();
+        // Get current working directory (heap-allocated, will be freed in deinit)
+        const cwd = std.process.getCwdAlloc(allocator) catch |err| blk: {
+            std.debug.print("Warning: Failed to get cwd: {}\n", .{err});
+            break :blk try allocator.dupe(u8, "."); // Fallback to "."
+        };
+        errdefer allocator.free(cwd);
+
+        // Initialize buffer HashMap
+        var buffers = std.AutoHashMap(BufferId, Buffer).init(allocator);
+        errdefer buffers.deinit();
+
+        // Create initial unnamed buffer (ID 1)
+        const initial_buffer = Buffer.init(allocator);
+        const initial_id = BufferId{ .id = 1 };
+        try buffers.put(initial_id, initial_buffer);
 
         var ts_loader = try Loader.init(allocator);
         errdefer ts_loader.deinit();
@@ -239,7 +234,10 @@ pub const Editor = struct {
 
         return Editor{
             .allocator = allocator,
-            .buffer = buffer,
+            .buffers = buffers,
+            .current_buffer_id = initial_id,
+            .next_buffer_id = 2, // Next buffer will be ID 2
+            .cwd = cwd,
             .mode_manager = ModeManager.init(),
             .edit_ops = EditOps.init(allocator),
             .register_mgr = RegisterManager.init(allocator),
@@ -369,7 +367,16 @@ pub const Editor = struct {
         // since JSI owns the EventEmitter's lifecycle (created in initJSI)
         // Do NOT clean it up here to avoid double-free
 
-        self.buffer.deinit();
+        // Clean up all buffers
+        var iter = self.buffers.valueIterator();
+        while (iter.next()) |buffer| {
+            buffer.deinit();
+        }
+        self.buffers.deinit();
+
+        // Free working directory
+        self.allocator.free(self.cwd);
+
         self.register_mgr.deinit();
         self.keymap_mgr.deinit();
         self.ts_loader.deinit();
@@ -382,23 +389,296 @@ pub const Editor = struct {
         self.logger.deinit();
     }
 
-    /// Load file and detect filetype
+    /// Get pointer to current buffer (Helix-style accessor)
+    /// Returns null if no buffer is active (should never happen in practice)
+    pub fn getCurrentBuffer(self: *Editor) ?*Buffer {
+        const id = self.current_buffer_id orelse return null;
+        return self.buffers.getPtr(id);
+    }
+
+    /// Create a new empty buffer and return its ID (Helix-style)
+    /// Does NOT switch to the new buffer automatically
+    pub fn createBuffer(self: *Editor) !BufferId {
+        const new_buffer = Buffer.init(self.allocator);
+        const new_id = BufferId{ .id = self.next_buffer_id };
+        self.next_buffer_id += 1;
+
+        try self.buffers.put(new_id, new_buffer);
+        return new_id;
+    }
+
+    /// Load file into a new buffer and switch to it (Helix-style open())
+    /// If file is already open, switch to existing buffer instead
+    /// Returns the buffer ID (new or existing)
+    pub fn loadBufferFromFile(self: *Editor, path: []const u8) !BufferId {
+        // Check if file is already open (duplicate detection like Helix)
+        var iter = self.buffers.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.filepath) |filepath| {
+                if (std.mem.eql(u8, filepath, path)) {
+                    // Already open, switch to it
+                    self.current_buffer_id = entry.key_ptr.*;
+                    self.triggerAutocommand("BufEnter");
+                    return entry.key_ptr.*;
+                }
+            }
+        }
+
+        // Not open, create new buffer
+        const new_id = try self.createBuffer();
+        const buf = self.buffers.getPtr(new_id).?;
+
+        // Load file content
+        try buf.loadFile(path);
+
+        // Detect filetype
+        const first_line = buf.getLine(0);
+        defer if (first_line != null) self.allocator.free(first_line.?);
+        const filetype = self.ts_loader.detectFiletype(path, first_line);
+
+        if (filetype) |ft| {
+            buf.filetype = ft;
+            self.logger.info("✅ Detected filetype: {s} for {s}", .{ ft, path }) catch {};
+            // TODO: Parse with tree-sitter (need to handle multiple buffers)
+        } else {
+            buf.filetype = null;
+            self.logger.info("❌ No filetype detected for {s}", .{path}) catch {};
+        }
+
+        // Switch to new buffer
+        self.current_buffer_id = new_id;
+
+        // Trigger autocommands
+        self.triggerAutocommand("BufRead");
+        self.triggerAutocommand("BufEnter");
+
+        return new_id;
+    }
+
+    /// Switch to buffer by ID
+    /// Returns error if buffer doesn't exist
+    pub fn switchBuffer(self: *Editor, id: BufferId) !void {
+        if (!self.buffers.contains(id)) {
+            return error.BufferNotFound;
+        }
+
+        // Trigger BufLeave for current buffer
+        self.triggerAutocommand("BufLeave");
+
+        self.current_buffer_id = id;
+
+        // Trigger BufEnter for new buffer
+        self.triggerAutocommand("BufEnter");
+    }
+
+    /// Delete buffer by ID (Neovim :bd behavior)
+    /// Checks if buffer is modified and returns error if so (unless force=true)
+    /// Switches to previous buffer if deleting current buffer
+    pub fn deleteBuffer(self: *Editor, id: BufferId, force: bool) !void {
+        const buf = self.buffers.getPtr(id) orelse return error.BufferNotFound;
+
+        // Check if buffer is modified
+        if (!force and buf.modified) {
+            return error.BufferModified;
+        }
+
+        // If deleting current buffer, switch to another one first
+        if (self.current_buffer_id) |current_id| {
+            if (current_id.eql(id)) {
+                // Find another buffer to switch to
+                var found_other = false;
+                var iter = self.buffers.keyIterator();
+                while (iter.next()) |key| {
+                    if (!key.eql(id)) {
+                        try self.switchBuffer(key.*);
+                        found_other = true;
+                        break;
+                    }
+                }
+
+                // If no other buffer exists, create an empty one
+                if (!found_other) {
+                    const new_id = try self.createBuffer();
+                    self.current_buffer_id = new_id;
+                }
+            }
+        }
+
+        // Remove buffer from HashMap (this calls deinit via iterator)
+        if (self.buffers.fetchRemove(id)) |kv| {
+            var buf_copy = kv.value;
+            buf_copy.deinit();
+        }
+    }
+
+    /// Delete all buffers except current one (Neovim :only / :bonly behavior)
+    /// Checks for modified buffers and returns error if any (unless force=true)
+    /// Returns count of buffers deleted
+    pub fn deleteOtherBuffers(self: *Editor, force: bool) !usize {
+        const current_id = self.current_buffer_id orelse return error.NoActiveBuffer;
+
+        // First pass: check for modified buffers if not forcing
+        if (!force) {
+            var iter = self.buffers.iterator();
+            while (iter.next()) |entry| {
+                if (!entry.key_ptr.eql(current_id) and entry.value_ptr.modified) {
+                    return error.BufferModified;
+                }
+            }
+        }
+
+        // Second pass: collect IDs to delete (can't modify HashMap while iterating)
+        var to_delete: std.ArrayList(BufferId) = .{};
+        defer to_delete.deinit(self.allocator);
+
+        var iter = self.buffers.keyIterator();
+        while (iter.next()) |key| {
+            if (!key.eql(current_id)) {
+                try to_delete.append(self.allocator, key.*);
+            }
+        }
+
+        // Third pass: delete all other buffers
+        for (to_delete.items) |id| {
+            if (self.buffers.fetchRemove(id)) |kv| {
+                var buf_copy = kv.value;
+                buf_copy.deinit();
+            }
+        }
+
+        return to_delete.items.len;
+    }
+
+    /// Cycle to next buffer (Neovim :bn behavior)
+    /// Uses Helix-style cycle() iterator for wrap-around
+    pub fn nextBuffer(self: *Editor) void {
+        const current_id = self.current_buffer_id orelse return;
+
+        // Get sorted keys for deterministic order
+        var keys: std.ArrayList(BufferId) = .{};
+        defer keys.deinit(self.allocator);
+
+        var iter = self.buffers.keyIterator();
+        while (iter.next()) |key| {
+            keys.append(self.allocator, key.*) catch return; // Ignore allocation errors in navigation
+        }
+
+        // Sort by ID for consistent order
+        std.sort.pdq(BufferId, keys.items, {}, struct {
+            fn lessThan(_: void, a: BufferId, b: BufferId) bool {
+                return a.id < b.id;
+            }
+        }.lessThan);
+
+        // Find current buffer index
+        for (keys.items, 0..) |key, i| {
+            if (key.eql(current_id)) {
+                // Get next index (with wrap-around)
+                const next_idx = (i + 1) % keys.items.len;
+                self.switchBuffer(keys.items[next_idx]) catch return;
+                return;
+            }
+        }
+    }
+
+    /// Cycle to previous buffer (Neovim :bp behavior)
+    pub fn prevBuffer(self: *Editor) void {
+        const current_id = self.current_buffer_id orelse return;
+
+        // Get sorted keys for deterministic order
+        var keys: std.ArrayList(BufferId) = .{};
+        defer keys.deinit(self.allocator);
+
+        var iter = self.buffers.keyIterator();
+        while (iter.next()) |key| {
+            keys.append(self.allocator, key.*) catch return;
+        }
+
+        // Sort by ID for consistent order
+        std.sort.pdq(BufferId, keys.items, {}, struct {
+            fn lessThan(_: void, a: BufferId, b: BufferId) bool {
+                return a.id < b.id;
+            }
+        }.lessThan);
+
+        // Find current buffer index
+        for (keys.items, 0..) |key, i| {
+            if (key.eql(current_id)) {
+                // Get previous index (with wrap-around)
+                const prev_idx = if (i == 0) keys.items.len - 1 else i - 1;
+                self.switchBuffer(keys.items[prev_idx]) catch return;
+                return;
+            }
+        }
+    }
+
+    /// Buffer metadata for :ls command
+    pub const BufferInfo = struct {
+        id: BufferId,
+        filepath: ?[]const u8,
+        modified: bool,
+        current: bool,
+    };
+
+    /// Get list of all buffers for :ls command (Neovim :ls behavior)
+    /// Returns array that caller must free
+    pub fn listBuffers(self: *Editor) ![]BufferInfo {
+        var result: std.ArrayList(BufferInfo) = .{};
+        errdefer result.deinit(self.allocator);
+
+        const current_id = self.current_buffer_id;
+
+        // Get sorted keys for deterministic order
+        var keys: std.ArrayList(BufferId) = .{};
+        defer keys.deinit(self.allocator);
+
+        var iter = self.buffers.keyIterator();
+        while (iter.next()) |key| {
+            try keys.append(self.allocator, key.*);
+        }
+
+        // Sort by ID
+        std.sort.pdq(BufferId, keys.items, {}, struct {
+            fn lessThan(_: void, a: BufferId, b: BufferId) bool {
+                return a.id < b.id;
+            }
+        }.lessThan);
+
+        // Build info array
+        for (keys.items) |id| {
+            const buf = self.buffers.get(id).?;
+            const is_current = if (current_id) |cid| cid.eql(id) else false;
+
+            try result.append(self.allocator, BufferInfo{
+                .id = id,
+                .filepath = buf.filepath,
+                .modified = buf.modified,
+                .current = is_current,
+            });
+        }
+
+        return result.toOwnedSlice(self.allocator);
+    }
+
+    /// Load file and detect filetype (legacy method - kept for backwards compatibility)
+    /// TODO: Migrate callers to use loadBufferFromFile() instead
     pub fn loadFile(self: *Editor, path: []const u8) !void {
-        try self.buffer.loadFile(path);
+        const buf = self.getCurrentBuffer() orelse return error.NoActiveBuffer;
+        try buf.loadFile(path);
 
         // Detect filetype using loader
-        const first_line = self.buffer.getLine(0);
+        const first_line = buf.getLine(0);
         defer if (first_line != null) self.allocator.free(first_line.?); // ✅ FIX: Free owned memory from getLine()
         const filetype = self.ts_loader.detectFiletype(path, first_line);
 
         if (filetype) |ft| {
-            self.buffer.filetype = ft;
+            buf.filetype = ft;
             self.logger.info("✅ Detected filetype: {s} for {s}", .{ ft, path }) catch {};
 
             // Parse with tree-sitter
             try self.parseBufferWithTreeSitter(ft);
         } else {
-            self.buffer.filetype = null;
+            buf.filetype = null;
             self.logger.info("❌ No filetype detected for {s}", .{path}) catch {};
         }
 
@@ -597,23 +877,26 @@ pub const Editor = struct {
                     const modifier = self.pending_text_object.getModifier().?;
                     const pending_op = self.pending_cmd.get().?;
 
+                    // Get current buffer
+                    const buf = self.getCurrentBuffer() orelse return false;
+
                     // Find the text object range
-                    if (text_objects.findTextObject(&self.buffer, obj_type, modifier)) |range| {
+                    if (text_objects.findTextObject(buf, obj_type, modifier)) |range| {
                         // Perform the operation based on pending command
                         switch (pending_op) {
                             'd' => { // Delete text object
-                                const result = try self.edit_ops.deleteRange(&self.buffer, range, .char);
+                                const result = try self.edit_ops.deleteRange(buf, range, .char);
                                 defer self.allocator.free(result.deleted_text);
                                 // TODO: Store in register
                             },
                             'c' => { // Change text object (delete + enter insert)
-                                const result = try self.edit_ops.deleteRange(&self.buffer, range, .char);
+                                const result = try self.edit_ops.deleteRange(buf, range, .char);
                                 defer self.allocator.free(result.deleted_text);
                                 // TODO: Store in register
                                 self.enterInsertMode();
                             },
                             'y' => { // Yank text object
-                                const text = try range.getText(&self.buffer);
+                                const text = try range.getText(buf);
                                 defer self.allocator.free(text); // getText() now returns owned memory
                                 const reg = self.pending_register.getSelected() orelse '"';
                                 const lines = [_][]const u8{text};
@@ -657,26 +940,29 @@ pub const Editor = struct {
                     }
                 }
 
+                // Get current buffer for all pending operations
+                const buf = self.getCurrentBuffer() orelse return false;
+
                 // Handle pending 'd' commands
                 if (pending == 'd') {
                     switch (char) {
                         'd' => { // dd - delete line
-                            const result = try self.edit_ops.deleteCurrentLine(&self.buffer);
+                            const result = try self.edit_ops.deleteCurrentLine(buf);
                             defer self.allocator.free(result.deleted_text);
                             // TODO: Store in register
                         },
                         'w' => { // dw - delete word
-                            const result = try self.edit_ops.deleteWord(&self.buffer);
+                            const result = try self.edit_ops.deleteWord(buf);
                             defer self.allocator.free(result.deleted_text);
                             // TODO: Store in register
                         },
                         '$' => { // d$ - delete to end of line
-                            const result = try self.edit_ops.deleteToEndOfLine(&self.buffer);
+                            const result = try self.edit_ops.deleteToEndOfLine(buf);
                             defer self.allocator.free(result.deleted_text);
                             // TODO: Store in register
                         },
                         '0' => { // d0 - delete to start of line
-                            const result = try self.edit_ops.deleteToStartOfLine(&self.buffer);
+                            const result = try self.edit_ops.deleteToStartOfLine(buf);
                             defer self.allocator.free(result.deleted_text);
                             // TODO: Store in register
                         },
@@ -689,26 +975,26 @@ pub const Editor = struct {
                     switch (char) {
                         'c' => { // cc - change line
                             const Range = @import("buffer/edit.zig").Range;
-                            const range = Range.forLine(&self.buffer, self.buffer.cursor.row);
-                            const deleted_text = try self.edit_ops.changeRange(&self.buffer, range, .line);
+                            const range = Range.forLine(buf, buf.cursor.row);
+                            const deleted_text = try self.edit_ops.changeRange(buf, range, .line);
                             defer self.allocator.free(deleted_text);
                             // TODO: Store in register
                             self.enterInsertMode();
                         },
                         'w' => { // cw - change word
-                            const result = try self.edit_ops.deleteWord(&self.buffer);
+                            const result = try self.edit_ops.deleteWord(buf);
                             defer self.allocator.free(result.deleted_text);
                             // TODO: Store in register
                             self.enterInsertMode();
                         },
                         '$' => { // c$ - change to end of line
-                            const result = try self.edit_ops.deleteToEndOfLine(&self.buffer);
+                            const result = try self.edit_ops.deleteToEndOfLine(buf);
                             defer self.allocator.free(result.deleted_text);
                             // TODO: Store in register
                             self.enterInsertMode();
                         },
                         '0' => { // c0 - change to start of line
-                            const result = try self.edit_ops.deleteToStartOfLine(&self.buffer);
+                            const result = try self.edit_ops.deleteToStartOfLine(buf);
                             defer self.allocator.free(result.deleted_text);
                             // TODO: Store in register
                             self.enterInsertMode();
@@ -720,7 +1006,7 @@ pub const Editor = struct {
                 // Handle pending 'g' commands (goto)
                 if (pending == 'g') {
                     if (char == 'g') { // gg - go to file start
-                        movement.moveToFileStart(&self.buffer);
+                        movement.moveToFileStart(buf);
                         self.pending_cmd.clear();
                         return true; // Moved to file start
                     }
@@ -744,8 +1030,8 @@ pub const Editor = struct {
                 if (pending == 'y') {
                     switch (char) {
                         'y' => { // yy - yank current line
-                            const line_num = self.buffer.cursor.row;
-                            const line = self.buffer.getLine(line_num) orelse {
+                            const line_num = buf.cursor.row;
+                            const line = buf.getLine(line_num) orelse {
                                 self.pending_cmd.clear();
                                 self.pending_register.clear();
                                 return false; // No line to yank, no state change
@@ -769,7 +1055,7 @@ pub const Editor = struct {
                             self.pending_register.clear();
                         },
                         '$' => { // y$ - yank to end of line
-                            const text = try self.edit_ops.yankToEndOfLine(&self.buffer);
+                            const text = try self.edit_ops.yankToEndOfLine(buf);
                             defer self.allocator.free(text);
 
                             if (text.len > 0) {
@@ -777,16 +1063,16 @@ pub const Editor = struct {
                                 const lines = [_][]const u8{text};
                                 try self.register_mgr.yank(reg, &lines, .char_wise);
 
-                                const start_pos = Position{ .line = self.buffer.cursor.row, .col = self.buffer.cursor.col };
-                                const end_col = self.buffer.cursor.col + text.len - 1;
-                                const end_pos = Position{ .line = self.buffer.cursor.row, .col = end_col };
+                                const start_pos = Position{ .line = buf.cursor.row, .col = buf.cursor.col };
+                                const end_col = buf.cursor.col + text.len - 1;
+                                const end_pos = Position{ .line = buf.cursor.row, .col = end_col };
                                 self.yank_highlight = YankHighlight.init(start_pos, end_pos, .char);
                             }
 
                             self.pending_register.clear();
                         },
                         '0' => { // y0 - yank to start of line
-                            const text = try self.edit_ops.yankToStartOfLine(&self.buffer);
+                            const text = try self.edit_ops.yankToStartOfLine(buf);
                             defer self.allocator.free(text);
 
                             if (text.len > 0) {
@@ -794,15 +1080,15 @@ pub const Editor = struct {
                                 const lines = [_][]const u8{text};
                                 try self.register_mgr.yank(reg, &lines, .char_wise);
 
-                                const start_pos = Position{ .line = self.buffer.cursor.row, .col = 0 };
-                                const end_pos = Position{ .line = self.buffer.cursor.row, .col = self.buffer.cursor.col };
+                                const start_pos = Position{ .line = buf.cursor.row, .col = 0 };
+                                const end_pos = Position{ .line = buf.cursor.row, .col = buf.cursor.col };
                                 self.yank_highlight = YankHighlight.init(start_pos, end_pos, .char);
                             }
 
                             self.pending_register.clear();
                         },
                         'w' => { // yw - yank word
-                            const text = try self.edit_ops.yankWord(&self.buffer);
+                            const text = try self.edit_ops.yankWord(buf);
                             defer self.allocator.free(text);
 
                             if (text.len > 0) {
@@ -810,9 +1096,9 @@ pub const Editor = struct {
                                 const lines = [_][]const u8{text};
                                 try self.register_mgr.yank(reg, &lines, .char_wise);
 
-                                const start_pos = Position{ .line = self.buffer.cursor.row, .col = self.buffer.cursor.col };
-                                const end_col = self.buffer.cursor.col + text.len - 1;
-                                const end_pos = Position{ .line = self.buffer.cursor.row, .col = end_col };
+                                const start_pos = Position{ .line = buf.cursor.row, .col = buf.cursor.col };
+                                const end_col = buf.cursor.col + text.len - 1;
+                                const end_pos = Position{ .line = buf.cursor.row, .col = end_col };
                                 self.yank_highlight = YankHighlight.init(start_pos, end_pos, .char);
                             }
 
@@ -830,44 +1116,47 @@ pub const Editor = struct {
         if (input.len == 1) {
             const char = input[0];
 
+            // Get current buffer for single character commands
+            const buf = self.getCurrentBuffer() orelse return false;
+
             switch (char) {
                 // Basic movement (hjkl) - check return value for boundary detection
-                'h' => return movement.moveLeft(&self.buffer),
-                'j' => return movement.moveDown(&self.buffer),
-                'k' => return movement.moveUp(&self.buffer),
-                'l' => return movement.moveRight(&self.buffer),
+                'h' => return movement.moveLeft(buf),
+                'j' => return movement.moveDown(buf),
+                'k' => return movement.moveUp(buf),
+                'l' => return movement.moveRight(buf),
 
                 // Line movement - always changes position (or no-op if already there)
                 '0' => {
-                    movement.moveToLineStart(&self.buffer);
+                    movement.moveToLineStart(buf);
                     return true; // Always changes state (or already at start)
                 },
                 '$' => {
-                    movement.moveToLineEnd(&self.buffer);
+                    movement.moveToLineEnd(buf);
                     return true;
                 },
                 '^' => {
-                    movement.moveToFirstNonBlank(&self.buffer);
+                    movement.moveToFirstNonBlank(buf);
                     return true;
                 },
 
                 // Word movement - always changes position
                 'w' => {
-                    movement.moveWordForward(&self.buffer);
+                    movement.moveWordForward(buf);
                     return true;
                 },
                 'b' => {
-                    movement.moveWordBackward(&self.buffer);
+                    movement.moveWordBackward(buf);
                     return true;
                 },
                 'e' => {
-                    movement.moveWordEnd(&self.buffer);
+                    movement.moveWordEnd(buf);
                     return true;
                 },
 
                 // Delete operations
                 'x' => {
-                    const result = try self.edit_ops.deleteCharAtCursor(&self.buffer);
+                    const result = try self.edit_ops.deleteCharAtCursor(buf);
                     defer self.allocator.free(result.deleted_text);
                     return true; // Deleted character, state changed
                 },
@@ -882,7 +1171,7 @@ pub const Editor = struct {
                     return false; // Just setting pending state
                 },
                 'C' => { // Change to end of line (like c$)
-                    const result = try self.edit_ops.deleteToEndOfLine(&self.buffer);
+                    const result = try self.edit_ops.deleteToEndOfLine(buf);
                     defer self.allocator.free(result.deleted_text);
                     // TODO: Store in register
                     self.enterInsertMode();
@@ -907,7 +1196,7 @@ pub const Editor = struct {
                     return false; // Just setting pending state
                 },
                 'G' => {
-                    movement.moveToFileEnd(&self.buffer);
+                    movement.moveToFileEnd(buf);
                     return true; // Moved to end of file
                 },
 
@@ -928,24 +1217,24 @@ pub const Editor = struct {
                 // Paste operations
                 'p' => {
                     const reg = self.pending_register.getSelected() orelse '"';
-                    _ = try paste.pasteAfter(&self.buffer, &self.register_mgr, reg);
+                    _ = try paste.pasteAfter(buf, &self.register_mgr, reg);
                     self.pending_register.clear();
                     return true; // Pasted text, state changed
                 },
                 'P' => {
                     const reg = self.pending_register.getSelected() orelse '"';
-                    _ = try paste.pasteBefore(&self.buffer, &self.register_mgr, reg);
+                    _ = try paste.pasteBefore(buf, &self.register_mgr, reg);
                     self.pending_register.clear();
                     return true; // Pasted text, state changed
                 },
 
                 // Undo/redo
                 'u' => {
-                    try self.buffer.undo();
+                    try buf.undo();
                     return true; // Undo changes state
                 },
                 18 => { // Ctrl+R
-                    try self.buffer.redo();
+                    try buf.redo();
                     return true; // Redo changes state
                 },
 
@@ -968,8 +1257,8 @@ pub const Editor = struct {
                     self.pending_register.clear();
 
                     const cursor_pos = Position{
-                        .line = self.buffer.cursor.row,
-                        .col = self.buffer.cursor.col,
+                        .line = buf.cursor.row,
+                        .col = buf.cursor.col,
                     };
                     self.visual_state = VisualState.init(cursor_pos, .char);
                     self.mode_manager.enterVisual();
@@ -982,8 +1271,8 @@ pub const Editor = struct {
                     self.pending_register.clear();
 
                     const cursor_pos = Position{
-                        .line = self.buffer.cursor.row,
-                        .col = self.buffer.cursor.col,
+                        .line = buf.cursor.row,
+                        .col = buf.cursor.col,
                     };
                     self.visual_state = VisualState.init(cursor_pos, .line);
                     self.mode_manager.enterVisual();
@@ -1002,22 +1291,22 @@ pub const Editor = struct {
                 'a' => {
                     self.pending_cmd.clear();
                     self.pending_register.clear();
-                    _ = movement.moveRight(&self.buffer); // May fail at line end, that's OK
+                    _ = movement.moveRight(buf); // May fail at line end, that's OK
                     self.enterInsertMode();
                     return true; // Mode changed (movement is secondary)
                 },
                 'A' => {
                     self.pending_cmd.clear();
                     self.pending_register.clear();
-                    movement.moveToLineEnd(&self.buffer);
-                    _ = movement.moveRight(&self.buffer); // May fail, that's OK
+                    movement.moveToLineEnd(buf);
+                    _ = movement.moveRight(buf); // May fail, that's OK
                     self.enterInsertMode();
                     return true; // Mode changed
                 },
                 'I' => {
                     self.pending_cmd.clear();
                     self.pending_register.clear();
-                    movement.moveToFirstNonBlank(&self.buffer);
+                    movement.moveToFirstNonBlank(buf);
                     self.enterInsertMode();
                     return true; // Mode changed
                 },
@@ -1025,19 +1314,19 @@ pub const Editor = struct {
                     self.pending_cmd.clear();
                     self.pending_register.clear();
                     // Position cursor AFTER last character to insert newline at end of line
-                    const visual_len = self.buffer.getLineLengthVisual(self.buffer.cursor.row);
-                    self.buffer.cursor.col = visual_len;
-                    self.buffer.cursor.goal_column = visual_len;
-                    try self.buffer.insertChar('\n');
+                    const visual_len = buf.getLineLengthVisual(buf.cursor.row);
+                    buf.cursor.col = visual_len;
+                    buf.cursor.goal_column = visual_len;
+                    try buf.insertChar('\n');
                     self.enterInsertMode();
                     return true; // Inserted newline and changed mode
                 },
                 'O' => {
                     self.pending_cmd.clear();
                     self.pending_register.clear();
-                    movement.moveToLineStart(&self.buffer);
-                    try self.buffer.insertChar('\n');
-                    _ = movement.moveUp(&self.buffer);
+                    movement.moveToLineStart(buf);
+                    try buf.insertChar('\n');
+                    _ = movement.moveUp(buf);
                     self.enterInsertMode();
                     return true; // Inserted newline and changed mode
                 },
@@ -1052,11 +1341,12 @@ pub const Editor = struct {
 
         // Arrow keys
         if (input.len == 3 and input[0] == 27 and input[1] == '[') {
+            const buf = self.getCurrentBuffer() orelse return false;
             return switch (input[2]) {
-                'A' => movement.moveUp(&self.buffer),
-                'B' => movement.moveDown(&self.buffer),
-                'C' => movement.moveRight(&self.buffer),
-                'D' => movement.moveLeft(&self.buffer),
+                'A' => movement.moveUp(buf),
+                'B' => movement.moveDown(buf),
+                'C' => movement.moveRight(buf),
+                'D' => movement.moveLeft(buf),
                 else => false, // Unknown arrow key
             };
         }
@@ -1134,11 +1424,13 @@ pub const Editor = struct {
         }
 
         // Built-in insert mode commands
+        const buf = self.getCurrentBuffer() orelse return false;
+
         if (input.len == 1 and input[0] == 27) { // ESC
             // IMPORTANT: Bracketed paste in backend.zig manages transactions
             // Regular typing has NO transaction, so only commit if one exists
-            if (self.buffer.active_transaction != null) {
-                try self.buffer.commitTransaction();
+            if (buf.active_transaction != null) {
+                try buf.commitTransaction();
             }
 
             // Trigger InsertLeave autocommand (Phase 4) BEFORE mode change
@@ -1152,10 +1444,10 @@ pub const Editor = struct {
         // Arrow keys
         if (input.len == 3 and input[0] == 27 and input[1] == '[') {
             return switch (input[2]) {
-                'A' => movement.moveUp(&self.buffer),
-                'B' => movement.moveDown(&self.buffer),
-                'C' => movement.moveRight(&self.buffer),
-                'D' => movement.moveLeft(&self.buffer),
+                'A' => movement.moveUp(buf),
+                'B' => movement.moveDown(buf),
+                'C' => movement.moveRight(buf),
+                'D' => movement.moveLeft(buf),
                 else => false, // Unknown arrow key
             };
         }
@@ -1164,11 +1456,11 @@ pub const Editor = struct {
             const char = input[0];
             switch (char) {
                 127, 8 => { // Backspace
-                    try self.buffer.deleteCharBefore();
+                    try buf.deleteCharBefore();
                     return true; // Deleted character
                 },
                 13 => { // Enter
-                    try self.buffer.insertChar('\n');
+                    try buf.insertChar('\n');
                     // Autoindent: copy indent from previous line
                     if (self.options_manager) |opts_mgr| {
                         if (opts_mgr.getBoolean("autoindent") orelse false) {
@@ -1194,17 +1486,17 @@ pub const Editor = struct {
                         // Insert spaces instead of tab
                         var i: usize = 0;
                         while (i < tabstop) : (i += 1) {
-                            try self.buffer.insertChar(' ');
+                            try buf.insertChar(' ');
                         }
                     } else {
                         // Insert actual tab character
-                        try self.buffer.insertChar('\t');
+                        try buf.insertChar('\t');
                     }
                     return true; // Inserted tab/spaces
                 },
                 else => {
                     if (char >= 32 and char < 127) {
-                        try self.buffer.insertChar(char);
+                        try buf.insertChar(char);
                         return true; // Inserted character
                     }
                     return false; // Non-printable character, ignored
@@ -1218,10 +1510,12 @@ pub const Editor = struct {
     /// Apply auto-indent after inserting a newline
     /// Copies the indentation from the previous line
     fn applyAutoIndent(self: *Editor) !void {
-        // Get the previous line (the one we just left)
-        if (self.buffer.cursor.row == 0) return; // No previous line on first line
+        const buf = self.getCurrentBuffer() orelse return;
 
-        const prev_line = self.buffer.getLine(self.buffer.cursor.row - 1) orelse return;
+        // Get the previous line (the one we just left)
+        if (buf.cursor.row == 0) return; // No previous line on first line
+
+        const prev_line = buf.getLine(buf.cursor.row - 1) orelse return;
         defer self.allocator.free(prev_line);
 
         // Count leading whitespace on previous line
@@ -1237,7 +1531,7 @@ pub const Editor = struct {
         // Insert the same whitespace on the new line
         var i: usize = 0;
         while (i < indent_count) : (i += 1) {
-            try self.buffer.insertChar(prev_line[i]);
+            try buf.insertChar(prev_line[i]);
         }
     }
 
@@ -1257,6 +1551,8 @@ pub const Editor = struct {
             return false; // Invalid register, cleared state
         }
 
+        const buf = self.getCurrentBuffer() orelse return false;
+
         if (input.len == 1 and input[0] == 27) { // ESC
             self.visual_state.deactivate();
             self.mode_manager.enterNormal();
@@ -1268,36 +1564,36 @@ pub const Editor = struct {
 
             switch (char) {
                 // Navigation - check return values for boundary detection
-                'h' => return movement.moveLeft(&self.buffer),
-                'j' => return movement.moveDown(&self.buffer),
-                'k' => return movement.moveUp(&self.buffer),
-                'l' => return movement.moveRight(&self.buffer),
+                'h' => return movement.moveLeft(buf),
+                'j' => return movement.moveDown(buf),
+                'k' => return movement.moveUp(buf),
+                'l' => return movement.moveRight(buf),
                 '0' => {
-                    movement.moveToLineStart(&self.buffer);
+                    movement.moveToLineStart(buf);
                     return true;
                 },
                 '$' => {
-                    movement.moveToLineEnd(&self.buffer);
+                    movement.moveToLineEnd(buf);
                     return true;
                 },
                 '^' => {
-                    movement.moveToFirstNonBlank(&self.buffer);
+                    movement.moveToFirstNonBlank(buf);
                     return true;
                 },
                 'w' => {
-                    movement.moveWordForward(&self.buffer);
+                    movement.moveWordForward(buf);
                     return true;
                 },
                 'b' => {
-                    movement.moveWordBackward(&self.buffer);
+                    movement.moveWordBackward(buf);
                     return true;
                 },
                 'e' => {
-                    movement.moveWordEnd(&self.buffer);
+                    movement.moveWordEnd(buf);
                     return true;
                 },
                 'G' => {
-                    movement.moveToFileEnd(&self.buffer);
+                    movement.moveToFileEnd(buf);
                     return true;
                 },
 
@@ -1317,13 +1613,13 @@ pub const Editor = struct {
                 // Yank selection
                 'y' => {
                     const cursor_pos = Position{
-                        .line = self.buffer.cursor.row,
-                        .col = self.buffer.cursor.col,
+                        .line = buf.cursor.row,
+                        .col = buf.cursor.col,
                     };
 
                     const range = self.visual_state.getRange(cursor_pos);
                     const reg = self.pending_register.getSelected() orelse '"';
-                    try yank.yankVisualSelection(&self.buffer, self.visual_state, cursor_pos, &self.register_mgr, reg, self.allocator);
+                    try yank.yankVisualSelection(buf, self.visual_state, cursor_pos, &self.register_mgr, reg, self.allocator);
 
                     self.yank_highlight = YankHighlight.init(range.start, range.end, self.visual_state.mode);
 
@@ -1336,12 +1632,12 @@ pub const Editor = struct {
                 // Delete selection
                 'd' => {
                     const cursor_pos = Position{
-                        .line = self.buffer.cursor.row,
-                        .col = self.buffer.cursor.col,
+                        .line = buf.cursor.row,
+                        .col = buf.cursor.col,
                     };
 
                     const reg = self.pending_register.getSelected() orelse '"';
-                    try visual_ops.deleteVisualSelection(&self.buffer, self.visual_state, cursor_pos, &self.register_mgr, reg, self.allocator);
+                    try visual_ops.deleteVisualSelection(buf, self.visual_state, cursor_pos, &self.register_mgr, reg, self.allocator);
 
                     self.visual_state.deactivate();
                     self.mode_manager.enterNormal();
@@ -1352,12 +1648,12 @@ pub const Editor = struct {
                 // Change selection (delete and enter insert mode)
                 'c' => {
                     const cursor_pos = Position{
-                        .line = self.buffer.cursor.row,
-                        .col = self.buffer.cursor.col,
+                        .line = buf.cursor.row,
+                        .col = buf.cursor.col,
                     };
 
                     const reg = self.pending_register.getSelected() orelse '"';
-                    try visual_ops.changeVisualSelection(&self.buffer, self.visual_state, cursor_pos, &self.register_mgr, reg, self.allocator);
+                    try visual_ops.changeVisualSelection(buf, self.visual_state, cursor_pos, &self.register_mgr, reg, self.allocator);
 
                     self.visual_state.deactivate();
                     self.enterInsertMode();
@@ -1372,17 +1668,17 @@ pub const Editor = struct {
         // Arrow keys
         if (input.len == 3 and input[0] == 27 and input[1] == '[') {
             return switch (input[2]) {
-                'A' => movement.moveUp(&self.buffer),
-                'B' => movement.moveDown(&self.buffer),
-                'C' => movement.moveRight(&self.buffer),
-                'D' => movement.moveLeft(&self.buffer),
+                'A' => movement.moveUp(buf),
+                'B' => movement.moveDown(buf),
+                'C' => movement.moveRight(buf),
+                'D' => movement.moveLeft(buf),
                 else => false, // Unknown arrow key
             };
         }
 
         // gg
         if (input.len == 2 and std.mem.eql(u8, input, "gg")) {
-            movement.moveToFileStart(&self.buffer);
+            movement.moveToFileStart(buf);
             return true; // Moved to file start
         }
 
@@ -1405,8 +1701,10 @@ pub const Editor = struct {
             13 => { // Enter
                 const cmd = self.cmd_buffer.getString();
 
+                // File operations (w, wq, q)
                 if (std.mem.eql(u8, cmd, "w")) {
-                    try self.buffer.saveFile();
+                    const buf = self.getCurrentBuffer() orelse return error.NoActiveBuffer;
+                    try buf.saveFile();
                 } else if (std.mem.eql(u8, cmd, "q")) {
                     // Quit - backends handle this differently
                     // Terminal backend: exit program
@@ -1415,10 +1713,108 @@ pub const Editor = struct {
                     self.mode_manager.enterNormal();
                     return true; // Mode changed
                 } else if (std.mem.eql(u8, cmd, "wq")) {
-                    try self.buffer.saveFile();
+                    const buf = self.getCurrentBuffer() orelse return error.NoActiveBuffer;
+                    try buf.saveFile();
                     self.cmd_buffer.clear();
                     self.mode_manager.enterNormal();
                     return true; // Saved and mode changed
+                }
+                // Buffer navigation commands
+                else if (std.mem.eql(u8, cmd, "bn")) {
+                    self.nextBuffer();
+                } else if (std.mem.eql(u8, cmd, "bp")) {
+                    self.prevBuffer();
+                } else if (std.mem.eql(u8, cmd, "bd")) {
+                    if (self.current_buffer_id) |id| {
+                        self.deleteBuffer(id, false) catch |err| {
+                            if (err == error.BufferModified) {
+                                self.logger.err("Buffer has unsaved changes (use :bd! to force)", .{}) catch {};
+                            }
+                        };
+                    }
+                } else if (std.mem.eql(u8, cmd, "bd!")) {
+                    if (self.current_buffer_id) |id| {
+                        try self.deleteBuffer(id, true); // Force delete
+                    }
+                }
+                // Vimcraft extension: :bo/:bonly (not in Neovim, but convenient!)
+                else if (std.mem.eql(u8, cmd, "bo") or std.mem.eql(u8, cmd, "bonly")) {
+                    // Close all other buffers (keep only current)
+                    const deleted_count = self.deleteOtherBuffers(false) catch |err| {
+                        if (err == error.BufferModified) {
+                            self.logger.err("Some buffers have unsaved changes (use :bo! to force)", .{}) catch {};
+                            self.cmd_buffer.clear();
+                            self.mode_manager.enterNormal();
+                            return true;
+                        }
+                        return err;
+                    };
+                    self.logger.info("Closed {d} other buffer(s)", .{deleted_count}) catch {};
+                } else if (std.mem.eql(u8, cmd, "bo!") or std.mem.eql(u8, cmd, "bonly!")) {
+                    // Force close all other buffers
+                    const deleted_count = try self.deleteOtherBuffers(true);
+                    self.logger.info("Closed {d} other buffer(s)", .{deleted_count}) catch {};
+                } else if (std.mem.eql(u8, cmd, "ls") or std.mem.eql(u8, cmd, "buffers")) {
+                    // List buffers - log to console for now
+                    // TODO: Display in status line or dedicated buffer list window
+                    const buffers = try self.listBuffers();
+                    defer self.allocator.free(buffers);
+
+                    self.logger.info("=== Buffers ===", .{}) catch {};
+                    for (buffers) |info| {
+                        const marker = if (info.current) "%" else " ";
+                        const modified = if (info.modified) "[+]" else "   ";
+                        const name = info.filepath orelse "[No Name]";
+                        self.logger.info("{s}{d: >3} {s} {s}", .{ marker, info.id.id, modified, name }) catch {};
+                    }
+                }
+                // Working directory commands
+                else if (std.mem.eql(u8, cmd, "pwd")) {
+                    self.logger.info("Current directory: {s}", .{self.cwd}) catch {};
+                }
+                // Commands with arguments (e.g., :e file.txt, :cd path, :b 2)
+                else if (std.mem.startsWith(u8, cmd, "e ")) {
+                    const filename = std.mem.trimLeft(u8, cmd[2..], " ");
+                    if (filename.len > 0) {
+                        _ = try self.loadBufferFromFile(filename);
+                    }
+                } else if (std.mem.startsWith(u8, cmd, "cd ")) {
+                    const new_path = std.mem.trimLeft(u8, cmd[3..], " ");
+                    if (new_path.len > 0) {
+                        // Change working directory
+                        std.posix.chdir(new_path) catch |err| {
+                            self.logger.err("Failed to change directory: {}", .{err}) catch {};
+                            self.cmd_buffer.clear();
+                            self.mode_manager.enterNormal();
+                            return true;
+                        };
+
+                        // Update stored cwd
+                        self.allocator.free(self.cwd);
+                        self.cwd = std.process.getCwdAlloc(self.allocator) catch |err| blk: {
+                            self.logger.err("Failed to get new cwd: {}", .{err}) catch {};
+                            break :blk try self.allocator.dupe(u8, ".");
+                        };
+
+                        self.logger.info("Changed directory to: {s}", .{self.cwd}) catch {};
+                    }
+                } else if (std.mem.startsWith(u8, cmd, "b ")) {
+                    const buffer_num_str = std.mem.trimLeft(u8, cmd[2..], " ");
+                    if (buffer_num_str.len > 0) {
+                        const buffer_num = std.fmt.parseInt(u64, buffer_num_str, 10) catch {
+                            self.logger.err("Invalid buffer number: {s}", .{buffer_num_str}) catch {};
+                            self.cmd_buffer.clear();
+                            self.mode_manager.enterNormal();
+                            return true;
+                        };
+
+                        const target_id = BufferId{ .id = buffer_num };
+                        self.switchBuffer(target_id) catch |err| {
+                            if (err == error.BufferNotFound) {
+                                self.logger.err("Buffer {d} not found", .{buffer_num}) catch {};
+                            }
+                        };
+                    }
                 }
 
                 self.cmd_buffer.clear();
@@ -1442,9 +1838,10 @@ pub const Editor = struct {
     /// Handle scrolling commands (Ctrl+D, Ctrl+U)
     /// Terminal backend calls this with actual viewport height
     pub fn scroll(self: *Editor, direction: enum { up, down }, viewport_height: usize) void {
+        const buf = self.getCurrentBuffer() orelse return;
         switch (direction) {
-            .down => movement.scrollHalfPageDown(&self.buffer, viewport_height),
-            .up => movement.scrollHalfPageUp(&self.buffer, viewport_height),
+            .down => movement.scrollHalfPageDown(buf, viewport_height),
+            .up => movement.scrollHalfPageUp(buf, viewport_height),
         }
     }
 
@@ -1454,10 +1851,11 @@ pub const Editor = struct {
         // CRITICAL: Clear viewport_movement flag after executing
         defer self.viewport_movement = null;
 
+        const buf = self.getCurrentBuffer() orelse return;
         switch (command) {
-            'H' => movement.moveToViewportTop(&self.buffer, viewport_top),
-            'M' => movement.moveToViewportMiddle(&self.buffer, viewport_top, viewport_height),
-            'L' => movement.moveToViewportBottom(&self.buffer, viewport_top, viewport_height),
+            'H' => movement.moveToViewportTop(buf, viewport_top),
+            'M' => movement.moveToViewportMiddle(buf, viewport_top, viewport_height),
+            'L' => movement.moveToViewportBottom(buf, viewport_top, viewport_height),
             else => {},
         }
     }
@@ -1474,7 +1872,8 @@ pub const Editor = struct {
         // CRITICAL: Clear viewport_adjustment after executing
         defer self.viewport_adjustment = null;
 
-        const cursor_row = self.buffer.cursor.row;
+        const buf = self.getCurrentBuffer() orelse return 0;
+        const cursor_row = buf.cursor.row;
 
         return switch (command) {
             'z' => movement.centerLineInViewport(cursor_row, viewport_height, buffer_line_count), // zz
@@ -1492,18 +1891,20 @@ pub const Editor = struct {
 
     /// Convert byte offset to (line, col) position
     /// Used for yank highlights to show the correct visual range
-    fn offsetToPosition(self: *const Editor, offset: usize) Position {
+    fn offsetToPosition(self: *Editor, offset: usize) Position {
+        const buf = self.getCurrentBuffer() orelse return Position{ .line = 0, .col = 0 };
+
         // Find which line this offset belongs to
         var line_num: usize = 0;
         // Find line number by iterating through lines
         // (Rope doesn't have lineOfByte, only byteOfLine)
         var current_line: usize = 0;
-        while (current_line < self.buffer.lineCount()) : (current_line += 1) {
-            const line_start_offset = self.buffer.content.byteOfLine(current_line);
-            const line_end_offset = if (current_line + 1 < self.buffer.lineCount())
-                self.buffer.content.byteOfLine(current_line + 1)
+        while (current_line < buf.lineCount()) : (current_line += 1) {
+            const line_start_offset = buf.content.byteOfLine(current_line);
+            const line_end_offset = if (current_line + 1 < buf.lineCount())
+                buf.content.byteOfLine(current_line + 1)
             else
-                self.buffer.content.len();
+                buf.content.len();
 
             if (offset >= line_start_offset and offset < line_end_offset) {
                 line_num = current_line;
@@ -1512,7 +1913,7 @@ pub const Editor = struct {
         }
 
         // Calculate column within that line
-        const line_start = self.buffer.content.byteOfLine(line_num);
+        const line_start = buf.content.byteOfLine(line_num);
         const col = offset - line_start;
 
         return Position{ .line = line_num, .col = col };
@@ -1558,7 +1959,8 @@ pub const Editor = struct {
         try self.parser.setLanguage(lang);
 
         // Parse buffer content (get owned string from Rope)
-        const source = try self.buffer.content.toString();
+        const buf = self.getCurrentBuffer() orelse return;
+        const source = try buf.content.toString();
         defer self.allocator.free(source);
         const tree = try self.parser.parseString(null, source);
 
@@ -1636,7 +2038,8 @@ pub const Editor = struct {
         }
 
         // file: file path (or empty string if no file loaded)
-        const file_path = self.buffer.filepath orelse "";
+        const buf = self.getCurrentBuffer();
+        const file_path = if (buf) |b| b.filepath orelse "" else "";
         const file_val = c.hermes_value_create_string(runtime, file_path.ptr, file_path.len);
         if (file_val) |v| {
             c.hermes_value_set_property(runtime, args_obj, "file", v);
@@ -1672,8 +2075,9 @@ test "Editor: offsetToPosition converts byte offsets correctly" {
     defer editor.deinit();
 
     // Create buffer: "line 1\nline 2\nline 3\n"
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
 
     // Test offset 0 (start of line 0)
     {
@@ -1710,11 +2114,12 @@ test "Editor: yi( yank highlight shows correct range" {
     defer editor.deinit();
 
     // Create buffer with text: "(line 293: src/core/editor.zig:293)\n"
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"(line 293: src/core/editor.zig:293)\n");
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"(line 293: src/core/editor.zig:293)\n");
 
     // Position cursor at colon (col 10) - NOT at the start of the range
-    editor.buffer.cursor = .{ .row = 0, .col = 10 };
+    buf.cursor = .{ .row = 0, .col = 10 };
 
     // Execute yi( - should yank "line 293: src/core/editor.zig:293"
     _ = try editor.executeKeys("yi(");
@@ -1734,11 +2139,12 @@ test "Editor: yi[ yank highlight at different cursor position" {
     defer editor.deinit();
 
     // Create buffer: "foo[bar]baz\n"
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"foo[bar]baz\n");
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"foo[bar]baz\n");
 
     // Cursor at 'a' in "bar" (col 5)
-    editor.buffer.cursor = .{ .row = 0, .col = 5 };
+    buf.cursor = .{ .row = 0, .col = 5 };
 
     // Execute yi[
     _ = try editor.executeKeys("yi[");
@@ -1756,8 +2162,9 @@ test "Editor: yank highlight does NOT include delimiter" {
     defer editor.deinit();
 
     // Buffer: "word)\n" - positions: w=0, o=1, r=2, d=3, )=4
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"word)\n");
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"word)\n");
 
     // Manually create a range for "word" (not including ')')
     const Range = @import("buffer/edit.zig").Range;
@@ -1778,23 +2185,24 @@ test "Editor: 'o' command opens new line AFTER current line" {
     defer editor.deinit();
 
     // Buffer: "abc\n"
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"abc\n");
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"abc\n");
 
     // Position cursor at 'b' (col 1) - shouldn't matter where
-    editor.buffer.cursor = .{ .row = 0, .col = 1 };
+    buf.cursor = .{ .row = 0, .col = 1 };
 
     // Execute 'o' command
     _ = try editor.executeKeys("o");
 
     // Expected buffer: "abc\n\n" (newline inserted AFTER all characters, not before 'c')
-    const content = try editor.buffer.content.toString();
+    const content = try buf.content.toString();
     defer allocator.free(content);
     try std.testing.expectEqualStrings("abc\n\n", content);
 
     // Cursor should be on the new line (row 1) at column 0
-    try std.testing.expectEqual(@as(usize, 1), editor.buffer.cursor.row);
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.col);
+    try std.testing.expectEqual(@as(usize, 1), buf.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.col);
 
     // Should be in insert mode
     try std.testing.expect(editor.mode_manager.isInsert());
@@ -1806,20 +2214,21 @@ test "Editor: 'A' followed by 'ii' inserts both characters on same line" {
     defer editor.deinit();
 
     // Setup: README.md first line
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"# Vimcraft\n");
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"# Vimcraft\n");
 
     // Execute: A (append at end) then ii (type two i's)
     _ = try editor.executeKeys("Aii");
 
     // Verify: First line should be "# Vimcraftii\n"
-    const first_line = editor.buffer.getLine(0).?;
+    const first_line = buf.getLine(0).?;
     defer allocator.free(first_line);
     try std.testing.expectEqualStrings("# Vimcraftii\n", first_line);
 
     // Verify: Cursor should be at (0, 12) - after the two i's
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
-    try std.testing.expectEqual(@as(usize, 12), editor.buffer.cursor.col);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.row);
+    try std.testing.expectEqual(@as(usize, 12), buf.cursor.col);
 
     // Verify: Should be in INSERT mode
     try std.testing.expect(editor.mode_manager.isInsert());
@@ -1836,8 +2245,9 @@ test "Keymap: simple string mapping executes correctly" {
     defer editor.deinit();
 
     // Setup buffer
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
 
     // Map K → gg (move to file start) - global mapping
     const keys = try allocator.dupe(u8, "gg");
@@ -1847,8 +2257,8 @@ test "Keymap: simple string mapping executes correctly" {
     _ = try editor.executeKeys("K");
 
     // Verify: cursor at file start (0, 0)
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.col);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.col);
 }
 
 test "Keymap: noremap prevents recursive expansion" {
@@ -1858,8 +2268,9 @@ test "Keymap: noremap prevents recursive expansion" {
     defer editor.deinit();
 
     // Setup buffer
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"abc\n");
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"abc\n");
 
     // Map j → k (move up) - global mapping
     const keys1 = try allocator.dupe(u8, "k");
@@ -1871,13 +2282,13 @@ test "Keymap: noremap prevents recursive expansion" {
 
     // Execute j (should execute k literally, which maps to l)
     // With noremap, k should NOT expand again, so we move left once
-    editor.buffer.cursor = .{ .row = 0, .col = 1 };
+    buf.cursor = .{ .row = 0, .col = 1 };
     _ = try editor.executeKeys("j");
 
     // With noremap: j→k (literal k executed) → move up (default k behavior)
     // But we're on line 0, so cursor stays at row 0
     // And k's mapping should NOT apply due to noremap
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.row);
 }
 
 test "Keymap: recursion protection exists and depth tracking works" {
@@ -1895,9 +2306,10 @@ test "Keymap: recursion protection exists and depth tracking works" {
     try editor.keymap_mgr.set(.normal, "K", .{ .keys = keys }, .{}, null);
 
     // Setup buffer
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\n");
-    editor.buffer.cursor = .{ .row = 1, .col = 0 };
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\n");
+    buf.cursor = .{ .row = 1, .col = 0 };
 
     // Execute the mapping
     _ = try editor.executeKeys("K");
@@ -1906,7 +2318,7 @@ test "Keymap: recursion protection exists and depth tracking works" {
     try std.testing.expectEqual(@as(usize, 0), editor.mapping_depth);
 
     // Verify the mapping executed correctly (cursor at file start)
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.row);
 
     // NOTE: True infinite recursion (depth > 1000) is difficult to test
     // in our immediate-execution architecture because each command completes
@@ -1924,9 +2336,10 @@ test "Keymap: mapping overrides built-in command" {
     defer editor.deinit();
 
     // Setup buffer with 3 lines
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
-    editor.buffer.cursor = .{ .row = 1, .col = 0 }; // Start on line 2
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    buf.cursor = .{ .row = 1, .col = 0 }; // Start on line 2
 
     // Map j → k (override j to move up instead of down) - global mapping
     const keys = try allocator.dupe(u8, "k");
@@ -1936,7 +2349,7 @@ test "Keymap: mapping overrides built-in command" {
     _ = try editor.executeKeys("j");
 
     // Verify: cursor moved up to line 0
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.row);
 }
 
 test "Keymap: callback mapping returns error (not yet implemented)" {
@@ -1962,8 +2375,9 @@ test "Keymap: mode-specific mappings don't leak" {
     defer editor.deinit();
 
     // Setup buffer
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\n");
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\n");
 
     // Map j → gg in normal mode only - global mapping
     const keys = try allocator.dupe(u8, "gg");
@@ -1971,17 +2385,17 @@ test "Keymap: mode-specific mappings don't leak" {
 
     // In normal mode: j should execute gg
     _ = try editor.executeKeys("j");
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.row);
 
     // Enter insert mode
-    editor.buffer.cursor = .{ .row = 1, .col = 0 };
+    buf.cursor = .{ .row = 1, .col = 0 };
     editor.mode_manager.enterInsert();
 
     // In insert mode: j should insert 'j', not execute mapping
     _ = try editor.executeKeys("j");
 
     // Verify: 'j' was inserted at cursor position
-    const line = editor.buffer.getLine(1).?;
+    const line = buf.getLine(1).?;
     defer allocator.free(line);
     try std.testing.expect(std.mem.startsWith(u8, line, "j"));
 }
@@ -1993,9 +2407,10 @@ test "Keymap: complex mapping sequence (K → Hzz concept)" {
     defer editor.deinit();
 
     // Setup buffer with multiple lines
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\nline 4\n");
-    editor.buffer.cursor = .{ .row = 2, .col = 0 }; // Start on line 3
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\nline 4\n");
+    buf.cursor = .{ .row = 2, .col = 0 }; // Start on line 3
 
     // Map K → gg (simpler than Hzz since z commands not implemented) - global mapping
     const keys = try allocator.dupe(u8, "gg");
@@ -2005,8 +2420,8 @@ test "Keymap: complex mapping sequence (K → Hzz concept)" {
     _ = try editor.executeKeys("K");
 
     // Verify: cursor at file start
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.col);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.col);
 }
 
 test "Keymap: depth restored correctly after mapping error (errdefer fix)" {
@@ -2032,13 +2447,14 @@ test "Keymap: depth restored correctly after mapping error (errdefer fix)" {
     const keys = try allocator.dupe(u8, "gg");
     try editor.keymap_mgr.set(.normal, "J", .{ .keys = keys }, .{ .noremap = true }, null);
 
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\n");
-    editor.buffer.cursor = .{ .row = 1, .col = 0 };
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\n");
+    buf.cursor = .{ .row = 1, .col = 0 };
 
     // This should work (depth not corrupted by previous error)
     _ = try editor.executeKeys("J");
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.row);
 }
 
 test "Keymap: pending key loss bug - j then x (when jk is mapped)" {
@@ -2048,9 +2464,10 @@ test "Keymap: pending key loss bug - j then x (when jk is mapped)" {
     defer editor.deinit();
 
     // Setup buffer with 3 lines
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
-    editor.buffer.cursor = .{ .row = 0, .col = 0 }; // Start at line 1
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    buf.cursor = .{ .row = 0, .col = 0 }; // Start at line 1
 
     // Map jk → gg (move to file start) - global mapping
     const keys = try allocator.dupe(u8, "gg");
@@ -2060,7 +2477,7 @@ test "Keymap: pending key loss bug - j then x (when jk is mapped)" {
     _ = try editor.executeKeys("j");
 
     // Verify: cursor STILL at line 1 (pending state, "j" not executed yet)
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.row);
 
     // Type "x" → sequence breaks, should execute "j" (down) then "x" (delete char)
     _ = try editor.executeKeys("x");
@@ -2068,10 +2485,10 @@ test "Keymap: pending key loss bug - j then x (when jk is mapped)" {
     // After fix:
     // - "j" should execute as literal → move down to line 2 (row 1)
     // - "x" should execute → delete character at cursor
-    try std.testing.expectEqual(@as(usize, 1), editor.buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 1), buf.cursor.row);
 
     // Verify 'x' executed by checking first char was deleted from line 2
-    const line = editor.buffer.getLine(1).?;
+    const line = buf.getLine(1).?;
     defer allocator.free(line);
     try std.testing.expectEqualStrings("ine 2\n", line); // 'l' deleted
 }
@@ -2083,9 +2500,10 @@ test "Keymap: pending key loss bug - j then jkl (multiple keys)" {
     defer editor.deinit();
 
     // Setup buffer with 5 lines
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\nline 4\nline 5\n");
-    editor.buffer.cursor = .{ .row = 0, .col = 0 };
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\nline 4\nline 5\n");
+    buf.cursor = .{ .row = 0, .col = 0 };
 
     // Map jk → gg (move to file start) - global mapping
     const keys = try allocator.dupe(u8, "gg");
@@ -2093,7 +2511,7 @@ test "Keymap: pending key loss bug - j then jkl (multiple keys)" {
 
     // Type "j" → enters pending state, does NOT execute yet
     _ = try editor.executeKeys("j");
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.row);
 
     // Type "jkl" → sequence breaks on second "j", all keys should execute
     _ = try editor.executeKeys("jkl");
@@ -2105,8 +2523,8 @@ test "Keymap: pending key loss bug - j then jkl (multiple keys)" {
     // - "l" executes as literal → move right
     //
     // Final state: cursor at row 0, col 1
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
-    try std.testing.expectEqual(@as(usize, 1), editor.buffer.cursor.col);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.row);
+    try std.testing.expectEqual(@as(usize, 1), buf.cursor.col);
 }
 
 test "Keymap: pending sequence completed successfully (jk → gg)" {
@@ -2116,9 +2534,10 @@ test "Keymap: pending sequence completed successfully (jk → gg)" {
     defer editor.deinit();
 
     // Setup buffer
-    editor.buffer.content.deinit();
-    editor.buffer.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
-    editor.buffer.cursor = .{ .row = 2, .col = 0 }; // Start at line 3
+    const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
+    buf.content.deinit();
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    buf.cursor = .{ .row = 2, .col = 0 }; // Start at line 3
 
     // Map jk → gg - global mapping
     const keys = try allocator.dupe(u8, "gg");
@@ -2128,6 +2547,6 @@ test "Keymap: pending sequence completed successfully (jk → gg)" {
     _ = try editor.executeKeys("jk");
 
     // Verify: cursor at file start (mapping executed)
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.row);
-    try std.testing.expectEqual(@as(usize, 0), editor.buffer.cursor.col);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buf.cursor.col);
 }

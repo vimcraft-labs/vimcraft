@@ -319,46 +319,75 @@ pub fn main() !void {
     defer allocator.free(cache_dir);
     try transpiler_cache.initCacheDir(cache_dir);
 
+    // Clean up old/excessive cache files (age-based + size-based)
+    const cleanup_config = transpiler_cache.CleanupConfig{};
+    transpiler_cache.cleanupCache(allocator, cache_dir, cleanup_config) catch |err| {
+        std.debug.print("WARNING: Cache cleanup failed: {}\n", .{err});
+        // Continue anyway - non-fatal error
+    };
+
     // Store cache_dir in global state for JSI loader functions
     jsi_api.global_cache_dir = cache_dir;
 
-    // Parse command-line arguments
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    // Parse command-line arguments using our lightweight CLI parser
+    const cli = @import("core/cli.zig");
+    var parsed = try cli.parse(allocator);
+    defer parsed.deinit();
 
-    // Show help if no arguments
-    if (args.len < 2) {
-        printHelp();
+    // Handle --help and --version first
+    if (parsed.help) {
+        cli.printHelp();
         return;
     }
 
-    const first_arg = args[1];
-
-    // Route to appropriate mode
-    if (std.mem.eql(u8, first_arg, "--help") or std.mem.eql(u8, first_arg, "-h")) {
-        printHelp();
+    if (parsed.version) {
+        cli.printVersion();
         return;
-    } else if (std.mem.eql(u8, first_arg, "--debug-protocol")) {
-        return try runDebugProtocol(allocator);
-    } else if (std.mem.eql(u8, first_arg, "--debug")) {
-        if (args.len < 3) {
-            std.debug.print("Error: --debug requires a file\n", .{});
-            std.debug.print("Usage: vimc --debug <file>\n", .{});
+    }
+
+    // Route to appropriate command or mode
+    if (parsed.command) |cmd| {
+        if (std.mem.eql(u8, cmd, "init")) {
+            // vimc init - Initialize TypeScript tooling
+            const cmd_init = @import("cli/init.zig");
+            try cmd_init.execute(allocator, parsed.force);
             return;
-        }
-        return try runEditorWithDebugger(allocator, args[2]);
-    } else if (std.mem.eql(u8, first_arg, "--test")) {
-        if (args.len < 3) {
-            std.debug.print("Error: --test requires a test file\n", .{});
-            std.debug.print("Usage: vimc --test <test_file>\n", .{});
+        } else if (std.mem.eql(u8, cmd, "run")) {
+            // vimc run - Execute TypeScript files
+            if (parsed.file_path == null) {
+                std.debug.print("Error: 'run' requires a file path\n", .{});
+                std.debug.print("Usage: vimc run <file> [--debug] [--no-cache]\n", .{});
+                return;
+            }
+            const cmd_run = @import("cli/run.zig");
+            try cmd_run.execute(allocator, parsed.file_path.?, parsed.debug, parsed.no_cache);
             return;
+        } else if (std.mem.eql(u8, cmd, "--debug-protocol")) {
+            return try runDebugProtocol(allocator);
+        } else if (std.mem.eql(u8, cmd, "--test")) {
+            if (parsed.file_path == null) {
+                std.debug.print("Error: --test requires a test file\n", .{});
+                std.debug.print("Usage: vimc --test <test_file>\n", .{});
+                return;
+            }
+            return try runTestMode(allocator, parsed.file_path.?);
+        } else if (std.mem.eql(u8, cmd, "--repl")) {
+            return try runREPL(allocator);
+        } else {
+            // First positional argument is a filename
+            // Check if --debug flag was set
+            if (parsed.debug) {
+                // Run with Chrome DevTools debugger
+                return try runEditorWithDebugger(allocator, cmd);
+            } else {
+                // Run normal interactive editor
+                return try runEditor(allocator, cmd);
+            }
         }
-        return try runTestMode(allocator, args[2]);
-    } else if (std.mem.eql(u8, first_arg, "--repl")) {
-        return try runREPL(allocator);
     } else {
-        // Default: run as interactive editor
-        return try runEditor(allocator, first_arg);
+        // No command provided - show help
+        cli.printHelp();
+        return;
     }
 }
 
@@ -414,9 +443,9 @@ fn loadConfigFromTs(allocator: std.mem.Allocator, config: *highlights.HighlightC
     try paths.ensureConfigDir();
 
     // Create default init.ts if it doesn't exist (TypeScript-only)
-    try paths.createDefaultInitTs();
+    try paths.createDefaultIndexTs();
 
-    if (paths.initTsExists()) {
+    if (paths.indexTsExists()) {
 
         // Get runtime from debugger_state (initialized by caller)
         const runtime = debugger_state.runtime orelse {
@@ -425,7 +454,7 @@ fn loadConfigFromTs(allocator: std.mem.Allocator, config: *highlights.HighlightC
         };
 
         // Load and execute init.ts (transpiled automatically by loader)
-        jsi_api.loadConfig(@ptrCast(runtime), paths.init_ts_path, allocator) catch |err| {
+        jsi_api.loadConfig(@ptrCast(runtime), paths.index_ts_path, allocator) catch |err| {
             std.debug.print("WARNING: Failed to load init.ts: {}\n", .{err});
             std.debug.print("Using default configuration\n", .{});
             // Fall back to defaults
@@ -502,20 +531,22 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     // NOW load plugins with correct gutter width (headless mode)
     var plugin_paths = try ConfigPaths.init(allocator);
     defer plugin_paths.deinit();
-    if (plugin_paths.initTsExists()) {
-        var plugin_files = try plugin_paths.getPluginFiles(allocator);
+    if (plugin_paths.indexTsExists()) {
+        var plugin_files = try plugin_paths.discoverPlugins(allocator);
         defer {
-            for (plugin_files.items) |path| {
-                allocator.free(path);
+            for (plugin_files.items) |*plugin| {
+                plugin.deinit(allocator);
             }
             plugin_files.deinit(allocator);
         }
 
-        for (plugin_files.items) |plugin_path| {
-            jsi_api.loadPlugin(@ptrCast(runtime), plugin_path, allocator) catch |err| {
-                const filename = std.fs.path.basename(plugin_path);
-                std.debug.print("WARNING: Failed to load plugin {s}: {}\n", .{ filename, err });
-            };
+        for (plugin_files.items) |plugin| {
+            if (plugin.has_entry) {
+                jsi_api.loadPlugin(@ptrCast(runtime), plugin.index_path, allocator) catch |err| {
+                    const filename = std.fs.path.basename(plugin.index_path);
+                    std.debug.print("WARNING: Failed to load plugin {s}: {}\n", .{ filename, err });
+                };
+            }
         }
     }
 
@@ -562,7 +593,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     // Initialize display (terminal-specific)
     var display = try Display.init(allocator);
     defer display.deinit();
-    try display.setLineNumbers(true);
+    try display.setLineNumbers(false); // Default: off (matches Neovim behavior)
 
     // Initialize debugger state (for :debug command)
     var debugger_state = DebuggerState{ .allocator = allocator };
@@ -583,14 +614,14 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var paths = try ConfigPaths.init(allocator);
     defer paths.deinit();
     try paths.ensureConfigDir();
-    try paths.createDefaultInitTs();
+    try paths.createDefaultIndexTs();
 
     // Set up hot reload state BEFORE loading config
     var reload_state = ReloadState{
         .highlight_config = &highlight_config,
         .debugger_state = &debugger_state,
         .allocator = allocator,
-        .config_path = paths.init_ts_path,
+        .config_path = paths.index_ts_path,
         .display = &display,
     };
 
@@ -634,20 +665,22 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
     // NOW load plugins AFTER terminal size is set (prevents grid.resize() from clearing content)
     if (runtime) |rt| {
-        if (paths.initTsExists()) {
-            var plugin_files = try paths.getPluginFiles(allocator);
+        if (paths.indexTsExists()) {
+            var plugin_files = try paths.discoverPlugins(allocator);
             defer {
-                for (plugin_files.items) |path| {
-                    allocator.free(path);
+                for (plugin_files.items) |*plugin| {
+                    plugin.deinit(allocator);
                 }
                 plugin_files.deinit(allocator);
             }
 
-            for (plugin_files.items) |plugin_path| {
-                jsi_api.loadPlugin(@ptrCast(rt), plugin_path, allocator) catch |err| {
-                    const filename = std.fs.path.basename(plugin_path);
-                    std.debug.print("WARNING: Failed to load plugin {s}: {}\n", .{ filename, err });
-                };
+            for (plugin_files.items) |plugin| {
+                if (plugin.has_entry) {
+                    jsi_api.loadPlugin(@ptrCast(rt), plugin.index_path, allocator) catch |err| {
+                        const filename = std.fs.path.basename(plugin.index_path);
+                        std.debug.print("WARNING: Failed to load plugin {s}: {}\n", .{ filename, err });
+                    };
+                }
             }
         }
     }
@@ -668,10 +701,10 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     }.callback;
 
     var watcher: ?*ConfigWatcher = null;
-    if (paths.initTsExists()) {
+    if (paths.indexTsExists()) {
         if (ConfigWatcher.init(
             allocator,
-            paths.init_ts_path,
+            paths.index_ts_path,
             reloadCallback,
             &reload_state,
         )) |w| {
@@ -696,6 +729,12 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     );
     defer backend.deinit();
 
+    // CRITICAL FIX: Clear screen and hide cursor BEFORE initial render
+    // This prevents seeing the cursor at its pre-launch position or the "last cell" position
+    try display.clearScreen();
+    try display.hideCursor();
+    try display.flush(); // CRITICAL: Flush escape codes to terminal BEFORE rendering starts!
+
     // Initial render
     try backend.render();
 
@@ -718,14 +757,6 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         if (reload_state.needs_reload) {
             reload_state.reload() catch {};
             needs_render = true;
-        }
-
-        // Check if cursor override is active (animated cursor plugin)
-        // Use lightweight cursor-only update instead of full render
-        if (editor.cursor_render_override.active) {
-            if (editor.cursor_render_override.get()) |pos| {
-                display.updateCursorOnly(pos.row, pos.col) catch {};
-            }
         }
 
         // Check if yank highlight is active and needs rendering
@@ -847,7 +878,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     // Initialize display (terminal-specific)
     var display = try Display.init(allocator);
     defer display.deinit();
-    try display.setLineNumbers(true);
+    try display.setLineNumbers(false); // Default: off (matches Neovim behavior)
 
     // Initialize debugger state
     var debugger_state = DebuggerState{};
@@ -867,14 +898,14 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     var paths = try ConfigPaths.init(allocator);
     defer paths.deinit();
     try paths.ensureConfigDir();
-    try paths.createDefaultInitTs();
+    try paths.createDefaultIndexTs();
 
     // Set up hot reload state
     var reload_state = ReloadState{
         .highlight_config = &highlight_config,
         .debugger_state = &debugger_state,
         .allocator = allocator,
-        .config_path = paths.init_ts_path,
+        .config_path = paths.index_ts_path,
         .display = &display,
     };
 
@@ -945,17 +976,27 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     }
 
     // Load configuration from init.ts (but NOT plugins yet - TypeScript-only)
-    if (paths.initTsExists()) {
-        debugger.log("Vimcraft: Loading init.ts...", .info);
-        jsi_api.loadConfig(@ptrCast(runtime), paths.init_ts_path, allocator) catch |err| {
-            const msg = try std.fmt.allocPrint(allocator, "Failed to load init.ts: {}", .{err});
+    if (paths.indexTsExists()) {
+        const load_start = std.time.milliTimestamp();
+        const load_result = jsi_api.loadConfig(@ptrCast(runtime), paths.index_ts_path, allocator);
+        const load_time = std.time.milliTimestamp() - load_start;
+
+        if (load_result) |_| {
+            // Success - log timing
+            const msg = try std.fmt.allocPrint(allocator, "[vimc] index.ts loaded in {}ms ⚡", .{load_time});
+            defer allocator.free(msg);
+            debugger.log(msg, .info);
+        } else |err| {
+            // Failure - log detailed error
+            const msg = try std.fmt.allocPrint(allocator, "❌ Failed to load index.ts: {}", .{err});
             defer allocator.free(msg);
             debugger.log(msg, .err);
-            std.debug.print("WARNING: Failed to load init.ts: {}\n", .{err});
+            std.debug.print("WARNING: Failed to load index.ts: {}\n", .{err});
+            // Fall back to defaults
             const cursorline_bg = try highlights.Color.fromHex("#2b2b2b");
             highlight_config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
             highlight_config.cursorline_enabled = true;
-        };
+        }
     }
 
     // Apply sign column config BEFORE loading plugins
@@ -972,11 +1013,11 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     try display.getTerminalSize();
 
     // NOW load plugins AFTER terminal size is set (prevents grid.resize() from clearing content)
-    if (paths.initTsExists()) {
-        var plugin_files = try paths.getPluginFiles(allocator);
+    if (paths.indexTsExists()) {
+        var plugin_files = try paths.discoverPlugins(allocator);
         defer {
-            for (plugin_files.items) |path| {
-                allocator.free(path);
+            for (plugin_files.items) |*plugin| {
+                plugin.deinit(allocator);
             }
             plugin_files.deinit(allocator);
         }
@@ -987,17 +1028,19 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
             debugger.log(msg, .info);
         }
 
-        for (plugin_files.items) |plugin_path| {
-            const filename = std.fs.path.basename(plugin_path);
+        for (plugin_files.items) |plugin| {
+            const filename = std.fs.path.basename(plugin.index_path);
             const msg = try std.fmt.allocPrint(allocator, "  Loading plugin: {s}", .{filename});
             defer allocator.free(msg);
             debugger.log(msg, .info);
 
-            jsi_api.loadPlugin(@ptrCast(runtime), plugin_path, allocator) catch |err| {
-                const err_msg = try std.fmt.allocPrint(allocator, "  WARNING: Failed to load {s}: {}", .{ filename, err });
-                defer allocator.free(err_msg);
-                debugger.log(err_msg, .warning);
-            };
+            if (plugin.has_entry) {
+                jsi_api.loadPlugin(@ptrCast(runtime), plugin.index_path, allocator) catch |err| {
+                    const err_msg = try std.fmt.allocPrint(allocator, "  WARNING: Failed to load {s}: {}", .{ filename, err });
+                    defer allocator.free(err_msg);
+                    debugger.log(err_msg, .warning);
+                };
+            }
         }
     }
 
@@ -1017,10 +1060,10 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     }.callback;
 
     var watcher: ?*ConfigWatcher = null;
-    if (paths.initTsExists()) {
+    if (paths.indexTsExists()) {
         if (ConfigWatcher.init(
             allocator,
-            paths.init_ts_path,
+            paths.index_ts_path,
             reloadCallback,
             &reload_state,
         )) |w| {
@@ -1045,6 +1088,12 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     );
     defer backend.deinit();
 
+    // CRITICAL FIX: Clear screen and hide cursor BEFORE initial render
+    // This prevents seeing the cursor at its pre-launch position or the "last cell" position
+    try display.clearScreen();
+    try display.hideCursor();
+    try display.flush(); // CRITICAL: Flush escape codes to terminal BEFORE rendering starts!
+
     // Initial render
     try backend.render();
 
@@ -1067,14 +1116,6 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         if (reload_state.needs_reload) {
             reload_state.reload() catch {};
             needs_render = true;
-        }
-
-        // Check if cursor override is active (animated cursor plugin)
-        // Use lightweight cursor-only update instead of full render
-        if (editor.cursor_render_override.active) {
-            if (editor.cursor_render_override.get()) |pos| {
-                display.updateCursorOnly(pos.row, pos.col) catch {};
-            }
         }
 
         // Check if yank highlight is active and needs rendering
@@ -1144,7 +1185,7 @@ fn runTestMode(allocator: std.mem.Allocator, test_file_path: []const u8) !void {
 
     var display = try Display.init(allocator);
     defer display.deinit();
-    try display.setLineNumbers(true); // Enable line numbers
+    try display.setLineNumbers(false); // Default: off (matches Neovim behavior) // Enable line numbers
     var mode_manager = ModeManager.init();
 
     // Initialize edit operations (delete, change, yank)
@@ -1238,7 +1279,7 @@ fn runREPL(allocator: std.mem.Allocator) !void {
 
     var display = try Display.init(allocator);
     defer display.deinit();
-    try display.setLineNumbers(true); // Enable line numbers
+    try display.setLineNumbers(false); // Default: off (matches Neovim behavior) // Enable line numbers
     var mode_manager = ModeManager.init();
 
     // Initialize edit operations (delete, change, yank)

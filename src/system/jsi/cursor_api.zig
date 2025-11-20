@@ -1,6 +1,5 @@
 /// Cursor API Module
-/// Handles cursor position and rendering JSI functions
-/// Used for animated cursor plugins and cursor effects
+/// Handles cursor position JSI functions
 const std = @import("std");
 const Editor = @import("../../editor/editor.zig").Editor;
 const helpers = @import("helpers.zig");
@@ -22,9 +21,10 @@ pub export fn getCursorPosition(
 
     const editor: *Editor = @ptrCast(@alignCast(context.?));
 
-    // Get cursor position from buffer
-    const row = editor.buffer.cursor.row;
-    const col = editor.buffer.cursor.col;
+    // Get cursor position from current buffer
+    const buffer = editor.getCurrentBuffer() orelse return null;
+    const row = buffer.cursor.row;
+    const col = buffer.cursor.col;
 
     // Create JavaScript object: {row, col}
     const obj = c.hermes_value_create_object(runtime) orelse return null;
@@ -44,69 +44,6 @@ pub export fn getCursorPosition(
     }
 
     return obj;
-}
-
-/// Zig host function: setCursorRenderPosition(row, col)
-/// Sets the cursor render position override (for animations)
-pub export fn setCursorRenderPosition(
-    runtime: ?*c.OVHermesRuntime,
-    context: ?*anyopaque,
-    args: [*c]?*c.OVHermesValue,
-    count: usize,
-) callconv(.c) ?*c.OVHermesValue {
-    _ = runtime;
-
-    if (count < 2) return null;
-
-    const editor: *Editor = @ptrCast(@alignCast(context.?));
-
-    const row_val = args[0] orelse return null;
-    const col_val = args[1] orelse return null;
-
-    const row_f = c.hermes_value_get_number(row_val);
-    const col_f = c.hermes_value_get_number(col_val);
-
-    // Validate that values are finite and non-negative
-    if (std.math.isNan(row_f) or std.math.isInf(row_f) or row_f < 0) {
-        return null; // Invalid row value
-    }
-    if (std.math.isNan(col_f) or std.math.isInf(col_f) or col_f < 0) {
-        return null; // Invalid col value
-    }
-
-    const row: usize = @intFromFloat(row_f);
-    const col: usize = @intFromFloat(col_f);
-
-    // Store override position in editor
-    editor.cursor_render_override.set(row, col);
-
-    // Mark editor state as dirty to trigger render
-    editor.js_state_dirty = true;
-
-    return null; // Return undefined
-}
-
-/// Zig host function: clearCursorRenderPosition()
-/// Clears the cursor render position override
-pub export fn clearCursorRenderPosition(
-    runtime: ?*c.OVHermesRuntime,
-    context: ?*anyopaque,
-    args: [*c]?*c.OVHermesValue,
-    count: usize,
-) callconv(.c) ?*c.OVHermesValue {
-    _ = runtime;
-    _ = args;
-    _ = count;
-
-    const editor: *Editor = @ptrCast(@alignCast(context.?));
-
-    // Clear override
-    editor.cursor_render_override.clear();
-
-    // Mark editor state as dirty to trigger render
-    editor.js_state_dirty = true;
-
-    return null; // Return undefined
 }
 
 // ============================================================================
@@ -130,8 +67,6 @@ pub export fn cursorHostObjectGet(
         usize,
     ) callconv(.c) ?*c.OVHermesValue).initComptime(.{
         .{ "getPosition", getCursorPosition },
-        .{ "setRenderPosition", setCursorRenderPosition },
-        .{ "clearRenderPosition", clearCursorRenderPosition },
     });
 
     const func = PropertyMap.get(name) orelse return null;
@@ -150,8 +85,6 @@ pub export fn cursorHostObjectEnumerator(
 
     const method_names = [_][]const u8{
         "getPosition",
-        "setRenderPosition",
-        "clearRenderPosition",
     };
 
     const arr = c.hermes_array_create(rt, method_names.len) orelse return null;
@@ -189,20 +122,6 @@ pub fn registerLegacy(runtime: *c.OVHermesRuntime, editor: *Editor) void {
         runtime,
         "getCursorPosition",
         getCursorPosition,
-        @ptrCast(editor),
-    );
-
-    c.hermes_register_host_function(
-        runtime,
-        "setCursorRenderPosition",
-        setCursorRenderPosition,
-        @ptrCast(editor),
-    );
-
-    c.hermes_register_host_function(
-        runtime,
-        "clearCursorRenderPosition",
-        clearCursorRenderPosition,
         @ptrCast(editor),
     );
 }

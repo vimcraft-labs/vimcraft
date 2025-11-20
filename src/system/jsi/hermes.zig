@@ -65,18 +65,11 @@ pub const HermesRuntime = struct {
             self.editor,
         );
 
-        // Register cursor position hooks (for animated cursor plugins)
+        // Register cursor position function
         c.hermes_register_host_function(
             self.runtime,
             "zigGetCursorPosition",
             zigGetCursorPosition,
-            self.editor,
-        );
-
-        c.hermes_register_host_function(
-            self.runtime,
-            "zigSetCursorRenderPosition",
-            zigSetCursorRenderPosition,
             self.editor,
         );
 
@@ -290,32 +283,6 @@ export fn zigGetCursorPosition(
     }
 
     return obj;
-}
-
-/// zigSetCursorRenderPosition(row, col)
-/// Sets the cursor render position override (for animations)
-export fn zigSetCursorRenderPosition(
-    runtime: ?*c.OVHermesRuntime,
-    context: ?*anyopaque,
-    args: [*c]?*c.OVHermesValue,
-    count: usize,
-) callconv(.C) ?*c.OVHermesValue {
-    _ = runtime;
-
-    if (count < 2) return null;
-
-    const editor: *Editor = @ptrCast(@alignCast(context.?));
-
-    const row_val = args[0] orelse return null;
-    const col_val = args[1] orelse return null;
-
-    const row: usize = @intFromFloat(c.hermes_value_get_number(row_val));
-    const col: usize = @intFromFloat(c.hermes_value_get_number(col_val));
-
-    // Store override position in editor
-    editor.cursor_render_override.set(row, col);
-
-    return null; // Return undefined
 }
 
 //

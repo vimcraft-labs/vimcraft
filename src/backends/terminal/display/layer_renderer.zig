@@ -35,23 +35,40 @@ pub fn updateLayers(
     list_enabled: bool,
     listchars: *const ListChars,
 ) !void {
+    // Get buffer from editor (handles both Editor and EditorContext types)
+    const T = @TypeOf(editor);
+    const buffer = if (T == *@import("../../../editor/editor.zig").Editor)
+        editor.getCurrentBuffer() orelse return error.NoCurrentBuffer
+    else
+        &editor.buffer;
+
     const text_rows = if (self.terminal_rows > 1) self.terminal_rows - 1 else 1;
 
-    // Clear all layers
+    // Clear layers that ALWAYS need full rebuild
     self.base_layer.clear();
     self.gutter_layer.clear();
     self.cursor_layer.clear();
-    self.selection_layer.clear();
     self.yank_layer.clear();
+
+    // CRITICAL FIX: Don't clear selection layer on every render!
+    // Selection layer should only be cleared when:
+    // - Visual mode deactivates (!visual_state.active)
+    // - Visual mode type changes (char → line → block)
+    // - Viewport changes significantly
+    // For cursor movements within visual mode, use incremental updates
+    if (!visual_state.active) {
+        // Visual mode inactive - clear selection layer
+        self.selection_layer.clear();
+    }
     // Note: virtual_text_layer is managed by plugins via JSI
 
     // Update each layer in logical order (not z-order)
     // All layers now use unified registry (Neovim/Helix pattern)
     try updateBaseLayer(self, editor, registry, text_rows, list_enabled, listchars);
-    try updateGutterLayer(self, &editor.buffer, registry, text_rows);
-    try updateSelectionLayer(self, &editor.buffer, visual_state, registry, text_rows);
-    try updateYankLayer(self, &editor.buffer, yank_highlight, registry, text_rows);
-    try updateCursorLayer(self, &editor.buffer, registry, cursorline_enabled, text_rows);
+    try updateGutterLayer(self, buffer, registry, text_rows);
+    try updateSelectionLayer(self, buffer, visual_state, registry, text_rows);
+    try updateYankLayer(self, buffer, yank_highlight, registry, text_rows);
+    try updateCursorLayer(self, buffer, registry, cursorline_enabled, text_rows);
 
     // Virtual text layer is updated by plugins, so skip it here
 }
@@ -107,7 +124,12 @@ fn updateBaseLayer(
     list_enabled: bool,
     listchars: *const ListChars,
 ) !void {
-    const buffer = &editor.buffer;
+    // Get buffer from editor (handles both Editor and EditorContext types)
+    const T = @TypeOf(editor);
+    const buffer = if (T == *@import("../../../editor/editor.zig").Editor)
+        editor.getCurrentBuffer() orelse return error.NoCurrentBuffer
+    else
+        &editor.buffer;
     const gutter_width = self.gutter_manager.getTotalWidth();
 
     // Get Normal highlight from unified registry (Neovim/Helix pattern)
@@ -258,7 +280,7 @@ fn updateGutterLayer(
 }
 
 /// Update selection layer: Render visual mode selection (z=400)
-fn updateSelectionLayer(
+pub fn updateSelectionLayer(
     self: *Display,
     buffer: *const Buffer,
     visual_state: *const VisualState,
@@ -266,6 +288,11 @@ fn updateSelectionLayer(
     text_rows: usize,
 ) !void {
     if (!visual_state.active) return;
+
+    // CRITICAL FIX: Clear selection layer ONLY when visual mode is active
+    // This ensures we rebuild the selection on each cursor movement
+    // without the flicker caused by clearing in updateLayers()
+    self.selection_layer.clear();
 
     const cursor_pos = Position{
         .line = buffer.cursor.row,

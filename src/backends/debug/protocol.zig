@@ -29,6 +29,7 @@ pub const CommandType = enum {
     get_terminal_updates, // NEW: Get Terminal ANSI output for debugging (Terminal mode only)
     get_options, // NEW: Get vim option values (all or specific options)
     get_module_cache, // NEW: Get cached module paths (for hot reload verification)
+    get_render_stats, // NEW: Get real-time rendering performance statistics
 
     // Commands
     execute_keys,
@@ -211,6 +212,7 @@ pub const ResponseResult = union(enum) {
     render_trace: RenderTrace, // NEW: Render pipeline trace (captured DURING render)
     options: OptionsState, // NEW: Vim option values
     module_cache: ModuleCacheState, // NEW: Cached module paths
+    render_stats: RenderStats, // NEW: Real-time rendering performance statistics
     file_saved: struct { bytes_written: usize }, // NEW: File save confirmation
     execute_keys: struct { keys_processed: usize },
     assertion: AssertionResult,
@@ -389,6 +391,13 @@ pub const Response = struct {
                         allocator.free(module_path);
                     }
                     allocator.free(mc.modules);
+                },
+                .render_stats => |rs| {
+                    allocator.free(rs.performance_assessment);
+                    for (rs.recommendations) |rec| {
+                        allocator.free(rec);
+                    }
+                    allocator.free(rs.recommendations);
                 },
                 // Other types either don't allocate or have different ownership
                 else => {},
@@ -715,6 +724,45 @@ pub const OptionsState = struct {
 pub const ModuleCacheState = struct {
     modules: []const []const u8, // Array of absolute file paths
     count: usize,
+};
+
+/// Real-time rendering performance statistics
+/// Used to diagnose performance issues (lag, flickering, frame dropping)
+pub const RenderStats = struct {
+    // Frame timing (milliseconds)
+    last_render_duration_ms: f64,
+    avg_render_duration_ms: f64,
+    max_render_duration_ms: f64,
+    total_renders: usize,
+
+    // FPS throttling stats
+    throttle_max_fps: u64, // Configured FPS limit (default: 60)
+    throttle_enabled: bool,
+    renders_throttled: usize, // How many renders were skipped
+    renders_executed: usize, // How many renders actually ran
+
+    // Cursor escape code counts (for flickering diagnosis)
+    cursor_hide_codes: usize, // \x1b[?25l sent
+    cursor_show_codes: usize, // \x1b[?25h sent
+    cursor_shape_codes: usize, // \x1b[2 q, \x1b[6 q sent
+    cursor_position_codes: usize, // \x1b[{row};{col}H sent
+
+    // Synchronized update stats
+    sync_update_begin_codes: usize, // \x1bP=1s sent
+    sync_update_end_codes: usize, // \x1bP=2s sent
+
+    // Input processing stats
+    input_poll_timeout_ms: i64, // Current handleInput() timeout
+    keys_processed_total: usize,
+
+    // Compositor/layer stats
+    layers_composited_last: usize,
+    cells_updated_last: usize,
+    cells_blended_last: usize,
+
+    // Recommendations
+    performance_assessment: []const u8, // "EXCELLENT", "ACCEPTABLE", "SLUGGISH", "CRITICAL"
+    recommendations: []const []const u8, // Array of improvement suggestions
 };
 
 // Tests

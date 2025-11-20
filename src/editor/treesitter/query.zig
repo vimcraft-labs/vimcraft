@@ -311,7 +311,7 @@ test "Query: capture names" {
 
     const source =
         \\(IDENTIFIER) @variable
-        \\(builtin_type) @type.builtin
+        \\(BUILTINIDENTIFIER) @function.builtin
     ;
 
     var query = try Query.init(allocator, zig_lang, source);
@@ -324,6 +324,6 @@ test "Query: capture names" {
     const name0 = query.getCaptureName(0);
     const name1 = query.getCaptureName(1);
 
-    try std.testing.expect(std.mem.eql(u8, name0, "variable") or std.mem.eql(u8, name0, "type.builtin"));
-    try std.testing.expect(std.mem.eql(u8, name1, "variable") or std.mem.eql(u8, name1, "type.builtin"));
+    try std.testing.expect(std.mem.eql(u8, name0, "variable") or std.mem.eql(u8, name0, "function.builtin"));
+    try std.testing.expect(std.mem.eql(u8, name1, "variable") or std.mem.eql(u8, name1, "function.builtin"));
 }

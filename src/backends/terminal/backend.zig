@@ -21,6 +21,20 @@ pub const TerminalBackend = struct {
     // Input handler (Neovim-style persistent buffer - NO timeouts!)
     input_handler: InputHandler,
 
+    // Buffer change tracking (for cursor-only render optimization)
+    // Track buffer content length to detect if content changed
+    // If length unchanged, assume only cursor moved → use lightweight renderCursorOnly()
+    last_buffer_length: usize = 0,
+
+    // Visual selection tracking (for cursor-only render in visual mode)
+    // Track previous visual state to detect if selection region changed
+    // If only cursor moved but anchor unchanged, still use cursor-only render
+    last_visual_active: bool = false,
+    last_visual_anchor_line: usize = 0,
+    last_visual_anchor_col: usize = 0,
+    last_cursor_line: usize = 0,
+    last_cursor_col: usize = 0,
+
     pub fn init(
         allocator: std.mem.Allocator,
         editor: *Editor,
@@ -199,12 +213,16 @@ pub const TerminalBackend = struct {
                                 1;
 
                             // Ensure cursor is in viewport (same logic as display.render())
-                            if (self.editor.buffer.cursor.row < self.display.viewport_top) {
-                                self.display.viewport_top = self.editor.buffer.cursor.row;
-                            } else if (self.editor.buffer.cursor.row >= self.display.viewport_top + text_rows) {
+                            const current_buf = self.editor.getCurrentBuffer() orelse {
+                                needs_render.* = true;
+                                continue;
+                            };
+                            if (current_buf.cursor.row < self.display.viewport_top) {
+                                self.display.viewport_top = current_buf.cursor.row;
+                            } else if (current_buf.cursor.row >= self.display.viewport_top + text_rows) {
                                 // CRITICAL: Use saturating arithmetic to prevent underflow
                                 // If cursor.row < text_rows, non-saturating would wrap to MAX_USIZE
-                                self.display.viewport_top = self.editor.buffer.cursor.row -| text_rows +| 1;
+                                self.display.viewport_top = current_buf.cursor.row -| text_rows +| 1;
                             }
 
                             // NOW execute with fresh viewport_top
@@ -225,7 +243,11 @@ pub const TerminalBackend = struct {
                             else
                                 1;
 
-                            const buffer_line_count = self.editor.buffer.lineCount();
+                            const current_buf = self.editor.getCurrentBuffer() orelse {
+                                needs_render.* = true;
+                                continue;
+                            };
+                            const buffer_line_count = current_buf.lineCount();
                             const new_viewport_top = self.editor.adjustViewport(
                                 cmd,
                                 text_rows,
@@ -335,6 +357,14 @@ pub const TerminalBackend = struct {
                     if (paste_content.len > 0) {
                         const Change = @import("../../editor/buffer/buffer.zig").Change;
 
+                        // Get current buffer (required for all paste operations)
+                        const buf = self.editor.getCurrentBuffer() orelse {
+                            // No active buffer - abort paste
+                            self.in_paste = false;
+                            self.paste_buffer.clearRetainingCapacity();
+                            return true;
+                        };
+
                         // If in visual mode, delete the selection first (paste replaces selection)
                         var deletion_undo: ?Change = null;
                         // Save visual state before modifying to enable rollback on error
@@ -349,14 +379,14 @@ pub const TerminalBackend = struct {
                             const Position = @import("visual/visual.zig").Position;
 
                             const cursor_pos = Position{
-                                .line = self.editor.buffer.cursor.row,
-                                .col = self.editor.buffer.cursor.col,
+                                .line = buf.cursor.row,
+                                .col = buf.cursor.col,
                             };
                             const reg = '"'; // Use default register for deleted text
 
                             // Delete the visual selection (creates an undo entry)
                             try visual_ops.deleteVisualSelection(
-                                &self.editor.buffer,
+                                buf,
                                 self.editor.visual_state,
                                 cursor_pos,
                                 &self.editor.register_mgr,
@@ -365,8 +395,8 @@ pub const TerminalBackend = struct {
                             );
 
                             // Pop the undo entry - we'll create a combined one
-                            if (self.editor.buffer.undo_stack.items.len > 0) {
-                                deletion_undo = self.editor.buffer.undo_stack.pop();
+                            if (buf.undo_stack.items.len > 0) {
+                                deletion_undo = buf.undo_stack.pop();
                             }
 
                             // Deactivate visual mode
@@ -378,14 +408,14 @@ pub const TerminalBackend = struct {
                         const was_insert = self.editor.mode_manager.isInsert();
                         if (!was_insert) {
                             self.editor.mode_manager.enterInsert();
-                            self.editor.buffer.beginTransaction();
+                            buf.beginTransaction();
                         }
 
                         // Rollback transaction and mode on error
                         // Note: Conditional mode restore prevents conflict with inner errdefer
                         errdefer {
                             if (!was_insert) {
-                                self.editor.buffer.discardTransaction();
+                                buf.discardTransaction();
                                 // Only restore NORMAL mode if there wasn't a visual selection
                                 // (the inner errdefer restores VISUAL mode in that case)
                                 if (!had_visual_selection) {
@@ -398,7 +428,7 @@ pub const TerminalBackend = struct {
                         errdefer {
                             if (deletion_undo) |del_change| {
                                 // Put deletion back on undo stack so user can still undo it
-                                self.editor.buffer.undo_stack.append(self.allocator, del_change) catch {};
+                                buf.undo_stack.append(self.allocator, del_change) catch {};
                             }
                             if (had_visual_selection) {
                                 self.editor.visual_state = saved_visual_state;
@@ -408,21 +438,21 @@ pub const TerminalBackend = struct {
 
                         // PERFORMANCE FIX: Insert all paste content at once instead of char-by-char
                         // Single insert() is O(log N) for Rope vs N×insertChar() which would be O(N log N)
-                        const start_offset = if (self.editor.buffer.active_transaction) |trans|
+                        const start_offset = if (buf.active_transaction) |trans|
                             trans.current_offset
                         else
-                            self.editor.buffer.getCursorOffset();
+                            buf.getCursorOffset();
 
                         // Insert entire paste content at once (Rope API)
-                        try self.editor.buffer.content.insert(start_offset, paste_content);
+                        try buf.content.insert(start_offset, paste_content);
 
                         // Update transaction state and cursor manually (since we bypassed insertChar loop)
-                        if (self.editor.buffer.active_transaction) |*trans| {
+                        if (buf.active_transaction) |*trans| {
                             try trans.text_buffer.appendSlice(self.allocator, paste_content);
 
                             // Calculate final cursor position after paste
-                            var cursor_row = self.editor.buffer.cursor.row;
-                            var cursor_col = self.editor.buffer.cursor.col;
+                            var cursor_row = buf.cursor.row;
+                            var cursor_col = buf.cursor.col;
                             for (paste_content) |char| {
                                 if (char == '\n') {
                                     cursor_row += 1;
@@ -431,13 +461,13 @@ pub const TerminalBackend = struct {
                                     cursor_col += 1;
                                 }
                             }
-                            self.editor.buffer.cursor.row = cursor_row;
-                            self.editor.buffer.cursor.col = cursor_col;
-                            trans.cursor_end = self.editor.buffer.cursor;
+                            buf.cursor.row = cursor_row;
+                            buf.cursor.col = cursor_col;
+                            trans.cursor_end = buf.cursor;
                             trans.current_offset = start_offset + paste_content.len;
                         }
 
-                        self.editor.buffer.modified = true;
+                        buf.modified = true;
 
                         // Rope automatically tracks lines - no manual index building needed!
                         // (ArrayList required buildLineIndex() here, Rope handles it transparently)
@@ -446,21 +476,21 @@ pub const TerminalBackend = struct {
                         // During transaction, cursor.row may have been incremented for newlines,
                         // but line_starts wasn't rebuilt. If cursor.row >= lineCount(), rendering will fail.
                         // Clamp cursor to valid range NOW, before rendering.
-                        if (self.editor.buffer.cursor.row >= self.editor.buffer.lineCount()) {
-                            if (self.editor.buffer.lineCount() > 0) {
-                                self.editor.buffer.cursor.row = self.editor.buffer.lineCount() - 1;
-                                const line_len = self.editor.buffer.getLineLengthVisual(self.editor.buffer.cursor.row);
-                                self.editor.buffer.cursor.col = line_len;
+                        if (buf.cursor.row >= buf.lineCount()) {
+                            if (buf.lineCount() > 0) {
+                                buf.cursor.row = buf.lineCount() - 1;
+                                const line_len = buf.getLineLengthVisual(buf.cursor.row);
+                                buf.cursor.col = line_len;
                             } else {
-                                self.editor.buffer.cursor.row = 0;
-                                self.editor.buffer.cursor.col = 0;
+                                buf.cursor.row = 0;
+                                buf.cursor.col = 0;
                             }
                         }
 
                         // If we had a visual deletion, create combined undo entry
                         if (deletion_undo) |del_change| {
                             // Don't commit the transaction normally - create combined entry
-                            if (self.editor.buffer.active_transaction) |trans| {
+                            if (buf.active_transaction) |trans| {
                                 // Allocate inserted_text first (with errdefer cleanup if append fails)
                                 const inserted_text = try self.allocator.dupe(u8, trans.text_buffer.items);
                                 errdefer self.allocator.free(inserted_text);
@@ -477,7 +507,7 @@ pub const TerminalBackend = struct {
                                     .cursor_before = del_change.cursor_before,
                                     .cursor_after = trans.cursor_end,
                                 };
-                                try self.editor.buffer.undo_stack.append(self.allocator, combined_change);
+                                try buf.undo_stack.append(self.allocator, combined_change);
 
                                 // Free old inserted_text if non-empty (deletion operations have empty inserted_text)
                                 if (del_change.inserted_text.len > 0) {
@@ -485,19 +515,19 @@ pub const TerminalBackend = struct {
                                 }
 
                                 // Clear redo stack (change was made)
-                                for (self.editor.buffer.redo_stack.items) |*c| {
+                                for (buf.redo_stack.items) |*c| {
                                     c.deinit(self.allocator);
                                 }
-                                self.editor.buffer.redo_stack.clearRetainingCapacity();
+                                buf.redo_stack.clearRetainingCapacity();
 
                                 // Discard transaction without committing it
-                                self.editor.buffer.discardTransaction();
+                                buf.discardTransaction();
                             }
                         } else {
                             // Normal paste (no visual deletion) - commit transaction immediately
                             // This allows single ESC to exit insert mode (Vim behavior)
                             if (!was_insert) {
-                                self.editor.buffer.commitTransaction() catch {};
+                                buf.commitTransaction() catch {};
                             }
                         }
 
@@ -582,16 +612,17 @@ pub const TerminalBackend = struct {
             const buffer_col = self.display.viewport_left +| text_col;
 
             // Move cursor to clicked position (clamped to buffer bounds)
-            if (buffer_row < self.editor.buffer.lineCount()) {
-                const line = self.editor.buffer.getLine(buffer_row) orelse return true;
-                defer self.editor.buffer.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+            const buf = self.editor.getCurrentBuffer() orelse return true;
+            if (buffer_row < buf.lineCount()) {
+                const line = buf.getLine(buffer_row) orelse return true;
+                defer buf.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
                 const line_len = if (line.len > 0 and line[line.len - 1] == '\n')
                     line.len - 1
                 else
                     line.len;
 
-                self.editor.buffer.cursor.row = buffer_row;
-                self.editor.buffer.cursor.col = @min(buffer_col, line_len);
+                buf.cursor.row = buffer_row;
+                buf.cursor.col = @min(buffer_col, line_len);
             }
         }
 
@@ -605,21 +636,22 @@ pub const TerminalBackend = struct {
 
         // In insert mode, arrow keys move the cursor (call movement functions directly)
         if (self.editor.mode_manager.isInsert()) {
+            const buf = self.editor.getCurrentBuffer() orelse return false;
             switch (kind) {
                 .arrow_up => {
-                    _ = movement_module.moveUp(&self.editor.buffer);
+                    _ = movement_module.moveUp(buf);
                     return true;
                 },
                 .arrow_down => {
-                    _ = movement_module.moveDown(&self.editor.buffer);
+                    _ = movement_module.moveDown(buf);
                     return true;
                 },
                 .arrow_left => {
-                    _ = movement_module.moveLeft(&self.editor.buffer);
+                    _ = movement_module.moveLeft(buf);
                     return true;
                 },
                 .arrow_right => {
-                    _ = movement_module.moveRight(&self.editor.buffer);
+                    _ = movement_module.moveRight(buf);
                     return true;
                 },
                 else => return false,
@@ -648,6 +680,83 @@ pub const TerminalBackend = struct {
             8;
         char_width.setTabWidth(tabstop);
 
+        // PERFORMANCE: Detect cursor-only changes (buffer content unchanged)
+        // If only cursor moved, use lightweight renderCursorOnly() instead of full compositor pipeline
+        const buf = self.editor.getCurrentBuffer();
+        const current_buffer_length = if (buf) |b| b.content.len() else 0;
+        const buffer_changed = (current_buffer_length != self.last_buffer_length);
+        const visual_active = self.editor.visual_state.active;
+        const yank_active = self.editor.yank_highlight.active;
+
+        // Track visual selection changes (for cursor-only render in visual mode)
+        // Visual selection extends from anchor to cursor, so we need to check if either changed
+        const current_cursor_line = if (buf) |b| b.cursor.row else 0;
+        const current_cursor_col = if (buf) |b| b.cursor.col else 0;
+        const current_anchor_line = if (visual_active) self.editor.visual_state.anchor.line else 0;
+        const current_anchor_col = if (visual_active) self.editor.visual_state.anchor.col else 0;
+
+        const visual_selection_changed = visual_active and (
+            self.last_visual_active != visual_active or
+            self.last_visual_anchor_line != current_anchor_line or
+            self.last_visual_anchor_col != current_anchor_col or
+            self.last_cursor_line != current_cursor_line or
+            self.last_cursor_col != current_cursor_col
+        );
+
+        // Update tracking state for next render
+        self.last_visual_active = visual_active;
+        self.last_visual_anchor_line = current_anchor_line;
+        self.last_visual_anchor_col = current_anchor_col;
+        self.last_cursor_line = current_cursor_line;
+        self.last_cursor_col = current_cursor_col;
+
+        // CURSOR-ONLY RENDER PATH: Skip compositor if only cursor moved
+        // This reduces 457 cursor position codes to 1!
+        if (!buffer_changed and !yank_active and !visual_active) {
+            // Only cursor moved (Normal mode) - use lightweight path
+            try self.display.renderCursorOnly(self.editor);
+
+            // Set cursor shape ONLY when mode changes
+            const desired_shape: @TypeOf(self.display.last_cursor_shape) = if (self.editor.mode_manager.isInsert())
+                .bar
+            else
+                .block;
+
+            if (self.display.last_cursor_shape != desired_shape) {
+                // Begin sync update for cursor shape change
+                try self.display.beginSynchronizedUpdate();
+                errdefer {
+                    self.display.endSynchronizedUpdate() catch {};
+                    self.display.flush() catch {};
+                }
+
+                switch (desired_shape) {
+                    .bar => try self.display.setCursorBar(),
+                    .block => try self.display.setCursorBlock(),
+                    .underline => try self.display.setCursorUnderline(),
+                }
+                self.display.last_cursor_shape = desired_shape;
+
+                try self.display.endSynchronizedUpdate();
+                try self.display.flush();
+            }
+
+            return; // Cursor-only render complete!
+        }
+
+        // VISUAL MODE CURSOR MOVEMENT: Update cursor + selection layer ONLY
+        // Don't rebuild base/gutter layers (they haven't changed)
+        if (visual_active and !buffer_changed and !yank_active and visual_selection_changed) {
+            // Visual mode: cursor moved, selection changed
+            // Use lightweight rendering: cursor position + selection layer update
+            try self.display.renderVisualCursorMovement(self.editor, &self.editor.visual_state);
+            return; // Visual cursor movement complete!
+        }
+
+        // FULL RENDER PATH: Buffer changed, visual active, or yank active
+        // Update last_buffer_length for next render
+        self.last_buffer_length = current_buffer_length;
+
         // Build status string based on mode
         const status = if (self.editor.mode_manager.isCommand())
             try std.fmt.allocPrint(self.allocator, ":{s}", .{self.editor.getCommandString()})
@@ -656,9 +765,6 @@ pub const TerminalBackend = struct {
         else
             try self.allocator.dupe(u8, self.editor.mode_manager.getModeString());
         defer self.allocator.free(status);
-
-        // Get cursor override if active (for animated cursor plugins)
-        const cursor_override = self.editor.cursor_render_override.get();
 
         // Get list/listchars options (for invisible character display)
         const list_enabled = if (self.editor.options_manager) |opts|
@@ -685,7 +791,6 @@ pub const TerminalBackend = struct {
             cursorline_enabled,
             &self.editor.visual_state,
             &self.editor.yank_highlight,
-            cursor_override,
             list_enabled,
             &listchars,
         );
@@ -708,6 +813,13 @@ pub const TerminalBackend = struct {
             self.display.last_cursor_shape = desired_shape;
         }
 
+        // CRITICAL FIX: Show cursor at final position before ending synchronized update
+        // display.render() hid the cursor to prevent flickering, now we show it at the correct position
+        try self.display.showCursor();
+
+        // CRITICAL: End synchronized update AFTER all rendering (including cursor shape and visibility)
+        // This ensures cursor shape and visibility codes are included in the synchronized update block
+        try self.display.endSynchronizedUpdate();
         try self.display.flush();
     }
 };

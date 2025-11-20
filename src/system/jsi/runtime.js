@@ -479,9 +479,11 @@ Object.freeze(vim.filetype);
 //    Safe pattern: Copy immediately with new Uint8Array(ab).slice()
 //
 // Performance: 25x faster than string marshaling (80μs vs 2ms for 1MB)
-vim.buffer = vimBuffer;
-
-Object.freeze(vim.buffer);
+// Only register buffer API if vimBuffer exists (Editor mode, not EditorContext)
+if (typeof vimBuffer !== 'undefined') {
+  vim.buffer = vimBuffer;
+  Object.freeze(vim.buffer);
+}
 
 // vim.api - Neovim-compatible API functions
 // Provides compatibility layer for Neovim plugins

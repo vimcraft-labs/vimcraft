@@ -115,7 +115,7 @@ pub fn initJSI(
     // Register animation frame API (requestAnimationFrame)
     animation_api.register(runtime, allocator);
 
-    // Register cursor API (getCursorPosition, setCursorRenderPosition, clearCursorRenderPosition)
+    // Register cursor API (getCursorPosition)
     // Only register if we have an Editor (not EditorContext)
     const T = @TypeOf(editor_or_context);
     if (T == *Editor) {
@@ -322,32 +322,13 @@ pub fn loadPlugin(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
 
 /// Load config file (WITH runtime.js wrapper for vim.* globals)
 /// Uses new transpiler system for TypeScript support and WyHash caching
-/// NO intermediate files - wrapped source stays in memory only
+/// Bundles dependencies using esbuild.build() to support imports
 pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: std.mem.Allocator) !void {
     // Get cache directory from global state
     const cache_dir = global_cache_dir orelse return error.CacheNotInitialized;
 
-    // Read source file
-    const file = std.fs.openFileAbsolute(filepath, .{}) catch |err| {
-        std.debug.print("[JSI] Could not open config file: {}\n", .{err});
-        return err;
-    };
-    defer file.close();
-
-    const source = try file.readToEndAlloc(allocator, 1_000_000);
-    defer allocator.free(source);
-
     // Load runtime wrapper
     const runtime_wrapper = @embedFile("runtime.js");
-
-    // Wrap user config with runtime wrapper (IN-MEMORY ONLY)
-    const wrapped_source = try std.fmt.allocPrint(allocator,
-        \\{s}
-        \\
-        \\// User config
-        \\{s}
-    , .{ runtime_wrapper, source });
-    defer allocator.free(wrapped_source);
 
     // Setup loader config
     const loader_config = transpiler.LoaderConfig{
@@ -356,14 +337,13 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
         .stats = &global_cache_stats,
     };
 
-    // Load from in-memory source (NO temporary file created)
-    // Cache key based on: wrapped content + original filepath
-    // Cache invalidation: Content hash changes when source OR runtime.js changes
-    const bytecode = try transpiler.loadFromSource(
+    // Bundle config with dependencies + wrap with runtime.js
+    // This uses esbuild.build() to resolve imports, then wraps the bundle
+    const bytecode = try transpiler.loadConfigWithBundle(
         allocator,
         loader_config,
-        wrapped_source,
-        filepath, // Use original path for cache key (ensures unique per config file)
+        filepath,
+        runtime_wrapper,
     );
     defer allocator.free(bytecode);
 

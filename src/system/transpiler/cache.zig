@@ -93,8 +93,7 @@ pub fn loadFromCache(
         allocator,
         cache_path,
         100 * 1024 * 1024, // Max 100MB
-    ) catch |err| {
-        std.log.debug("Cache read failed for {s}: {}", .{ cache_path, err });
+    ) catch {
         return CacheError.CacheReadFailed;
     };
 }
@@ -120,7 +119,7 @@ pub fn saveToCache(
         return CacheError.CacheWriteFailed;
     };
 
-    std.log.info("Cached bytecode: {s} ({d} bytes)", .{ cache_path, bytecode.len });
+    // Bytecode cached (log removed)
 }
 
 /// Initialize cache directory
@@ -130,13 +129,70 @@ pub fn initCacheDir(cache_dir: []const u8) !void {
         return CacheError.CacheDirectoryCreationFailed;
     };
 
-    std.log.info("Cache directory initialized: {s}", .{cache_dir});
+    // Cache initialized (log removed)
 }
 
-/// Get default cache directory (~/.cache/vimcraft/bytecode)
+/// Get default cache directory (~/.config/vimcraft/bytecode)
 pub fn getDefaultCacheDir(allocator: std.mem.Allocator) ![]const u8 {
     const home = std.posix.getenv("HOME") orelse return error.HomeNotFound;
-    return try std.fmt.allocPrint(allocator, "{s}/.cache/vimcraft/bytecode", .{home});
+    return try std.fmt.allocPrint(allocator, "{s}/.config/vimcraft/bytecode", .{home});
+}
+
+/// Cache cleanup configuration
+pub const CleanupConfig = struct {
+    /// Maximum age for cache files (default: 7 days)
+    max_age_ns: i128 = 7 * 24 * 60 * 60 * std.time.ns_per_s,
+
+    /// Enable cleanup (can be disabled for debugging)
+    enabled: bool = true,
+};
+
+/// Clean up old cache files (age-based deletion)
+/// Deletes .hbc files older than max_age_ns (default: 7 days)
+pub fn cleanupCache(
+    allocator: std.mem.Allocator,
+    cache_dir: []const u8,
+    config: CleanupConfig,
+) !void {
+    _ = allocator; // Not needed for direct iteration
+
+    if (!config.enabled) return;
+
+    var dir = std.fs.cwd().openDir(cache_dir, .{ .iterate = true }) catch |err| {
+        // Cache directory doesn't exist yet - nothing to clean
+        if (err == error.FileNotFound) return;
+        std.log.err("Failed to open cache directory {s}: {}", .{ cache_dir, err });
+        return;
+    };
+    defer dir.close();
+
+    const now = std.time.nanoTimestamp();
+    var deleted_count: usize = 0;
+    var deleted_bytes: u64 = 0;
+
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        // Only process .hbc files
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".hbc")) continue;
+
+        // Get file stat to check age
+        const stat = dir.statFile(entry.name) catch continue;
+        const age_ns = now - stat.mtime;
+
+        // Delete if older than max_age
+        if (age_ns > config.max_age_ns) {
+            dir.deleteFile(entry.name) catch |err| {
+                std.log.warn("Failed to delete old cache file {s}: {}", .{ entry.name, err });
+                continue;
+            };
+            deleted_count += 1;
+            deleted_bytes += stat.size;
+        }
+    }
+
+    // Cache cleanup complete (logs removed for production)
+    // deleted_count and deleted_bytes are used for tracking but not logged
 }
 
 /// Cache statistics for debugging
