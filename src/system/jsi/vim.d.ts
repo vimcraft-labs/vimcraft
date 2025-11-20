@@ -219,6 +219,46 @@ declare global {
      * @param id - Request ID from requestAnimationFrame
      */
     cancelAnimationFrame(id: number): void;
+
+    /**
+     * Performance Metrics API (only available with --metrics flag)
+     * Provides startup time, plugin load times, and other performance data
+     * All properties return 0 or empty array if metrics are disabled
+     */
+    metrics?: {
+      /**
+       * Time from process start to first render (milliseconds)
+       */
+      readonly startupTime: number;
+
+      /**
+       * Time to initialize Hermes JavaScript runtime (milliseconds)
+       */
+      readonly hermesInitTime: number;
+
+      /**
+       * Time to load configuration files (milliseconds)
+       */
+      readonly configLoadTime: number;
+
+      /**
+       * Time since process started (milliseconds)
+       */
+      readonly uptime: number;
+
+      /**
+       * Number of plugins loaded
+       */
+      readonly pluginCount: number;
+
+      /**
+       * Plugin load times with names
+       */
+      readonly pluginLoadTimes: Array<{
+        name: string;
+        duration_ms: number;
+      }>;
+    };
   };
 
   /**

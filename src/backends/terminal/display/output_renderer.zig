@@ -15,6 +15,10 @@ pub const Optimizations = struct {
     adjacent_cells_skipped: usize = 0, // Cursor moves skipped due to adjacency
     attribute_changes_deduped: usize = 0, // Attribute codes skipped (already set)
     char_zero_to_space: usize = 0, // char=0 converted to space
+
+    // WEEK 4: Terminal output batching metrics
+    cursor_moves_total: usize = 0, // Total cursor position codes sent
+    updates_sorted: usize = 0, // Number of updates sorted for batching
 };
 
 /// Result of ANSI generation
@@ -39,9 +43,25 @@ pub fn generateANSI(
         };
     }
 
+    // WEEK 4 OPTIMIZATION: Sort updates by (row, col) to maximize adjacency
+    // This dramatically increases the effectiveness of adjacent cell skipping
+    // Example: Updates at [(0,5), (1,0), (0,6)] become [(0,5), (0,6), (1,0)]
+    //          → 1 cursor move saved (cells at col 5 and 6 are now adjacent in array)
+    const sorted_updates = try allocator.dupe(Update, updates);
+    defer allocator.free(sorted_updates);
+
+    std.mem.sort(Update, sorted_updates, {}, struct {
+        fn lessThan(_: void, a: Update, b: Update) bool {
+            if (a.row != b.row) return a.row < b.row;
+            return a.col < b.col;
+        }
+    }.lessThan);
+
     var buf: std.ArrayList(u8) = .empty;
     var breakdown: std.ArrayList(AnsiCommand) = .empty;
-    var opts = Optimizations{};
+    var opts = Optimizations{
+        .updates_sorted = sorted_updates.len, // Track number of updates sorted
+    };
 
     // Track state to minimize ANSI codes (Helix optimization)
     var current_fg: ?highlights.Color = null;
@@ -52,7 +72,8 @@ pub fn generateANSI(
     var last_pos: ?struct { row: usize, col: usize } = null;
     var last_had_combining: bool = false;
 
-    for (updates) |update| {
+    // Process sorted updates (maximizes adjacent cell batching)
+    for (sorted_updates) |update| {
         // Skip continuation cells - terminals handle double-width chars automatically
         if (update.cell.is_continuation) {
             continue;
@@ -76,6 +97,9 @@ pub fn generateANSI(
                 .{ update.row, update.col },
             );
             try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, seq), .desc = desc });
+
+            // WEEK 4: Track cursor move count
+            opts.cursor_moves_total += 1;
         } else {
             opts.adjacent_cells_skipped += 1;
         }

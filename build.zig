@@ -1060,54 +1060,61 @@ pub fn build(b: *std.Build) void {
 
     // ============================================================================
     // Performance Measurement Tool (PTY-based)
+    // NOTE: Only built for native targets (PTY requires <util.h> not available during cross-compilation)
     // ============================================================================
-    const perf_test = b.addExecutable(.{
-        .name = "perf_test",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tools/perf_test/main.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
+    const is_native = target.query.isNative();
+    if (is_native) {
+        const perf_test = b.addExecutable(.{
+            .name = "perf_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/tools/perf_test/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
 
-    // Add PTY module for spawning vimc in pseudoterminal
-    perf_test.root_module.addAnonymousImport("pty", .{
-        .root_source_file = b.path("src/backends/terminal/tests/pty.zig"),
-    });
+        // Add PTY module for spawning vimc in pseudoterminal
+        perf_test.root_module.addAnonymousImport("pty", .{
+            .root_source_file = b.path("src/backends/terminal/tests/pty.zig"),
+        });
 
-    b.installArtifact(perf_test);
+        b.installArtifact(perf_test);
 
-    const run_perf_test = b.addRunArtifact(perf_test);
-    // Performance test requires vimc to be built first
-    run_perf_test.step.dependOn(b.getInstallStep());
+        const run_perf_test = b.addRunArtifact(perf_test);
+        // Performance test requires vimc to be built first
+        run_perf_test.step.dependOn(b.getInstallStep());
 
-    const perf_test_step = b.step("perf_test", "Run PTY-based performance measurement");
-    perf_test_step.dependOn(&run_perf_test.step);
+        const perf_test_step = b.step("perf_test", "Run PTY-based performance measurement");
+        perf_test_step.dependOn(&run_perf_test.step);
+    }
 
     // ============================================================================
     // Cursor Escape Code Monitor (Debug cursor flickering)
+    // NOTE: Only built for native targets (PTY requires <util.h> not available during cross-compilation)
     // ============================================================================
-    const cursor_monitor = b.addExecutable(.{
-        .name = "cursor_monitor",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tools/cursor_monitor/main.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
+    if (is_native) {
+        const cursor_monitor = b.addExecutable(.{
+            .name = "cursor_monitor",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/tools/cursor_monitor/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
 
-    // Add PTY module for spawning vimc
-    cursor_monitor.root_module.addAnonymousImport("pty", .{
-        .root_source_file = b.path("src/backends/terminal/tests/pty.zig"),
-    });
+        // Add PTY module for spawning vimc
+        cursor_monitor.root_module.addAnonymousImport("pty", .{
+            .root_source_file = b.path("src/backends/terminal/tests/pty.zig"),
+        });
 
-    b.installArtifact(cursor_monitor);
+        b.installArtifact(cursor_monitor);
 
-    const run_cursor_monitor = b.addRunArtifact(cursor_monitor);
-    run_cursor_monitor.step.dependOn(b.getInstallStep());
+        const run_cursor_monitor = b.addRunArtifact(cursor_monitor);
+        run_cursor_monitor.step.dependOn(b.getInstallStep());
 
-    const cursor_monitor_step = b.step("cursor_monitor", "Monitor cursor escape codes during rapid movement");
-    cursor_monitor_step.dependOn(&run_cursor_monitor.step);
+        const cursor_monitor_step = b.step("cursor_monitor", "Monitor cursor escape codes during rapid movement");
+        cursor_monitor_step.dependOn(&run_cursor_monitor.step);
+    }
 
     // ============================================================================
     // JSI HostObject Performance Benchmark

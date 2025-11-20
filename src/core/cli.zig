@@ -9,6 +9,7 @@ pub const ParseResult = struct {
     force: bool,
     debug: bool,
     no_cache: bool,
+    metrics: bool,
     help: bool,
     version: bool,
     allocator: std.mem.Allocator,
@@ -35,6 +36,7 @@ pub fn parse(allocator: std.mem.Allocator) !ParseResult {
         .force = false,
         .debug = false,
         .no_cache = false,
+        .metrics = false,
         .help = false,
         .version = false,
         .allocator = allocator,
@@ -59,6 +61,8 @@ pub fn parse(allocator: std.mem.Allocator) !ParseResult {
             result.debug = true;
         } else if (std.mem.eql(u8, arg, "--no-cache")) {
             result.no_cache = true;
+        } else if (std.mem.eql(u8, arg, "--metrics")) {
+            result.metrics = true;
         } else if (std.mem.eql(u8, arg, "--debug-protocol")) {
             // Special mode - return immediately
             result.command = try allocator.dupe(u8, arg);
@@ -107,6 +111,7 @@ pub fn printHelp() void {
         \\  -f, --force                 Force overwrite existing files (init command)
         \\  -d, --debug                 Enable debug mode
         \\      --no-cache              Disable bytecode caching
+        \\      --metrics               Enable performance metrics tracking
         \\
         \\EDITOR MODES:
         \\  vimc <file>                 Open file in interactive editor

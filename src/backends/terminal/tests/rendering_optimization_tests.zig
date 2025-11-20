@@ -8,9 +8,21 @@ const helpers = @import("test_helpers.zig");
 const VIMCRAFT_BIN = "./zig-out/bin/vimc";
 
 /// Helper to create a test file with unique name
+/// NOTE: Returns a fixed path that is valid for the lifetime of the test
 fn createTestFile(content: []const u8, suffix: []const u8) ![]const u8 {
-    var buf: [256]u8 = undefined;
-    const path = try std.fmt.bufPrint(&buf, "/tmp/vimcraft_test_{s}.txt", .{suffix});
+    // Use a static buffer to hold paths (will persist for test lifetime)
+    const Static = struct {
+        var path_buffers: [10][256]u8 = undefined;
+        var next_index: usize = 0;
+    };
+
+    if (Static.next_index >= Static.path_buffers.len) {
+        return error.TooManyTestFiles;
+    }
+
+    const path = try std.fmt.bufPrint(&Static.path_buffers[Static.next_index], "/tmp/vimcraft_test_{s}.txt", .{suffix});
+    Static.next_index += 1;
+
     const file = try std.fs.cwd().createFile(path, .{});
     defer file.close();
     try file.writeAll(content);
@@ -73,6 +85,7 @@ test "PTY: Synchronized updates prevent cursor flickering" {
 
     std.debug.print("\n[SYNCHRONIZED UPDATES TEST]\n", .{});
     std.debug.print("  20 rapid movements (holding 'j')\n", .{});
+    std.debug.print("  Output captured: {} bytes\n", .{output.items.len});
     std.debug.print("  Hide cursor codes: {}\n", .{hide_count});
     std.debug.print("  Show cursor codes: {}\n", .{show_count});
     std.debug.print("  Total visibility toggles: {}\n", .{total_visibility_codes});

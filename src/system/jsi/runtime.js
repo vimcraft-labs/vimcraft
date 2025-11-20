@@ -535,3 +535,26 @@ if (typeof vimEventEmitter !== 'undefined') {
   vim.removeAllListeners = vimEventEmitter.removeAllListeners;
   vim.listenerCount = vimEventEmitter.listenerCount;
 }
+
+// vim.metrics API - Performance metrics (only available with --metrics flag)
+// Provides startup time, plugin load times, and other performance data
+// Direct HostObject property access (zero-copy JSI)
+//
+// vim.metrics.startupTime     -> number (ms from process start to first render)
+// vim.metrics.hermesInitTime  -> number (ms to initialize Hermes runtime)
+// vim.metrics.configLoadTime  -> number (ms to load config files)
+// vim.metrics.uptime          -> number (ms since process started)
+// vim.metrics.pluginCount     -> number (plugins loaded)
+// vim.metrics.pluginLoadTimes -> Array<{name: string, duration_ms: number}>
+//
+// Example:
+//   console.log('Startup:', vim.metrics.startupTime, 'ms');
+//   console.log('Hermes init:', vim.metrics.hermesInitTime, 'ms');
+//   console.log('Config load:', vim.metrics.configLoadTime, 'ms');
+//   console.log('Plugins:', vim.metrics.pluginLoadTimes);
+//
+// Note: All properties return 0 or empty array if metrics are disabled
+if (typeof vimMetrics !== 'undefined') {
+  vim.metrics = vimMetrics;
+  Object.freeze(vim.metrics);
+}

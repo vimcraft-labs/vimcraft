@@ -27,6 +27,7 @@ pub const buffer_api = @import("buffer_api.zig");
 pub const event_api = @import("event_api.zig");
 pub const highlight_api = @import("highlight_api.zig");
 pub const module_api = @import("module_api.zig");
+pub const metrics_api = @import("metrics_api.zig");
 pub const loader = @import("loader.zig");
 
 // Import new transpiler system
@@ -201,6 +202,9 @@ pub fn initJSI(
 
     // Register module API (require() - Phase 4)
     module_api.register(runtime, cfg_ctx);
+
+    // Register metrics API (vim.metrics - performance tracking)
+    metrics_api.register(runtime);
 
     // JSI functions registered (silent mode)
 }

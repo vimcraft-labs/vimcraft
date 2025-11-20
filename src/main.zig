@@ -23,6 +23,8 @@ const paste = @import("editor/buffer/paste.zig");
 const cellwidth = @import("backends/terminal/display/cellwidth.zig");
 const EditOps = @import("editor/buffer/edit.zig").EditOps;
 const ListChars = @import("editor/config/listchars.zig").ListChars;
+const metrics_mod = @import("core/metrics.zig");
+const Metrics = metrics_mod.Metrics;
 
 // Import Hermes C API (use hermes_c namespace to avoid shadowing)
 const hermes_c = @cImport({
@@ -345,6 +347,13 @@ pub fn main() !void {
         return;
     }
 
+    // Initialize metrics if --metrics flag is present
+    var metrics: ?*Metrics = null;
+    if (parsed.metrics) {
+        metrics = try Metrics.init(allocator);
+    }
+    defer if (metrics) |m| m.deinit();
+
     // Route to appropriate command or mode
     if (parsed.command) |cmd| {
         if (std.mem.eql(u8, cmd, "init")) {
@@ -496,6 +505,11 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     // Wire options manager to editor context
     editor_ctx.options_manager = &options_mgr;
 
+    // Mark Hermes initialization start (if metrics enabled)
+    if (metrics_mod.getGlobalMetrics()) |m| {
+        m.markHermesInitStart();
+    }
+
     // Initialize JavaScript runtime for config loading
     const runtime_nullable = hermes_c.hermes_runtime_create();
     if (runtime_nullable == null) {
@@ -505,6 +519,11 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     const runtime = runtime_nullable.?;
     defer hermes_c.hermes_runtime_destroy(runtime);
 
+    // Mark Hermes initialization end (if metrics enabled)
+    if (metrics_mod.getGlobalMetrics()) |m| {
+        m.markHermesInitEnd();
+    }
+
     // Store runtime in debugger state
     debugger_state.runtime = runtime;
 
@@ -512,10 +531,20 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &options_mgr, &editor_ctx, &editor_ctx.display);
     defer jsi_api.deinitJSI(); // Clean up ConfigContext BEFORE runtime destruction
 
+    // Mark config load start (if metrics enabled)
+    if (metrics_mod.getGlobalMetrics()) |m| {
+        m.markConfigLoadStart();
+    }
+
     // Load TypeScript config and plugins for headless debugging
     // NOTE: Display exists but won't render output (no terminal flush)
     // This allows visual debugging commands to inspect layer state
     try loadConfigFromTs(allocator, &highlight_config, &debugger_state);
+
+    // Mark config load end (if metrics enabled)
+    if (metrics_mod.getGlobalMetrics()) |m| {
+        m.markConfigLoadEnd();
+    }
 
     // Ensure cursorline has a default color if not set by init.ts
     // This is critical for visual debugging commands (get_layer, get_output_grid)
@@ -542,10 +571,19 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
 
         for (plugin_files.items) |plugin| {
             if (plugin.has_entry) {
+                const filename = std.fs.path.basename(plugin.index_path);
+                const load_start = std.time.milliTimestamp();
+
                 jsi_api.loadPlugin(@ptrCast(runtime), plugin.index_path, allocator) catch |err| {
-                    const filename = std.fs.path.basename(plugin.index_path);
                     std.debug.print("WARNING: Failed to load plugin {s}: {}\n", .{ filename, err });
+                    continue;
                 };
+
+                // Record plugin load time (if metrics enabled)
+                if (metrics_mod.getGlobalMetrics()) |m| {
+                    const load_time = std.time.milliTimestamp() - load_start;
+                    m.recordPluginLoad(filename, load_time) catch {};
+                }
             }
         }
     }
@@ -625,6 +663,11 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         .display = &display,
     };
 
+    // Mark Hermes initialization start (if metrics enabled)
+    if (metrics_mod.getGlobalMetrics()) |m| {
+        m.markHermesInitStart();
+    }
+
     // Initialize JavaScript runtime for config loading
     // CRITICAL: Runtime must live for entire function (not just the if block)
     // Otherwise processTimerQueue() in main loop will access freed memory → segfault
@@ -639,6 +682,11 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     if (runtime_nullable != null) {
         runtime = runtime_nullable.?;
 
+        // Mark Hermes initialization end (if metrics enabled)
+        if (metrics_mod.getGlobalMetrics()) |m| {
+            m.markHermesInitEnd();
+        }
+
         // Store runtime in debugger state
         debugger_state.runtime = runtime;
 
@@ -646,8 +694,18 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         jsi_api.initJSI(allocator, @ptrCast(runtime.?), &highlight_config, &options_mgr, &editor, &display);
         defer jsi_api.deinitJSI(); // Clean up ConfigContext BEFORE runtime destruction
 
+        // Mark config load start (if metrics enabled)
+        if (metrics_mod.getGlobalMetrics()) |m| {
+            m.markConfigLoadStart();
+        }
+
         // Load configuration from init.ts (but don't load plugins yet - TypeScript-only)
         try loadConfigFromTs(allocator, &highlight_config, &debugger_state);
+
+        // Mark config load end (if metrics enabled)
+        if (metrics_mod.getGlobalMetrics()) |m| {
+            m.markConfigLoadEnd();
+        }
 
         // CRITICAL: Apply sign column config BEFORE loading plugins
         // This ensures getGutterWidth() returns the correct value when plugins initialize
@@ -676,10 +734,19 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
             for (plugin_files.items) |plugin| {
                 if (plugin.has_entry) {
+                    const filename = std.fs.path.basename(plugin.index_path);
+                    const load_start = std.time.milliTimestamp();
+
                     jsi_api.loadPlugin(@ptrCast(rt), plugin.index_path, allocator) catch |err| {
-                        const filename = std.fs.path.basename(plugin.index_path);
                         std.debug.print("WARNING: Failed to load plugin {s}: {}\n", .{ filename, err });
+                        continue;
                     };
+
+                    // Record plugin load time (if metrics enabled)
+                    if (metrics_mod.getGlobalMetrics()) |m| {
+                        const load_time = std.time.milliTimestamp() - load_start;
+                        m.recordPluginLoad(filename, load_time) catch {};
+                    }
                 }
             }
         }
@@ -737,6 +804,11 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
     // Initial render
     try backend.render();
+
+    // Mark first render (if metrics enabled)
+    if (metrics_mod.getGlobalMetrics()) |m| {
+        m.markFirstRender();
+    }
 
     // Main event loop - simplified!
     var running = true;
@@ -909,6 +981,11 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         .display = &display,
     };
 
+    // Mark Hermes initialization start (if metrics enabled)
+    if (metrics_mod.getGlobalMetrics()) |m| {
+        m.markHermesInitStart();
+    }
+
     // Create Hermes runtime (must stay alive for debugger)
     // CRITICAL: Runtime must live for entire function (not just initialization block)
     // Otherwise processTimerQueue() in main loop will access freed memory → segfault
@@ -919,6 +996,11 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     }
     const runtime = runtime_nullable.?;
     defer hermes_c.hermes_runtime_destroy(runtime);
+
+    // Mark Hermes initialization end (if metrics enabled)
+    if (metrics_mod.getGlobalMetrics()) |m| {
+        m.markHermesInitEnd();
+    }
 
     // Store runtime in debugger state
     debugger_state.runtime = runtime;
@@ -981,6 +1063,11 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         std.Thread.sleep(200 * std.time.ns_per_ms);
     }
 
+    // Mark config load start (if metrics enabled)
+    if (metrics_mod.getGlobalMetrics()) |m| {
+        m.markConfigLoadStart();
+    }
+
     // Load configuration from init.ts (but NOT plugins yet - TypeScript-only)
     if (paths.indexTsExists()) {
         const load_start = std.time.milliTimestamp();
@@ -1003,6 +1090,11 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
             highlight_config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
             highlight_config.cursorline_enabled = true;
         }
+    }
+
+    // Mark config load end (if metrics enabled)
+    if (metrics_mod.getGlobalMetrics()) |m| {
+        m.markConfigLoadEnd();
     }
 
     // Apply sign column config BEFORE loading plugins
@@ -1041,11 +1133,20 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
             debugger.log(msg, .info);
 
             if (plugin.has_entry) {
+                const load_start = std.time.milliTimestamp();
+
                 jsi_api.loadPlugin(@ptrCast(runtime), plugin.index_path, allocator) catch |err| {
                     const err_msg = try std.fmt.allocPrint(allocator, "  WARNING: Failed to load {s}: {}", .{ filename, err });
                     defer allocator.free(err_msg);
                     debugger.log(err_msg, .warning);
+                    continue;
                 };
+
+                // Record plugin load time (if metrics enabled)
+                if (metrics_mod.getGlobalMetrics()) |m| {
+                    const load_time = std.time.milliTimestamp() - load_start;
+                    m.recordPluginLoad(filename, load_time) catch {};
+                }
             }
         }
     }
@@ -1102,6 +1203,11 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
     // Initial render
     try backend.render();
+
+    // Mark first render (if metrics enabled)
+    if (metrics_mod.getGlobalMetrics()) |m| {
+        m.markFirstRender();
+    }
 
     // Main event loop - simplified!
     var running = true;

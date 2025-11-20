@@ -46,6 +46,18 @@ pub const Pty = struct {
         }
         errdefer posix.close(master);
 
+        // Configure terminal attributes - disable echo
+        // CRITICAL: Must be done AFTER openpty creates the slave fd
+        var termios: c.termios = undefined;
+        if (c.tcgetattr(slave, &termios) == 0) {
+            // Disable echo (ECHO flag)
+            termios.c_lflag &= ~@as(c_uint, c.ECHO);
+            // Set raw mode for better control
+            termios.c_lflag &= ~@as(c_uint, c.ICANON); // Disable canonical mode
+            termios.c_lflag &= ~@as(c_uint, c.ISIG);   // Disable signal chars
+            _ = c.tcsetattr(slave, c.TCSANOW, &termios);
+        }
+
         // Fork child process
         const pid = try posix.fork();
 
