@@ -29,6 +29,10 @@ pub const highlight_api = @import("highlight_api.zig");
 pub const module_api = @import("module_api.zig");
 pub const loader = @import("loader.zig");
 
+// Import new transpiler system
+const transpiler = @import("../transpiler/loader.zig");
+const cache_module = @import("../transpiler/cache.zig");
+
 /// Context struct for host functions
 pub const JSIContext = struct {
     config: *highlights.HighlightConfig,
@@ -42,6 +46,10 @@ pub var global_keymap_ctx: ?*keymap_api.KeymapContext = null;
 pub var global_highlight_ctx: ?*highlight_api.HighlightContext = null;
 pub var global_event_emitter: ?*EventEmitter = null;
 pub var global_allocator: ?std.mem.Allocator = null;
+
+/// Global transpiler cache state (initialized in main.zig)
+pub var global_cache_dir: ?[]const u8 = null;
+pub var global_cache_stats: cache_module.CacheStats = .{};
 
 /// Initialize JSI runtime and register all host functions
 /// editor_or_context can be either *Editor or *EditorContext - both have logger field
@@ -75,8 +83,11 @@ pub fn initJSI(
         .buffer = blk: {
             const T = @TypeOf(editor_or_context);
             if (T == *Editor) {
-                break :blk &editor_or_context.buffer;
+                // Editor uses multi-buffer architecture - can't store static pointer
+                // vim.bo won't work for Editor (needs refactoring to call getCurrentBuffer())
+                break :blk null;
             } else {
+                // EditorContext has single buffer field
                 break :blk &editor_or_context.buffer;
             }
         },
@@ -116,8 +127,11 @@ pub fn initJSI(
     filetype_api.register(runtime, editor_or_context, allocator);
 
     // Register buffer API (vim.buffer.getContent, vim.buffer.getLineContent, etc.)
-    // Both Editor and EditorContext have buffer, so register for both
-    buffer_api.register(runtime, cfg_ctx.buffer.?);
+    // Only register for Editor (not EditorContext) - needs multi-buffer support
+    // EditorContext uses headless mode and doesn't need JavaScript buffer access
+    if (T == *Editor) {
+        buffer_api.register(runtime, editor_or_context);
+    }
 
     // Register layer API (createLayer, renderVirtualText, setLayerOpacity, etc.)
     layer_api.register(runtime, display);
@@ -126,8 +140,11 @@ pub fn initJSI(
     // Register for both Editor and EditorContext
     if (T == *Editor) {
         const motion_ctx = allocator.create(motion_api.MotionContext) catch @panic("Failed to allocate MotionContext");
+        // TODO: This is problematic - buffer pointer becomes stale when user switches buffers
+        // Need to refactor MotionContext to store *Editor instead and call getCurrentBuffer()
+        const current_buffer = editor_or_context.getCurrentBuffer() orelse @panic("No current buffer for motion API");
         motion_ctx.* = motion_api.MotionContext{
-            .buffer = &editor_or_context.buffer,
+            .buffer = current_buffer,
             .viewport_top = &editor_or_context.viewport_top,
             .viewport_height = if (display) |d| d.terminal_rows - 1 else 24,
             .js_state_dirty = &editor_or_context.js_state_dirty,
@@ -273,5 +290,91 @@ pub const processTimerQueue = timer_api.processQueue;
 pub const processAnimationFrames = animation_api.processFrames;
 pub const clearAllTimers = timer_api.clearAll;
 pub const deinitTimers = timer_api.deinit;
-pub const loadPlugin = loader.loadPlugin;
-pub const loadConfig = loader.loadConfig;
+
+/// Load plugin file (NO wrapper - assumes runtime.js already loaded)
+/// Uses new transpiler system for TypeScript support and WyHash caching
+pub fn loadPlugin(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: std.mem.Allocator) !void {
+    // Get cache directory from global state (initialized in main.zig)
+    const cache_dir = global_cache_dir orelse return error.CacheNotInitialized;
+
+    // Setup loader config
+    const loader_config = transpiler.LoaderConfig{
+        .cache_dir = cache_dir,
+        .enable_cache = true,
+        .stats = &global_cache_stats,
+    };
+
+    // Load module (transpile + compile + cache)
+    const bytecode = try transpiler.loadModule(allocator, loader_config, filepath);
+    defer allocator.free(bytecode);
+
+    // Execute bytecode
+    const result = c.hermes_evaluate_bytecode(runtime, bytecode.ptr, bytecode.len);
+
+    if (result == null) {
+        const err_msg = c.hermes_get_exception_message(runtime);
+        std.debug.print("[JSI] Plugin error: {s}\n", .{err_msg});
+        return error.JSError;
+    }
+
+    defer c.hermes_value_destroy(result);
+}
+
+/// Load config file (WITH runtime.js wrapper for vim.* globals)
+/// Uses new transpiler system for TypeScript support and WyHash caching
+/// NO intermediate files - wrapped source stays in memory only
+pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: std.mem.Allocator) !void {
+    // Get cache directory from global state
+    const cache_dir = global_cache_dir orelse return error.CacheNotInitialized;
+
+    // Read source file
+    const file = std.fs.openFileAbsolute(filepath, .{}) catch |err| {
+        std.debug.print("[JSI] Could not open config file: {}\n", .{err});
+        return err;
+    };
+    defer file.close();
+
+    const source = try file.readToEndAlloc(allocator, 1_000_000);
+    defer allocator.free(source);
+
+    // Load runtime wrapper
+    const runtime_wrapper = @embedFile("runtime.js");
+
+    // Wrap user config with runtime wrapper (IN-MEMORY ONLY)
+    const wrapped_source = try std.fmt.allocPrint(allocator,
+        \\{s}
+        \\
+        \\// User config
+        \\{s}
+    , .{ runtime_wrapper, source });
+    defer allocator.free(wrapped_source);
+
+    // Setup loader config
+    const loader_config = transpiler.LoaderConfig{
+        .cache_dir = cache_dir,
+        .enable_cache = true,
+        .stats = &global_cache_stats,
+    };
+
+    // Load from in-memory source (NO temporary file created)
+    // Cache key based on: wrapped content + original filepath
+    // Cache invalidation: Content hash changes when source OR runtime.js changes
+    const bytecode = try transpiler.loadFromSource(
+        allocator,
+        loader_config,
+        wrapped_source,
+        filepath, // Use original path for cache key (ensures unique per config file)
+    );
+    defer allocator.free(bytecode);
+
+    // Execute bytecode
+    const result = c.hermes_evaluate_bytecode(runtime, bytecode.ptr, bytecode.len);
+
+    if (result == null) {
+        const err_msg = c.hermes_get_exception_message(runtime);
+        std.debug.print("[JSI] JavaScript error: {s}\n", .{err_msg});
+        return error.JSError;
+    }
+
+    defer c.hermes_value_destroy(result);
+}

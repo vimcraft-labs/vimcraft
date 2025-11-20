@@ -5,6 +5,22 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // ============================================================================
+    // Security: /tmp/ Loading Control (TypeScript Transpiler)
+    // ============================================================================
+    // PRODUCTION: Set to false to disable /tmp/ access (security hardening)
+    // DEVELOPMENT: Set to true for testing (allows /tmp/ loading)
+    // Default: true (for development convenience)
+    const enable_tmp_loading = b.option(
+        bool,
+        "enable-tmp-loading",
+        "Allow loading TypeScript modules from /tmp/ (testing only, disable in production)",
+    ) orelse true; // Default: enabled for development
+
+    // Create build options module for transpiler
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "enable_tmp_loading", enable_tmp_loading);
+
+    // ============================================================================
     // Unicode Support: Ghostty's uucode library + grapheme module
     // ============================================================================
     // Load uucode dependency for production-quality Unicode width calculations
@@ -192,6 +208,9 @@ pub fn build(b: *std.Build) void {
     // Add uucode module for Unicode width calculations
     exe.root_module.addImport("uucode", uucode_module);
 
+    // Add build_options module for transpiler security settings
+    exe.root_module.addImport("build_options", build_options.createModule());
+
     // Add animation module
     const animation_module = b.createModule(.{
         .root_source_file = b.path("src/animation.zig"),
@@ -319,6 +338,84 @@ pub fn build(b: *std.Build) void {
     // Link directly to our vendored libuv to avoid Homebrew conflicts
     // On macOS, we build universal binaries (arm64 + x86_64) for cross-compilation
     exe.addObjectFile(b.path("vendor/libuv/build/libuv.a"));
+
+    // ============================================================================
+    // esbuild (TypeScript Transpiler) - Phase 4 - CROSS-PLATFORM
+    // ============================================================================
+    // esbuild Go library compiled to C shared library via -buildmode=c-shared
+    // Provides in-process TypeScript→JavaScript transpilation (no child process overhead)
+    // Performance: ~100x faster than spawning esbuild binary
+    //
+    // Build instructions:
+    //   cd vendor/esbuild-wrapper
+    //   ./build.sh  (requires Go 1.21+, takes 30-60s)
+    //
+    // Size impact: ~7MB to binary (smaller than standalone esbuild binary)
+    //
+    // Platform-specific library naming:
+    //   macOS arm64:   libesbuild_darwin_arm64.dylib
+    //   macOS x86_64:  libesbuild_darwin_x86_64.dylib
+    //   Linux x86_64:  libesbuild_linux_x86_64.so
+    //   Linux aarch64: libesbuild_linux_aarch64.so
+    //   Windows x86_64: libesbuild_windows_x86_64.dll
+    const esbuild_dylib_filename = blk: {
+        const os_tag = target.result.os.tag;
+        const arch = target.result.cpu.arch;
+
+        if (os_tag == .macos) {
+            if (arch == .aarch64) {
+                break :blk "libesbuild_darwin_arm64.dylib";
+            } else if (arch == .x86_64) {
+                break :blk "libesbuild_darwin_x86_64.dylib";
+            }
+        } else if (os_tag == .linux) {
+            if (arch == .x86_64) {
+                break :blk "libesbuild_linux_x86_64.so";
+            } else if (arch == .aarch64) {
+                break :blk "libesbuild_linux_aarch64.so";
+            }
+        } else if (os_tag == .windows) {
+            if (arch == .x86_64) {
+                break :blk "libesbuild_windows_x86_64.dll";
+            }
+        }
+
+        @panic("Unsupported platform for esbuild");
+    };
+
+    // Add include path for esbuild C headers
+    exe.addIncludePath(b.path("vendor/esbuild-wrapper"));
+
+    // Link esbuild library by linking the dylib directly as an object file
+    // This avoids addLibraryPath() which automatically adds an unwanted rpath
+    // We link from vendor/ at build time, but copy to bin/ and use @executable_path at runtime
+    const esbuild_source_path = b.fmt("vendor/esbuild-wrapper/{s}", .{esbuild_dylib_filename});
+    exe.addObjectFile(b.path(esbuild_source_path));
+
+    // Copy dylib to output directory (next to executable)
+    const esbuild_dest_path = b.fmt("bin/{s}", .{esbuild_dylib_filename});
+    const install_esbuild_dylib = b.addInstallFile(
+        b.path(esbuild_source_path),
+        esbuild_dest_path,
+    );
+    exe.step.dependOn(&install_esbuild_dylib.step);
+
+    // NOTE: The source dylib's install_name has been fixed to use @rpath/ prefix
+    // This allows the @executable_path rpath to work correctly at runtime
+    // If you rebuild the esbuild dylib, run:
+    //   install_name_tool -id "@rpath/libesbuild_darwin_arm64.dylib" vendor/esbuild-wrapper/libesbuild_darwin_arm64.dylib
+
+    // Set RPATH for runtime library search (platform-specific)
+    // Since we're using addObjectFile instead of linkSystemLibrary, no automatic rpath is added
+    // macOS: @executable_path (relative to executable)
+    // Linux: $ORIGIN (relative to executable)
+    // Windows: No rpath needed (searches current directory by default)
+    if (target.result.os.tag == .macos) {
+        exe.addRPath(.{ .cwd_relative = "@executable_path" });
+    } else if (target.result.os.tag == .linux) {
+        exe.addRPath(.{ .cwd_relative = "$ORIGIN" });
+    }
+    // Windows: No rpath configuration needed
 
     // ============================================================================
     // Tree-sitter (Incremental Syntax Parsing)
@@ -760,6 +857,9 @@ pub fn build(b: *std.Build) void {
     // Add uucode module for tests
     unit_tests.root_module.addImport("uucode", uucode_module);
 
+    // Add build_options module for tests (transpiler security settings)
+    unit_tests.root_module.addImport("build_options", build_options.createModule());
+
     // Add animation module for tests
     unit_tests.root_module.addImport("animation", animation_module);
 
@@ -957,6 +1057,57 @@ pub fn build(b: *std.Build) void {
     const pty_test_step = b.step("pty_tests", "Run PTY integration tests (requires vimc built)");
     pty_test_step.dependOn(&run_pty_tests.step);
     pty_test_step.dependOn(&run_rendering_opt_tests.step);
+
+    // ============================================================================
+    // Performance Measurement Tool (PTY-based)
+    // ============================================================================
+    const perf_test = b.addExecutable(.{
+        .name = "perf_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/perf_test/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    // Add PTY module for spawning vimc in pseudoterminal
+    perf_test.root_module.addAnonymousImport("pty", .{
+        .root_source_file = b.path("src/backends/terminal/tests/pty.zig"),
+    });
+
+    b.installArtifact(perf_test);
+
+    const run_perf_test = b.addRunArtifact(perf_test);
+    // Performance test requires vimc to be built first
+    run_perf_test.step.dependOn(b.getInstallStep());
+
+    const perf_test_step = b.step("perf_test", "Run PTY-based performance measurement");
+    perf_test_step.dependOn(&run_perf_test.step);
+
+    // ============================================================================
+    // Cursor Escape Code Monitor (Debug cursor flickering)
+    // ============================================================================
+    const cursor_monitor = b.addExecutable(.{
+        .name = "cursor_monitor",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/cursor_monitor/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    // Add PTY module for spawning vimc
+    cursor_monitor.root_module.addAnonymousImport("pty", .{
+        .root_source_file = b.path("src/backends/terminal/tests/pty.zig"),
+    });
+
+    b.installArtifact(cursor_monitor);
+
+    const run_cursor_monitor = b.addRunArtifact(cursor_monitor);
+    run_cursor_monitor.step.dependOn(b.getInstallStep());
+
+    const cursor_monitor_step = b.step("cursor_monitor", "Monitor cursor escape codes during rapid movement");
+    cursor_monitor_step.dependOn(&run_cursor_monitor.step);
 
     // ============================================================================
     // JSI HostObject Performance Benchmark

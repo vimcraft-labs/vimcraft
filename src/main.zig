@@ -215,7 +215,7 @@ const ReloadState = struct {
         jsi_api.clearAllTimers();
 
         // CRITICAL FIX #9: Clear all event listeners before reloading
-        // This prevents duplicate callbacks when init.js is reloaded
+        // This prevents duplicate callbacks when init.ts is reloaded
         jsi_api.clearAllEventListeners();
 
         // CRITICAL FIX #10: Clear all cached modules before reloading
@@ -313,6 +313,15 @@ pub fn main() !void {
     try debug_log.init();
     defer debug_log.deinit();
 
+    // Initialize transpiler cache directory
+    const transpiler_cache = @import("system/transpiler/cache.zig");
+    const cache_dir = try transpiler_cache.getDefaultCacheDir(allocator);
+    defer allocator.free(cache_dir);
+    try transpiler_cache.initCacheDir(cache_dir);
+
+    // Store cache_dir in global state for JSI loader functions
+    jsi_api.global_cache_dir = cache_dir;
+
     // Parse command-line arguments
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
@@ -394,9 +403,9 @@ fn printHelp() void {
     std.debug.print("{s}", .{help});
 }
 
-/// Load configuration from ~/.config/vimcraft/init.js
+/// Load configuration from ~/.config/vimcraft/init.ts (TypeScript-only)
 /// NOTE: Caller must call jsi_api.initJSI() before calling this function
-fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightConfig, debugger_state: *DebuggerState) !void {
+fn loadConfigFromTs(allocator: std.mem.Allocator, config: *highlights.HighlightConfig, debugger_state: *DebuggerState) !void {
     // Get config paths
     var paths = try ConfigPaths.init(allocator);
     defer paths.deinit();
@@ -404,10 +413,10 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
     // Ensure config directory exists
     try paths.ensureConfigDir();
 
-    // Create default init.js if it doesn't exist
-    try paths.createDefaultInitJs();
+    // Create default init.ts if it doesn't exist (TypeScript-only)
+    try paths.createDefaultInitTs();
 
-    if (paths.initJsExists()) {
+    if (paths.initTsExists()) {
 
         // Get runtime from debugger_state (initialized by caller)
         const runtime = debugger_state.runtime orelse {
@@ -415,9 +424,9 @@ fn loadConfigFromJs(allocator: std.mem.Allocator, config: *highlights.HighlightC
             return error.RuntimeNotInitialized;
         };
 
-        // Load and execute init.js
-        jsi_api.loadConfig(@ptrCast(runtime), paths.init_js_path, allocator) catch |err| {
-            std.debug.print("WARNING: Failed to load init.js: {}\n", .{err});
+        // Load and execute init.ts (transpiled automatically by loader)
+        jsi_api.loadConfig(@ptrCast(runtime), paths.init_ts_path, allocator) catch |err| {
+            std.debug.print("WARNING: Failed to load init.ts: {}\n", .{err});
             std.debug.print("Using default configuration\n", .{});
             // Fall back to defaults
             const cursorline_bg = try highlights.Color.fromHex("#2b2b2b");
@@ -474,12 +483,12 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &options_mgr, &editor_ctx, &editor_ctx.display);
     defer jsi_api.deinitJSI(); // Clean up ConfigContext BEFORE runtime destruction
 
-    // Load JavaScript config and plugins for headless debugging
+    // Load TypeScript config and plugins for headless debugging
     // NOTE: Display exists but won't render output (no terminal flush)
     // This allows visual debugging commands to inspect layer state
-    try loadConfigFromJs(allocator, &highlight_config, &debugger_state);
+    try loadConfigFromTs(allocator, &highlight_config, &debugger_state);
 
-    // Ensure cursorline has a default color if not set by init.js
+    // Ensure cursorline has a default color if not set by init.ts
     // This is critical for visual debugging commands (get_layer, get_output_grid)
     if (highlight_config.cursorline == null) {
         const cursorline_bg = try highlights.Color.fromHex("#1E202F");
@@ -493,7 +502,7 @@ fn runDebugProtocol(allocator: std.mem.Allocator) !void {
     // NOW load plugins with correct gutter width (headless mode)
     var plugin_paths = try ConfigPaths.init(allocator);
     defer plugin_paths.deinit();
-    if (plugin_paths.initJsExists()) {
+    if (plugin_paths.initTsExists()) {
         var plugin_files = try plugin_paths.getPluginFiles(allocator);
         defer {
             for (plugin_files.items) |path| {
@@ -574,14 +583,14 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var paths = try ConfigPaths.init(allocator);
     defer paths.deinit();
     try paths.ensureConfigDir();
-    try paths.createDefaultInitJs();
+    try paths.createDefaultInitTs();
 
     // Set up hot reload state BEFORE loading config
     var reload_state = ReloadState{
         .highlight_config = &highlight_config,
         .debugger_state = &debugger_state,
         .allocator = allocator,
-        .config_path = paths.init_js_path,
+        .config_path = paths.init_ts_path,
         .display = &display,
     };
 
@@ -606,8 +615,8 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         jsi_api.initJSI(allocator, @ptrCast(runtime.?), &highlight_config, &options_mgr, &editor, &display);
         defer jsi_api.deinitJSI(); // Clean up ConfigContext BEFORE runtime destruction
 
-        // Load configuration from init.js (but don't load plugins yet)
-        try loadConfigFromJs(allocator, &highlight_config, &debugger_state);
+        // Load configuration from init.ts (but don't load plugins yet - TypeScript-only)
+        try loadConfigFromTs(allocator, &highlight_config, &debugger_state);
 
         // CRITICAL: Apply sign column config BEFORE loading plugins
         // This ensures getGutterWidth() returns the correct value when plugins initialize
@@ -625,7 +634,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
     // NOW load plugins AFTER terminal size is set (prevents grid.resize() from clearing content)
     if (runtime) |rt| {
-        if (paths.initJsExists()) {
+        if (paths.initTsExists()) {
             var plugin_files = try paths.getPluginFiles(allocator);
             defer {
                 for (plugin_files.items) |path| {
@@ -659,10 +668,10 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     }.callback;
 
     var watcher: ?*ConfigWatcher = null;
-    if (paths.initJsExists()) {
+    if (paths.initTsExists()) {
         if (ConfigWatcher.init(
             allocator,
-            paths.init_js_path,
+            paths.init_ts_path,
             reloadCallback,
             &reload_state,
         )) |w| {
@@ -728,7 +737,9 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         checkJavaScriptStateChanges(&editor, &needs_render);
 
         // Handle input via TerminalBackend (all vim logic in Editor core!)
-        running = try backend.handleInput(10, &needs_render);
+        // Use 1ms timeout for responsive input without CPU spinning
+        // 0ms = 100% CPU (causes thermal throttling), 10ms = sluggish, 1ms = perfect balance
+        running = try backend.handleInput(1, &needs_render);
 
         // Render if state changed (with throttling to protect against plugin spam)
         if (needs_render) {
@@ -856,14 +867,14 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     var paths = try ConfigPaths.init(allocator);
     defer paths.deinit();
     try paths.ensureConfigDir();
-    try paths.createDefaultInitJs();
+    try paths.createDefaultInitTs();
 
     // Set up hot reload state
     var reload_state = ReloadState{
         .highlight_config = &highlight_config,
         .debugger_state = &debugger_state,
         .allocator = allocator,
-        .config_path = paths.init_js_path,
+        .config_path = paths.init_ts_path,
         .display = &display,
     };
 
@@ -933,14 +944,14 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         wait_count += 1;
     }
 
-    // Load configuration from init.js (but NOT plugins yet)
-    if (paths.initJsExists()) {
-        debugger.log("Vimcraft: Loading init.js...", .info);
-        jsi_api.loadConfig(@ptrCast(runtime), paths.init_js_path, allocator) catch |err| {
-            const msg = try std.fmt.allocPrint(allocator, "Failed to load init.js: {}", .{err});
+    // Load configuration from init.ts (but NOT plugins yet - TypeScript-only)
+    if (paths.initTsExists()) {
+        debugger.log("Vimcraft: Loading init.ts...", .info);
+        jsi_api.loadConfig(@ptrCast(runtime), paths.init_ts_path, allocator) catch |err| {
+            const msg = try std.fmt.allocPrint(allocator, "Failed to load init.ts: {}", .{err});
             defer allocator.free(msg);
             debugger.log(msg, .err);
-            std.debug.print("WARNING: Failed to load init.js: {}\n", .{err});
+            std.debug.print("WARNING: Failed to load init.ts: {}\n", .{err});
             const cursorline_bg = try highlights.Color.fromHex("#2b2b2b");
             highlight_config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
             highlight_config.cursorline_enabled = true;
@@ -961,7 +972,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     try display.getTerminalSize();
 
     // NOW load plugins AFTER terminal size is set (prevents grid.resize() from clearing content)
-    if (paths.initJsExists()) {
+    if (paths.initTsExists()) {
         var plugin_files = try paths.getPluginFiles(allocator);
         defer {
             for (plugin_files.items) |path| {
@@ -1006,10 +1017,10 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     }.callback;
 
     var watcher: ?*ConfigWatcher = null;
-    if (paths.initJsExists()) {
+    if (paths.initTsExists()) {
         if (ConfigWatcher.init(
             allocator,
-            paths.init_js_path,
+            paths.init_ts_path,
             reloadCallback,
             &reload_state,
         )) |w| {
@@ -1075,7 +1086,9 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         checkJavaScriptStateChanges(&editor, &needs_render);
 
         // Handle input via TerminalBackend
-        running = try backend.handleInput(10, &needs_render);
+        // Use 1ms timeout for responsive input without CPU spinning
+        // 0ms = 100% CPU (causes thermal throttling), 10ms = sluggish, 1ms = perfect balance
+        running = try backend.handleInput(1, &needs_render);
 
         // Render if needed (with throttling to protect against plugin spam)
         if (needs_render) {

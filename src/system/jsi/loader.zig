@@ -62,8 +62,12 @@ pub fn loadPlugin(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
     const source = try file.readToEndAlloc(allocator, 1_000_000);
     defer allocator.free(source);
 
-    // Bytecode path (no .wrapped.js for plugins!)
-    const hbc_path = try std.fmt.allocPrint(allocator, "{s}.hbc", .{filepath});
+    // Bytecode path (strip extension: init.ts → init.hbc)
+    const stem = std.fs.path.stem(filepath);
+    const dir = std.fs.path.dirname(filepath) orelse ".";
+    const filename = try std.fmt.allocPrint(allocator, "{s}.hbc", .{stem});
+    defer allocator.free(filename);
+    const hbc_path = try std.fs.path.join(allocator, &[_][]const u8{ dir, filename });
     defer allocator.free(hbc_path);
 
     // Compile if needed
@@ -116,22 +120,36 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
     , .{ runtime_wrapper, source });
     defer allocator.free(wrapped_source);
 
-    // Write wrapped source to temp file for compilation
-    const temp_js_path = try std.fmt.allocPrint(allocator, "{s}.wrapped.js", .{filepath});
-    defer allocator.free(temp_js_path);
+    // Generate paths (strip extension: init.ts → init.hbc)
+    const stem = std.fs.path.stem(filepath);
+    const dir = std.fs.path.dirname(filepath) orelse ".";
 
-    const temp_js_file = try std.fs.createFileAbsolute(temp_js_path, .{});
-    defer temp_js_file.close();
-    try temp_js_file.writeAll(wrapped_source);
-
-    // Bytecode path
-    const hbc_path = try std.fmt.allocPrint(allocator, "{s}.hbc", .{filepath});
+    // Bytecode path: init.ts → init.hbc
+    const hbc_filename = try std.fmt.allocPrint(allocator, "{s}.hbc", .{stem});
+    defer allocator.free(hbc_filename);
+    const hbc_path = try std.fs.path.join(allocator, &[_][]const u8{ dir, hbc_filename });
     defer allocator.free(hbc_path);
 
-    // Compile if needed (check if wrapped.js is newer than hbc)
-    if (needsRecompilation(temp_js_path, hbc_path)) {
+    // Compile if needed (check if source is newer than hbc)
+    if (needsRecompilation(filepath, hbc_path)) {
         // Compiling to bytecode (silent mode)
+
+        // Temporary wrapped JS path (only created when needed)
+        const wrapped_filename = try std.fmt.allocPrint(allocator, "{s}.wrapped.js", .{stem});
+        defer allocator.free(wrapped_filename);
+        const temp_js_path = try std.fs.path.join(allocator, &[_][]const u8{ dir, wrapped_filename });
+        defer allocator.free(temp_js_path);
+
+        // Write wrapped source temporarily
+        const temp_js_file = try std.fs.createFileAbsolute(temp_js_path, .{});
+        defer temp_js_file.close();
+        try temp_js_file.writeAll(wrapped_source);
+
+        // Compile wrapped.js → .hbc
         try compileJsToBytecode(temp_js_path, hbc_path);
+
+        // Delete wrapped.js immediately after compilation (no one needs it)
+        std.fs.deleteFileAbsolute(temp_js_path) catch {};
     }
 
     // Load bytecode
