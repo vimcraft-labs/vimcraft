@@ -1,6 +1,108 @@
 // Vimcraft TypeScript Type Definitions
 // Auto-generated types for Vimcraft editor configuration
 
+// ============================================
+// User Command Types (Neovim-compatible with TypeScript enhancements)
+// ============================================
+
+/**
+ * Base command arguments (always present in callback)
+ */
+interface CommandArgsBase {
+  /** The command name that was invoked */
+  name: string;
+  /** Raw arguments string (everything after command name) */
+  args: string;
+  /** Arguments split by whitespace */
+  fargs: string[];
+  /** Whether ! was used (e.g., :MyCmd!) */
+  bang: boolean;
+  /** Command modifiers string (e.g., "silent", "vertical") */
+  mods: string;
+}
+
+/**
+ * Range information (present when range/count option specified)
+ */
+interface CommandRangeArgs {
+  /** Start line of range (1-indexed) */
+  line1: number;
+  /** End line of range (1-indexed) */
+  line2: number;
+  /** Range type: 0=none, 1=one line, 2=two lines */
+  range: 0 | 1 | 2;
+}
+
+/**
+ * Count information (present when count option specified)
+ */
+interface CommandCountArgs {
+  /** Count value (e.g., 5 in :5MyCmd) */
+  count: number;
+}
+
+/**
+ * Register information (present when register: true)
+ */
+interface CommandRegisterArgs {
+  /** Register name (e.g., "a" for "a register) */
+  reg: string;
+}
+
+/**
+ * Command options - controls command behavior and callback argument types
+ */
+interface UserCommandOpts {
+  /** Command description (shown in :command output) */
+  desc?: string;
+  /** Allow bang modifier (:MyCmd!) */
+  bang?: boolean;
+  /** Allow bar separator (:MyCmd | other) */
+  bar?: boolean;
+  /** Force overwrite existing command */
+  force?: boolean;
+  /**
+   * Range specification:
+   * - true or '%': Defaults to whole file
+   * - number: Default count value
+   */
+  range?: boolean | '%' | number;
+  /**
+   * Count specification:
+   * - number: Default count value
+   */
+  count?: number;
+  /** Accept register argument */
+  register?: boolean;
+  /**
+   * Number of arguments:
+   * - '0': No arguments
+   * - '1': Exactly one argument
+   * - '*': Any number (0+)
+   * - '?': Zero or one
+   * - '+': One or more
+   */
+  nargs?: '0' | '1' | '*' | '?' | '+';
+  /**
+   * Completion function or built-in type
+   */
+  complete?: string | ((argLead: string, cmdLine: string, cursorPos: number) => string[]);
+}
+
+/**
+ * Infer callback argument type from options
+ * TypeScript magic: adds range/count/register args only when options specify them
+ */
+type InferCommandArgs<Opts extends UserCommandOpts> = CommandArgsBase
+  & (Opts extends { range: any } ? CommandRangeArgs : {})
+  & (Opts extends { count: number } ? CommandCountArgs : {})
+  & (Opts extends { register: true } ? CommandRegisterArgs : {});
+
+/**
+ * Full command arguments (when all options enabled)
+ */
+type CommandArgs = CommandArgsBase & CommandRangeArgs & CommandCountArgs & CommandRegisterArgs;
+
 declare global {
   /**
    * Vim API namespace - Neovim-compatible API for editor configuration
@@ -258,6 +360,136 @@ declare global {
         name: string;
         duration_ms: number;
       }>;
+    };
+
+    /**
+     * Neovim-compatible API functions
+     */
+    api: {
+      // ============================================
+      // User Commands
+      // ============================================
+
+      /**
+       * Create a user command with type-safe callback arguments
+       *
+       * @example
+       * // Basic command - callback gets CommandArgsBase
+       * vim.api.createUserCommand('Greet', (args) => {
+       *   console.log(`Hello from ${args.name}, args: ${args.args}`);
+       * });
+       *
+       * @example
+       * // With range - callback gets CommandArgsBase & CommandRangeArgs
+       * vim.api.createUserCommand('Format', (args) => {
+       *   // TypeScript knows args.line1 and args.line2 exist!
+       *   formatLines(args.line1, args.line2);
+       * }, { range: '%' });
+       *
+       * @example
+       * // With register - callback gets CommandArgsBase & CommandRegisterArgs
+       * vim.api.createUserCommand('Yank', (args) => {
+       *   // TypeScript knows args.reg exists!
+       *   yankToRegister(args.reg);
+       * }, { register: true });
+       */
+      createUserCommand<Opts extends UserCommandOpts>(
+        name: string,
+        callback: (args: InferCommandArgs<Opts>) => void,
+        opts?: Opts
+      ): void;
+
+      /**
+       * Delete a user command
+       * @param name - Command name to delete
+       */
+      delUserCommand(name: string): void;
+
+      /**
+       * Create a buffer-local user command
+       * @param buffer - Buffer number (0 for current buffer)
+       * @param name - Command name (must start with uppercase)
+       * @param callback - Command callback
+       * @param opts - Command options
+       */
+      bufCreateUserCommand<Opts extends UserCommandOpts>(
+        buffer: number,
+        name: string,
+        callback: (args: InferCommandArgs<Opts>) => void,
+        opts?: Opts
+      ): void;
+
+      /**
+       * Delete a buffer-local user command
+       * @param buffer - Buffer number (0 for current buffer)
+       * @param name - Command name to delete
+       */
+      bufDelUserCommand(buffer: number, name: string): void;
+
+      /**
+       * Get list of user commands
+       * @param opts - Filter options
+       * @returns Array of command info objects
+       */
+      getUserCommands(opts?: { builtin?: boolean }): Array<{
+        name: string;
+        definition: string;
+        nargs: string;
+        range: string;
+        complete: string;
+        bang: boolean;
+        bar: boolean;
+        register: boolean;
+        buffer: number;
+      }>;
+
+      // ============================================
+      // Autocommands (existing)
+      // ============================================
+
+      /**
+       * Create an autocommand
+       * @param event - Event name or array of event names
+       * @param opts - Autocommand options
+       * @returns Autocommand ID
+       */
+      createAutocmd(
+        event: string | string[],
+        opts: {
+          pattern?: string | string[];
+          callback?: () => void;
+          command?: string;
+          group?: string;
+          once?: boolean;
+          nested?: boolean;
+          desc?: string;
+        }
+      ): number;
+
+      /**
+       * Delete an autocommand by ID
+       * @param id - Autocommand ID from createAutocmd
+       */
+      delAutocmd(id: number): void;
+
+      /**
+       * Create an autocommand group
+       * @param name - Group name
+       * @param opts - Group options
+       * @returns Group name
+       */
+      createAugroup(name: string, opts?: { clear?: boolean }): string;
+
+      /**
+       * Clear autocommands matching criteria
+       * @param opts - Filter options
+       */
+      clearAutocmds(opts: {
+        event?: string | string[];
+        group?: string;
+        pattern?: string | string[];
+        buffer?: number;
+      }): void;
     };
   };
 

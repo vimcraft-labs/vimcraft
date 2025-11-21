@@ -19,6 +19,7 @@ const KeymapManager = @import("keymap/keymap.zig").KeymapManager;
 const Loader = @import("treesitter/loader.zig").Loader;
 const EventEmitter = @import("../system/jsi/event_emitter.zig").EventEmitter;
 const AutocmdManager = @import("../system/jsi/autocmd_api.zig").AutocmdManager;
+const UserCommandContext = @import("../system/jsi/usercommand_api.zig").UserCommandContext;
 const HighlightRegistry = @import("../system/jsi/highlight_api.zig").HighlightRegistry;
 const Syntax = @import("treesitter/syntax.zig").Syntax;
 const Parser = @import("treesitter/parser.zig").Parser;
@@ -182,6 +183,10 @@ pub const Editor = struct {
     // Autocmd manager for Neovim-compatible autocommands (vim.api.createAutocmd)
     // Null until JSI runtime is available (terminal backend sets this during JSI setup)
     autocmd_manager: ?*AutocmdManager = null,
+
+    // User command context for Neovim-compatible user commands (vim.api.createUserCommand)
+    // Null until JSI runtime is available (terminal backend sets this during JSI setup)
+    usercommand_ctx: ?*UserCommandContext = null,
 
     // JavaScript state change flag (for plugins that modify state via timers/callbacks)
     // Set this to true when JavaScript APIs modify editor state to trigger re-render

@@ -29,6 +29,7 @@ pub const highlight_api = @import("highlight_api.zig");
 pub const module_api = @import("module_api.zig");
 pub const metrics_api = @import("metrics_api.zig");
 pub const autocmd_api = @import("autocmd_api.zig");
+pub const usercommand_api = @import("usercommand_api.zig");
 pub const loader = @import("loader.zig");
 
 // Import new transpiler system
@@ -48,6 +49,7 @@ pub var global_keymap_ctx: ?*keymap_api.KeymapContext = null;
 pub var global_highlight_ctx: ?*highlight_api.HighlightContext = null;
 pub var global_event_emitter: ?*EventEmitter = null;
 pub var global_autocmd_manager: ?*autocmd_api.AutocmdManager = null;
+pub var global_usercommand_ctx: ?*usercommand_api.UserCommandContext = null;
 pub var global_allocator: ?std.mem.Allocator = null;
 
 /// Global transpiler cache state (initialized in main.zig)
@@ -199,6 +201,14 @@ pub fn initJSI(
 
         // Store in Editor for use by native code (firing autocmds on BufEnter, etc.)
         editor_or_context.autocmd_manager = autocmd_mgr;
+
+        // Register user command API (vim.api.createUserCommand, vim.api.delUserCommand, etc.)
+        const usercommand_ctx = usercommand_api.UserCommandContext.init(allocator, runtime) catch @panic("Failed to allocate UserCommandContext");
+        global_usercommand_ctx = usercommand_ctx;
+        usercommand_api.register(runtime, usercommand_ctx);
+
+        // Store in Editor for use by native code (executing user commands)
+        editor_or_context.usercommand_ctx = usercommand_ctx;
     }
 
     // Register highlight API (vim.api.setHighlight, vim.api.getHighlight)
@@ -273,6 +283,10 @@ pub fn deinitJSI() void {
             alloc.destroy(mgr);
         }
         global_autocmd_manager = null;
+    }
+    if (global_usercommand_ctx) |ctx| {
+        ctx.deinit(); // Clean up all user commands
+        global_usercommand_ctx = null;
     }
     // Clean up filetype context (no deinit needed, just free the struct)
     filetype_api.deinit();

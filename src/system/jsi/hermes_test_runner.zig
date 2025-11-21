@@ -80,6 +80,8 @@ pub const TestRunner = struct {
             \\    var autocmdId = 0;   // Stateful counter for autocmd IDs
             \\    var timerId = 0;     // Stateful counter for timer IDs
             \\    var keymapId = 0;    // Stateful counter for keymap tracking
+            \\    var userCommands = {};     // Global user commands storage
+            \\    var bufferCommands = {};   // Buffer-local user commands storage
             \\
             \\    // Mock options storage
             \\    var options = {
@@ -112,13 +114,70 @@ pub const TestRunner = struct {
             \\            fail: vimTestFail
             \\        },
             \\        api: {
+            \\            // Autocmd APIs
             \\            createAutocmd: function(event, opts) {
             \\                autocmdId++;
             \\                return autocmdId;
             \\            },
             \\            delAutocmd: function(id) {},
             \\            createAugroup: function(name, opts) { return name; },
-            \\            clearAutocmds: function(opts) {}
+            \\            clearAutocmds: function(opts) {},
+            \\
+            \\            // User Command APIs
+            \\            createUserCommand: function(name, callback, opts) {
+            \\                if (!name || typeof name !== 'string') {
+            \\                    throw new Error('Command name must be a string');
+            \\                }
+            \\                if (name[0] !== name[0].toUpperCase()) {
+            \\                    throw new Error('Command name must start with uppercase');
+            \\                }
+            \\                userCommands[name] = { callback: callback, opts: opts || {} };
+            \\            },
+            \\            delUserCommand: function(name) {
+            \\                delete userCommands[name];
+            \\            },
+            \\            bufCreateUserCommand: function(buffer, name, callback, opts) {
+            \\                if (!bufferCommands[buffer]) bufferCommands[buffer] = {};
+            \\                bufferCommands[buffer][name] = { callback: callback, opts: opts || {} };
+            \\            },
+            \\            bufDelUserCommand: function(buffer, name) {
+            \\                if (bufferCommands[buffer]) delete bufferCommands[buffer][name];
+            \\            },
+            \\            getUserCommands: function(opts) {
+            \\                var result = [];
+            \\                for (var name in userCommands) {
+            \\                    var cmd = userCommands[name];
+            \\                    result.push({
+            \\                        name: name,
+            \\                        definition: '[function]',
+            \\                        nargs: cmd.opts.nargs || '0',
+            \\                        range: cmd.opts.range ? '%' : '',
+            \\                        complete: '',
+            \\                        bang: !!cmd.opts.bang,
+            \\                        bar: !!cmd.opts.bar,
+            \\                        register: !!cmd.opts.register,
+            \\                        buffer: 0
+            \\                    });
+            \\                }
+            \\                // Add buffer-local commands
+            \\                for (var bufId in bufferCommands) {
+            \\                    for (var cmdName in bufferCommands[bufId]) {
+            \\                        var bufCmd = bufferCommands[bufId][cmdName];
+            \\                        result.push({
+            \\                            name: cmdName,
+            \\                            definition: '[function]',
+            \\                            nargs: bufCmd.opts.nargs || '0',
+            \\                            range: bufCmd.opts.range ? '%' : '',
+            \\                            complete: '',
+            \\                            bang: !!bufCmd.opts.bang,
+            \\                            bar: !!bufCmd.opts.bar,
+            \\                            register: !!bufCmd.opts.register,
+            \\                            buffer: parseInt(bufId)
+            \\                        });
+            \\                    }
+            \\                }
+            \\                return result;
+            \\            }
             \\        },
             \\        motion: {
             \\            left: function(count) {},
