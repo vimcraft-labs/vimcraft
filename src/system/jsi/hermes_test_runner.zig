@@ -75,9 +75,34 @@ pub const TestRunner = struct {
         // Note: Use globalThis to ensure the object is globally accessible
         const bootstrap_js =
             \\// Bootstrap vim global object for test environment
-            \\// Note: This is a mock implementation for testing
+            \\// Note: This is a mock implementation for testing API contracts
             \\(function() {
-            \\    var autocmdId = 0;  // Stateful counter for incrementing IDs
+            \\    var autocmdId = 0;   // Stateful counter for autocmd IDs
+            \\    var timerId = 0;     // Stateful counter for timer IDs
+            \\    var keymapId = 0;    // Stateful counter for keymap tracking
+            \\
+            \\    // Mock options storage
+            \\    var options = {
+            \\        number: false,
+            \\        relativenumber: false,
+            \\        cursorline: true,
+            \\        tabstop: 4,
+            \\        shiftwidth: 4,
+            \\        expandtab: true,
+            \\        wrap: true,
+            \\        scrolloff: 0,
+            \\        signcolumn: 'auto'
+            \\    };
+            \\
+            \\    // Mock buffer state
+            \\    var bufferContent = 'Hello, World!\nLine 2\nLine 3\n';
+            \\    var bufferVersion = 1;
+            \\
+            \\    // Create option proxy handler
+            \\    var optHandler = {
+            \\        get: function(target, prop) { return options[prop]; },
+            \\        set: function(target, prop, value) { options[prop] = value; return true; }
+            \\    };
             \\
             \\    globalThis.vim = {
             \\        test: {
@@ -111,9 +136,43 @@ pub const TestRunner = struct {
             \\            pageDown: function() {}
             \\        },
             \\        cursor: {
-            \\            getPosition: function() { return { line: 0, col: 0 }; }
+            \\            getPosition: function() { return { row: 0, col: 0 }; }
+            \\        },
+            \\        buffer: {
+            \\            getContent: function() {
+            \\                var encoder = new TextEncoder();
+            \\                return encoder.encode(bufferContent).buffer;
+            \\            },
+            \\            getLineContent: function(line) {
+            \\                var lines = bufferContent.split('\n');
+            \\                var content = lines[line] || '';
+            \\                var encoder = new TextEncoder();
+            \\                return encoder.encode(content).buffer;
+            \\            },
+            \\            getLength: function() { return bufferContent.length; },
+            \\            getLineCount: function() { return bufferContent.split('\n').length; },
+            \\            getChangedTick: function() { return bufferVersion; }
+            \\        },
+            \\        opt: new Proxy({}, optHandler),
+            \\        optLocal: new Proxy({}, optHandler),
+            \\        optGlobal: new Proxy({}, optHandler),
+            \\        keymap: {
+            \\            set: function(mode, lhs, rhs, opts) { keymapId++; },
+            \\            del: function(mode, lhs) {}
             \\        }
             \\    };
+            \\
+            \\    // Timer APIs (global)
+            \\    globalThis.setTimeout = function(callback, delay) {
+            \\        timerId++;
+            \\        return timerId;
+            \\    };
+            \\    globalThis.clearTimeout = function(id) {};
+            \\    globalThis.setInterval = function(callback, delay) {
+            \\        timerId++;
+            \\        return timerId;
+            \\    };
+            \\    globalThis.clearInterval = function(id) {};
             \\})();
         ;
 
