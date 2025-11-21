@@ -563,24 +563,25 @@ test "paste: single line after cursor" {
 
     try buffer.loadFile(tmp_path);
 
-    // Set cursor to position 5 ('o' in "Hello")
+    // Set cursor to position 5 (the space between "Hello" and "World")
+    // H=0, e=1, l=2, l=3, o=4, space=5, W=6...
     buffer.moveCursorTo(0, 5);
 
     // Put "XXX" in register
     const text = [_][]const u8{"XXX"};
     try register_mgr.setRegister('"', &text, .char_wise);
 
-    // Paste after cursor (should insert after 'o')
+    // Paste after cursor (inserts after the space at position 5)
     _ = try pasteAfter(&buffer, &register_mgr, '"');
 
-    // Check result: "Hello XXXWorld\n"
+    // Check result: "Hello XXXWorld\n" - XXX inserted after space, before 'W'
     const line = buffer.getLine(0).?;
     defer allocator.free(line); // getLine() returns owned memory
-    try std.testing.expectEqualStrings("HelloXXX World\n", line);
+    try std.testing.expectEqualStrings("Hello XXXWorld\n", line);
 
-    // Check cursor position (should be on last 'X')
+    // Check cursor position (should be on last 'X' at position 8)
     try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
-    try std.testing.expectEqual(@as(usize, 8), buffer.cursor.col); // Position of last X
+    try std.testing.expectEqual(@as(usize, 8), buffer.cursor.col);
 }
 
 test "paste: single line before cursor" {
@@ -641,25 +642,28 @@ test "paste: multi-line character-wise after cursor" {
 
     try buffer.loadFile(tmp_path);
 
-    // Set cursor to position 4 ('e' in "Line")
+    // Set cursor to position 4 (the space between "Line" and "1")
+    // L=0, i=1, n=2, e=3, space=4, 1=5
     buffer.moveCursorTo(0, 4);
 
     // Put multi-line text in register
     const text = [_][]const u8{ "AAA", "BBB" };
     try register_mgr.setRegister('"', &text, .char_wise);
 
-    // Paste after cursor
+    // Paste after cursor (inserts after space)
     _ = try pasteAfter(&buffer, &register_mgr, '"');
 
-    // Check result: "Line AAA\nBBB 1\n"
-    // Line 0: "Line AAA\n"
-    // Line 1: "BBB 1\n"
+    // Check result: "Line AAA\nBBB1\n"
+    // Multi-line char-wise paste: first line appends after cursor, last line
+    // joins with remainder of original line (no space added)
+    // Line 0: "Line AAA\n" (original "Line " + "AAA\n")
+    // Line 1: "BBB1\n" ("BBB" + remaining "1\n")
     const line0 = buffer.getLine(0).?;
     defer allocator.free(line0); // getLine() returns owned memory
     const line1 = buffer.getLine(1).?;
     defer allocator.free(line1); // getLine() returns owned memory
     try std.testing.expectEqualStrings("Line AAA\n", line0);
-    try std.testing.expectEqualStrings("BBB 1\n", line1);
+    try std.testing.expectEqualStrings("BBB1\n", line1);
 
     // Check cursor position (should be on last char of last pasted line)
     try std.testing.expectEqual(@as(usize, 1), buffer.cursor.row);
@@ -813,20 +817,23 @@ test "paste: block-wise with padding (short lines)" {
 
     try buffer.loadFile(tmp_path);
 
-    // Set cursor to column 5 (beyond line end)
+    // Set cursor to column 5 (beyond line end - gets clamped by moveCursorTo)
+    // Line "ab\n" has length 2, so cursor gets clamped to col 2 (end of line)
     buffer.moveCursorTo(0, 5);
 
     // Put block text in register
     const block_text = [_][]const u8{ "XXX", "YYY", "ZZZ" };
     try register_mgr.setRegister('"', &block_text, .block_wise);
 
-    // Paste block after cursor (should pad with spaces)
+    // Paste block after cursor
+    // cursor.col is clamped to 2, so start_col = 3 (paste AFTER cursor)
+    // padding = 3 - 2 = 1 space
     _ = try pasteAfter(&buffer, &register_mgr, '"');
 
-    // Check result - lines should be padded to column 6, then block inserted
-    // Line 0: "ab    XXX\n" (4 spaces padding to get to col 6)
-    // Line 1: "cd    YYY\n"
-    // Line 2: "ef    ZZZ\n"
+    // Check result - cursor was clamped, so only 1 space of padding
+    // Line 0: "ab XXX\n" (1 space padding)
+    // Line 1: "cd YYY\n"
+    // Line 2: "ef ZZZ\n"
     const line0 = buffer.getLine(0).?;
     defer allocator.free(line0); // getLine() returns owned memory
     const line1 = buffer.getLine(1).?;
@@ -834,7 +841,7 @@ test "paste: block-wise with padding (short lines)" {
     const line2 = buffer.getLine(2).?;
     defer allocator.free(line2); // getLine() returns owned memory
 
-    try std.testing.expectEqualStrings("ab    XXX\n", line0);
-    try std.testing.expectEqualStrings("cd    YYY\n", line1);
-    try std.testing.expectEqualStrings("ef    ZZZ\n", line2);
+    try std.testing.expectEqualStrings("ab XXX\n", line0);
+    try std.testing.expectEqualStrings("cd YYY\n", line1);
+    try std.testing.expectEqualStrings("ef ZZZ\n", line2);
 }

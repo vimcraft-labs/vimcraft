@@ -371,6 +371,33 @@ pub fn main() !void {
             const cmd_run = @import("cli/run.zig");
             try cmd_run.execute(allocator, parsed.file_path.?, parsed.debug, parsed.no_cache);
             return;
+        } else if (std.mem.eql(u8, cmd, "install") or std.mem.eql(u8, cmd, "i")) {
+            // vimc install / vimc i - Install plugins from Git URL or local path
+            const cmd_install = @import("cli/install.zig");
+            const source = parsed.file_path orelse "";
+            cmd_install.execute(allocator, source, parsed.force) catch |err| {
+                if (err != error.NoSource and err != error.AlreadyExists and err != error.NotImplemented) {
+                    std.debug.print("Install failed: {}\n", .{err});
+                }
+            };
+            return;
+        } else if (std.mem.eql(u8, cmd, "list") or std.mem.eql(u8, cmd, "ls")) {
+            // vimc list / vimc ls - List installed plugins
+            const cmd_list = @import("cli/list.zig");
+            cmd_list.execute(allocator) catch |err| {
+                std.debug.print("List failed: {}\n", .{err});
+            };
+            return;
+        } else if (std.mem.eql(u8, cmd, "remove") or std.mem.eql(u8, cmd, "rm")) {
+            // vimc remove / vimc rm - Remove installed plugins
+            const cmd_remove = @import("cli/remove.zig");
+            const plugin_name = parsed.file_path orelse "";
+            cmd_remove.execute(allocator, plugin_name) catch |err| {
+                if (err != error.NoPluginName and err != error.PluginNotFound) {
+                    std.debug.print("Remove failed: {}\n", .{err});
+                }
+            };
+            return;
         } else if (std.mem.eql(u8, cmd, "--debug-protocol")) {
             return try runDebugProtocol(allocator);
         } else if (std.mem.eql(u8, cmd, "--test")) {
