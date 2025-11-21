@@ -21,20 +21,24 @@ if [ "$OS" = "Darwin" ]; then
         # macOS ARM64
         go build -buildmode=c-shared -o libesbuild_darwin_arm64.dylib esbuild_c.go
         echo "Built: libesbuild_darwin_arm64.dylib"
+        # Fix install_name for @rpath resolution
+        install_name_tool -id "@rpath/libesbuild_darwin_arm64.dylib" libesbuild_darwin_arm64.dylib
     else
         # macOS x86_64
-        go build -buildmode=c-shared -o libesbuild_darwin_x64.dylib esbuild_c.go
-        echo "Built: libesbuild_darwin_x64.dylib"
+        go build -buildmode=c-shared -o libesbuild_darwin_x86_64.dylib esbuild_c.go
+        echo "Built: libesbuild_darwin_x86_64.dylib"
+        # Fix install_name for @rpath resolution
+        install_name_tool -id "@rpath/libesbuild_darwin_x86_64.dylib" libesbuild_darwin_x86_64.dylib
     fi
 elif [ "$OS" = "Linux" ]; then
     if [ "$ARCH" = "aarch64" ]; then
-        # Linux ARM64
-        go build -buildmode=c-shared -o libesbuild_linux_arm64.so esbuild_c.go
-        echo "Built: libesbuild_linux_arm64.so"
+        # Linux ARM64 (aarch64)
+        go build -buildmode=c-shared -o libesbuild_linux_aarch64.so esbuild_c.go
+        echo "Built: libesbuild_linux_aarch64.so"
     else
         # Linux x86_64
-        go build -buildmode=c-shared -o libesbuild_linux_x64.so esbuild_c.go
-        echo "Built: libesbuild_linux_x64.so"
+        go build -buildmode=c-shared -o libesbuild_linux_x86_64.so esbuild_c.go
+        echo "Built: libesbuild_linux_x86_64.so"
     fi
 fi
 

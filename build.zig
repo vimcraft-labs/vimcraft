@@ -1060,10 +1060,16 @@ pub fn build(b: *std.Build) void {
 
     // ============================================================================
     // Performance Measurement Tool (PTY-based)
-    // NOTE: Only built for native targets (PTY requires <util.h> not available during cross-compilation)
+    // NOTE: Disabled by default in CI (requires libc headers not always available)
+    // Use -Denable-pty-tools=true to enable locally
     // ============================================================================
-    const is_native = target.query.isNative();
-    if (is_native) {
+    const enable_pty_tools = b.option(
+        bool,
+        "enable-pty-tools",
+        "Build PTY-based development tools (perf_test, cursor_monitor). Requires libc headers.",
+    ) orelse false; // Disabled by default
+
+    if (enable_pty_tools) {
         const perf_test = b.addExecutable(.{
             .name = "perf_test",
             .root_module = b.createModule(.{
@@ -1090,9 +1096,10 @@ pub fn build(b: *std.Build) void {
 
     // ============================================================================
     // Cursor Escape Code Monitor (Debug cursor flickering)
-    // NOTE: Only built for native targets (PTY requires <util.h> not available during cross-compilation)
+    // NOTE: Disabled by default in CI (requires libc headers not always available)
+    // Use -Denable-pty-tools=true to enable locally
     // ============================================================================
-    if (is_native) {
+    if (enable_pty_tools) {
         const cursor_monitor = b.addExecutable(.{
             .name = "cursor_monitor",
             .root_module = b.createModule(.{

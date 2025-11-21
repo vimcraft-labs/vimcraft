@@ -227,6 +227,49 @@ jobs:
             ls -lh "$ENRY_LIB"
           fi
 
+      - name: Cache esbuild build
+        id: cache-esbuild
+        uses: actions/cache@v4
+        with:
+          path: vendor/esbuild-wrapper/libesbuild_*
+          key: esbuild-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/esbuild-wrapper/*.go') }}
+          restore-keys: |
+            esbuild-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build esbuild wrapper
+        run: |
+          # Detect expected library name
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            if [ "${{ matrix.arch }}" == "arm64" ]; then
+              ESBUILD_LIB="vendor/esbuild-wrapper/libesbuild_linux_aarch64.so"
+            else
+              ESBUILD_LIB="vendor/esbuild-wrapper/libesbuild_linux_x86_64.so"
+            fi
+          else
+            if [ "${{ matrix.arch }}" == "arm64" ]; then
+              ESBUILD_LIB="vendor/esbuild-wrapper/libesbuild_darwin_arm64.dylib"
+            else
+              ESBUILD_LIB="vendor/esbuild-wrapper/libesbuild_darwin_x86_64.dylib"
+            fi
+          fi
+
+          # Check if already built
+          ESBUILD_BUILT=false
+          [ -f "$ESBUILD_LIB" ] && ESBUILD_BUILT=true
+
+          if [ "$ESBUILD_BUILT" = false ]; then
+            echo "Building esbuild wrapper..."
+            cd vendor/esbuild-wrapper
+            ./build.sh
+            cd ../..
+            echo "✓ esbuild wrapper built successfully"
+          else
+            echo "✓ esbuild wrapper found in cache"
+          fi
+
+          # Verify shared library exists
+          ls -lh "$ESBUILD_LIB"
+
       - name: Build Vimcraft
         run: |
           # Show versions
@@ -292,16 +335,28 @@ jobs:
           # Copy binary to bin/
           cp zig-out/bin/vimc vimcraft-package/bin/
 
-          # Bundle Hermes shared libraries to lib/ (required at runtime)
+          # Bundle shared libraries to lib/ (required at runtime)
           if [ "$RUNNER_OS" == "Linux" ]; then
             cp vendor/hermes/build/API/hermes/libhermes_lean.so vimcraft-package/lib/
             cp vendor/hermes/build/jsi/libjsi.so vimcraft-package/lib/
             cp vendor/go-enry/.shared/linux/libenry.so vimcraft-package/lib/
+            # esbuild library (architecture-specific)
+            if [ "${{ matrix.arch }}" == "arm64" ]; then
+              cp vendor/esbuild-wrapper/libesbuild_linux_aarch64.so vimcraft-package/lib/
+            else
+              cp vendor/esbuild-wrapper/libesbuild_linux_x86_64.so vimcraft-package/lib/
+            fi
           else
             # macOS: Copy .dylib files
             cp vendor/hermes/build/API/hermes/libhermes_lean.dylib vimcraft-package/lib/ || echo "Warning: libhermes_lean.dylib not found"
             cp vendor/hermes/build/jsi/libjsi.dylib vimcraft-package/lib/ || echo "Warning: libjsi.dylib not found"
             cp vendor/go-enry/.shared/darwin/libenry.dylib vimcraft-package/lib/ || echo "Warning: libenry.dylib not found"
+            # esbuild library (architecture-specific)
+            if [ "${{ matrix.arch }}" == "arm64" ]; then
+              cp vendor/esbuild-wrapper/libesbuild_darwin_arm64.dylib vimcraft-package/lib/ || echo "Warning: libesbuild_darwin_arm64.dylib not found"
+            else
+              cp vendor/esbuild-wrapper/libesbuild_darwin_x86_64.dylib vimcraft-package/lib/ || echo "Warning: libesbuild_darwin_x86_64.dylib not found"
+            fi
           fi
 
           # Create tarball (with bin/ and lib/ directories)

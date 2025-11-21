@@ -16,7 +16,7 @@ pnpm add --save-dev @vimcraft/types
 
 ### JavaScript with JSDoc
 
-Add type checking to your `init.js`:
+Add type checking to your `index.js`:
 
 ```javascript
 // @ts-check
@@ -33,7 +33,7 @@ setInterval(() => {
 
 ### TypeScript
 
-Create `init.ts`:
+Create `index.ts`:
 
 ```typescript
 /// <reference types="@vimcraft/types" />
@@ -51,7 +51,7 @@ vim.opt.cursorline = true;
 Then compile to JavaScript:
 
 ```bash
-npx tsc init.ts --outDir ~/.config/vimcraft
+npx tsc index.ts --outDir ~/.config/vimcraft
 ```
 
 ### Available APIs
