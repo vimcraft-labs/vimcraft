@@ -150,7 +150,7 @@ fn updateBaseLayer(
         if (editor.syntax) |*syntax| {
             // SAFETY: Syntax and HighlightRegistry outlive this function
             syntax_highlighter = SyntaxHighlighter.init(
-                std.heap.page_allocator, // TODO: Pass allocator from Display
+                self.allocator, // Use Display's allocator (not page_allocator)
                 @constCast(syntax),
                 &editor.highlight_registry,
             );
@@ -498,7 +498,7 @@ fn renderWithSyntaxHighlight(
 
     // Build highlight map (byte offset → Style)
     // We use a simple array since we're only rendering one line at a time
-    var highlight_map = std.AutoHashMap(usize, Style).init(std.heap.page_allocator);
+    var highlight_map = std.AutoHashMap(usize, Style).init(self.allocator);
     defer highlight_map.deinit();
 
     while (iter.next()) |styled| {

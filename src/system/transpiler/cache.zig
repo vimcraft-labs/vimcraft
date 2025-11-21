@@ -1,7 +1,7 @@
 /// TypeScript Module Cache Management
 /// Provides unified caching for all TypeScript modules (single files + multi-file plugins)
 const std = @import("std");
-const esbuild = @import("esbuild.zig");
+// Note: esbuild import removed - cache module should be standalone
 
 /// Cache error set
 pub const CacheError = error{

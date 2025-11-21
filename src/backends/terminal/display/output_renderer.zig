@@ -30,10 +30,12 @@ pub const AnsiResult = struct {
 
 /// Generate ANSI escape sequences for terminal updates (Debug Protocol support)
 /// This is the core rendering logic extracted for both Terminal output and debugging
+/// Set collect_breakdown=true only for debugging - it allocates strings for every operation
 pub fn generateANSI(
     allocator: std.mem.Allocator,
     updates: []const Update,
     grid: *const ScreenGrid,
+    collect_breakdown: bool,
 ) !AnsiResult {
     if (updates.len == 0) {
         return AnsiResult{
@@ -43,24 +45,15 @@ pub fn generateANSI(
         };
     }
 
-    // WEEK 4 OPTIMIZATION: Sort updates by (row, col) to maximize adjacency
-    // This dramatically increases the effectiveness of adjacent cell skipping
-    // Example: Updates at [(0,5), (1,0), (0,6)] become [(0,5), (0,6), (1,0)]
-    //          → 1 cursor move saved (cells at col 5 and 6 are now adjacent in array)
-    const sorted_updates = try allocator.dupe(Update, updates);
-    defer allocator.free(sorted_updates);
-
-    std.mem.sort(Update, sorted_updates, {}, struct {
-        fn lessThan(_: void, a: Update, b: Update) bool {
-            if (a.row != b.row) return a.row < b.row;
-            return a.col < b.col;
-        }
-    }.lessThan);
+    // NOTE: Updates are already sorted by (row, col) from diff() which iterates:
+    // 1. dirty_lines in ascending order (DynamicBitSet iterator)
+    // 2. columns 0..width sequentially within each row
+    // No need to duplicate and sort - this saves 1 allocation + O(n log n) per frame
 
     var buf: std.ArrayList(u8) = .empty;
     var breakdown: std.ArrayList(AnsiCommand) = .empty;
     var opts = Optimizations{
-        .updates_sorted = sorted_updates.len, // Track number of updates sorted
+        .updates_sorted = updates.len, // Track number of updates processed
     };
 
     // Track state to minimize ANSI codes (Helix optimization)
@@ -72,8 +65,8 @@ pub fn generateANSI(
     var last_pos: ?struct { row: usize, col: usize } = null;
     var last_had_combining: bool = false;
 
-    // Process sorted updates (maximizes adjacent cell batching)
-    for (sorted_updates) |update| {
+    // Process updates (already sorted by row, col from diff())
+    for (updates) |update| {
         // Skip continuation cells - terminals handle double-width chars automatically
         if (update.cell.is_continuation) {
             continue;
@@ -89,14 +82,16 @@ pub fn generateANSI(
             // Move cursor to position
             const seq_start = buf.items.len;
             try buf.writer(allocator).print("\x1b[{d};{d}H", .{ update.row + 1, update.col + 1 });
-            const seq = buf.items[seq_start..];
 
-            const desc = try std.fmt.allocPrint(
-                allocator,
-                "Move cursor to row={d}, col={d}",
-                .{ update.row, update.col },
-            );
-            try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, seq), .desc = desc });
+            if (collect_breakdown) {
+                const seq = buf.items[seq_start..];
+                const desc = try std.fmt.allocPrint(
+                    allocator,
+                    "Move cursor to row={d}, col={d}",
+                    .{ update.row, update.col },
+                );
+                try breakdown.append(allocator, .{ .seq = try allocator.dupe(u8, seq), .desc = desc });
+            }
 
             // WEEK 4: Track cursor move count
             opts.cursor_moves_total += 1;
@@ -112,14 +107,16 @@ pub fn generateANSI(
                 const fg_code = try fg.toAnsiFg(&color_buf);
                 const seq_start = buf.items.len;
                 try buf.writer(allocator).writeAll(fg_code);
-                const seq = buf.items[seq_start..];
 
-                const desc = try std.fmt.allocPrint(
-                    allocator,
-                    "Set foreground RGB({d},{d},{d})",
-                    .{ fg.r, fg.g, fg.b },
-                );
-                try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, seq), .desc = desc });
+                if (collect_breakdown) {
+                    const seq = buf.items[seq_start..];
+                    const desc = try std.fmt.allocPrint(
+                        allocator,
+                        "Set foreground RGB({d},{d},{d})",
+                        .{ fg.r, fg.g, fg.b },
+                    );
+                    try breakdown.append(allocator, .{ .seq = try allocator.dupe(u8, seq), .desc = desc });
+                }
                 current_fg = fg;
             } else {
                 opts.attribute_changes_deduped += 1;
@@ -127,8 +124,10 @@ pub fn generateANSI(
         } else if (current_fg != null) {
             const seq_start = buf.items.len;
             try buf.writer(allocator).writeAll("\x1b[39m");
-            const seq = buf.items[seq_start..];
-            try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Reset foreground") });
+            if (collect_breakdown) {
+                const seq = buf.items[seq_start..];
+                try breakdown.append(allocator, .{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Reset foreground") });
+            }
             current_fg = null;
         }
 
@@ -139,14 +138,16 @@ pub fn generateANSI(
                 const bg_code = try bg.toAnsiBg(&color_buf);
                 const seq_start = buf.items.len;
                 try buf.writer(allocator).writeAll(bg_code);
-                const seq = buf.items[seq_start..];
 
-                const desc = try std.fmt.allocPrint(
-                    allocator,
-                    "Set background RGB({d},{d},{d})",
-                    .{ bg.r, bg.g, bg.b },
-                );
-                try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, seq), .desc = desc });
+                if (collect_breakdown) {
+                    const seq = buf.items[seq_start..];
+                    const desc = try std.fmt.allocPrint(
+                        allocator,
+                        "Set background RGB({d},{d},{d})",
+                        .{ bg.r, bg.g, bg.b },
+                    );
+                    try breakdown.append(allocator, .{ .seq = try allocator.dupe(u8, seq), .desc = desc });
+                }
                 current_bg = bg;
             } else {
                 opts.attribute_changes_deduped += 1;
@@ -154,8 +155,10 @@ pub fn generateANSI(
         } else if (current_bg != null) {
             const seq_start = buf.items.len;
             try buf.writer(allocator).writeAll("\x1b[49m");
-            const seq = buf.items[seq_start..];
-            try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Reset background") });
+            if (collect_breakdown) {
+                const seq = buf.items[seq_start..];
+                try breakdown.append(allocator, .{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Reset background") });
+            }
             current_bg = null;
         }
 
@@ -164,12 +167,16 @@ pub fn generateANSI(
             const seq_start = buf.items.len;
             if (update.cell.bold) {
                 try buf.writer(allocator).writeAll("\x1b[1m");
-                const seq = buf.items[seq_start..];
-                try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Enable bold") });
+                if (collect_breakdown) {
+                    const seq = buf.items[seq_start..];
+                    try breakdown.append(allocator, .{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Enable bold") });
+                }
             } else {
                 try buf.writer(allocator).writeAll("\x1b[22m");
-                const seq = buf.items[seq_start..];
-                try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Disable bold") });
+                if (collect_breakdown) {
+                    const seq = buf.items[seq_start..];
+                    try breakdown.append(allocator, .{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Disable bold") });
+                }
             }
             current_bold = update.cell.bold;
         }
@@ -179,12 +186,16 @@ pub fn generateANSI(
             const seq_start = buf.items.len;
             if (update.cell.italic) {
                 try buf.writer(allocator).writeAll("\x1b[3m");
-                const seq = buf.items[seq_start..];
-                try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Enable italic") });
+                if (collect_breakdown) {
+                    const seq = buf.items[seq_start..];
+                    try breakdown.append(allocator, .{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Enable italic") });
+                }
             } else {
                 try buf.writer(allocator).writeAll("\x1b[23m");
-                const seq = buf.items[seq_start..];
-                try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Disable italic") });
+                if (collect_breakdown) {
+                    const seq = buf.items[seq_start..];
+                    try breakdown.append(allocator, .{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Disable italic") });
+                }
             }
             current_italic = update.cell.italic;
         }
@@ -194,12 +205,16 @@ pub fn generateANSI(
             const seq_start = buf.items.len;
             if (update.cell.underline) {
                 try buf.writer(allocator).writeAll("\x1b[4m");
-                const seq = buf.items[seq_start..];
-                try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Enable underline") });
+                if (collect_breakdown) {
+                    const seq = buf.items[seq_start..];
+                    try breakdown.append(allocator, .{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Enable underline") });
+                }
             } else {
                 try buf.writer(allocator).writeAll("\x1b[24m");
-                const seq = buf.items[seq_start..];
-                try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Disable underline") });
+                if (collect_breakdown) {
+                    const seq = buf.items[seq_start..];
+                    try breakdown.append(allocator, .{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Disable underline") });
+                }
             }
             current_underline = update.cell.underline;
         }
@@ -214,14 +229,16 @@ pub fn generateANSI(
         const char_len = std.unicode.utf8Encode(render_char, &char_buf) catch 1;
         const seq_start = buf.items.len;
         try buf.writer(allocator).writeAll(char_buf[0..char_len]);
-        const seq = buf.items[seq_start..];
 
-        const desc = try std.fmt.allocPrint(
-            allocator,
-            "Write char '{u}' (U+{X:0>4}){s}",
-            .{ render_char, render_char, if (update.cell.char == 0) " [was char=0]" else "" },
-        );
-        try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, seq), .desc = desc });
+        if (collect_breakdown) {
+            const seq = buf.items[seq_start..];
+            const desc = try std.fmt.allocPrint(
+                allocator,
+                "Write char '{u}' (U+{X:0>4}){s}",
+                .{ render_char, render_char, if (update.cell.char == 0) " [was char=0]" else "" },
+            );
+            try breakdown.append(allocator, .{ .seq = try allocator.dupe(u8, seq), .desc = desc });
+        }
 
         // Write any combining characters
         for (0..update.cell.combining_count) |i| {
@@ -229,14 +246,16 @@ pub fn generateANSI(
             const combining_len = std.unicode.utf8Encode(combining_char, &char_buf) catch 1;
             const combining_start = buf.items.len;
             try buf.writer(allocator).writeAll(char_buf[0..combining_len]);
-            const combining_seq = buf.items[combining_start..];
 
-            const combining_desc = try std.fmt.allocPrint(
-                allocator,
-                "Write combining char (U+{X:0>4})",
-                .{combining_char},
-            );
-            try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, combining_seq), .desc = combining_desc });
+            if (collect_breakdown) {
+                const combining_seq = buf.items[combining_start..];
+                const combining_desc = try std.fmt.allocPrint(
+                    allocator,
+                    "Write combining char (U+{X:0>4})",
+                    .{combining_char},
+                );
+                try breakdown.append(allocator, .{ .seq = try allocator.dupe(u8, combining_seq), .desc = combining_desc });
+            }
         }
 
         // Track where the terminal cursor is after rendering this character
@@ -253,12 +272,14 @@ pub fn generateANSI(
     // Reset all attributes at end
     const seq_start = buf.items.len;
     try buf.writer(allocator).writeAll("\x1b[0m");
-    const seq = buf.items[seq_start..];
-    try breakdown.append(allocator,.{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Reset all attributes") });
+    if (collect_breakdown) {
+        const seq = buf.items[seq_start..];
+        try breakdown.append(allocator, .{ .seq = try allocator.dupe(u8, seq), .desc = try allocator.dupe(u8, "Reset all attributes") });
+    }
 
     return AnsiResult{
         .ansi_bytes = try buf.toOwnedSlice(allocator),
-        .breakdown = try breakdown.toOwnedSlice(allocator),
+        .breakdown = if (collect_breakdown) try breakdown.toOwnedSlice(allocator) else &[_]AnsiCommand{},
         .optimizations = opts,
     };
 }
@@ -269,16 +290,10 @@ pub fn renderUpdates(self: *Display, updates: []const Update) !void {
     if (updates.len == 0) return;
 
     // Generate ANSI output (reusing core logic)
-    const ansi_result = try generateANSI(self.allocator, updates, &self.grid);
-    defer {
-        self.allocator.free(ansi_result.ansi_bytes);
-        // Free breakdown items
-        for (ansi_result.breakdown) |cmd| {
-            self.allocator.free(cmd.seq);
-            self.allocator.free(cmd.desc);
-        }
-        self.allocator.free(ansi_result.breakdown);
-    }
+    // Pass false for collect_breakdown - production rendering doesn't need debug info
+    const ansi_result = try generateANSI(self.allocator, updates, &self.grid, false);
+    defer self.allocator.free(ansi_result.ansi_bytes);
+    // No breakdown to free when collect_breakdown=false
 
     // NEOVIM + HELIX PATTERN: Single flush (batched output)
     try self.stdout.writeAll(ansi_result.ansi_bytes);

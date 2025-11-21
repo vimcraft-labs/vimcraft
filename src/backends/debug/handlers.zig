@@ -184,11 +184,12 @@ pub fn handleGetTerminalUpdates(ctx: HandlerContext) !protocol.ResponseResult {
         });
     }
 
-    // Generate ANSI output with breakdown
+    // Generate ANSI output with breakdown (debug protocol needs breakdown for inspection)
     const ansi_result = try output_renderer.generateANSI(
         ctx.allocator,
         updates,
         output,
+        true, // collect_breakdown=true for debug protocol
     );
     defer {
         ctx.allocator.free(ansi_result.ansi_bytes);

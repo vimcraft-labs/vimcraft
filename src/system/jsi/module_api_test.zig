@@ -8,7 +8,7 @@ const c_api = @import("c_api.zig");
 const c = c_api.c;
 
 // Test helper: Create temporary test files
-fn createTestFile(allocator: std.mem.Allocator, path: []const u8, content: []const u8) !void {
+fn createTestFile(_: std.mem.Allocator, path: []const u8, content: []const u8) !void {
     const file = try std.fs.cwd().createFile(path, .{});
     defer file.close();
     try file.writeAll(content);
@@ -28,7 +28,7 @@ test "require() blocks path traversal to /etc" {
     const allocator = testing.allocator;
 
     // Setup: Create Hermes runtime
-    var runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
+    const runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
     defer c.hermes_runtime_destroy(runtime);
 
     var ctx = config_api.ConfigContext{
@@ -58,7 +58,7 @@ test "require() blocks path traversal to /etc" {
 test "require() blocks relative path traversal" {
     const allocator = testing.allocator;
 
-    var runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
+    const runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
     defer c.hermes_runtime_destroy(runtime);
 
     var ctx = config_api.ConfigContext{
@@ -101,7 +101,7 @@ test "require() blocks symlink to restricted directory" {
         return err;
     };
 
-    var runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
+    const runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
     defer c.hermes_runtime_destroy(runtime);
 
     var ctx = config_api.ConfigContext{
@@ -134,7 +134,7 @@ test "require() blocks symlink to restricted directory" {
 test "require() rejects empty string" {
     const allocator = testing.allocator;
 
-    var runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
+    const runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
     defer c.hermes_runtime_destroy(runtime);
 
     var ctx = config_api.ConfigContext{
@@ -164,7 +164,7 @@ test "require() rejects empty string" {
 test "require() rejects null byte injection" {
     const allocator = testing.allocator;
 
-    var runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
+    const runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
     defer c.hermes_runtime_destroy(runtime);
 
     var ctx = config_api.ConfigContext{
@@ -194,7 +194,7 @@ test "require() rejects null byte injection" {
 test "require() rejects path exceeding PATH_MAX" {
     const allocator = testing.allocator;
 
-    var runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
+    const runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
     defer c.hermes_runtime_destroy(runtime);
 
     var ctx = config_api.ConfigContext{
@@ -209,7 +209,7 @@ test "require() rejects path exceeding PATH_MAX" {
     defer ctx.module_cache.deinit();
 
     // Create path > 2048 chars
-    var long_path = try allocator.alloc(u8, 2100);
+    const long_path = try allocator.alloc(u8, 2100);
     defer allocator.free(long_path);
     @memset(long_path, 'a');
 
@@ -227,7 +227,7 @@ test "require() rejects path exceeding PATH_MAX" {
 test "require() requires string argument" {
     const allocator = testing.allocator;
 
-    var runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
+    const runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
     defer c.hermes_runtime_destroy(runtime);
 
     var ctx = config_api.ConfigContext{
@@ -265,7 +265,7 @@ test "require() resolves absolute path in whitelist" {
     try createTestFile(allocator, test_file, "module.exports = { test: true };");
     defer cleanupTestFile(test_file);
 
-    var runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
+    const runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
     defer c.hermes_runtime_destroy(runtime);
 
     var ctx = config_api.ConfigContext{
@@ -294,7 +294,7 @@ test "require() resolves absolute path in whitelist" {
 test "require() returns undefined for nonexistent module" {
     const allocator = testing.allocator;
 
-    var runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
+    const runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
     defer c.hermes_runtime_destroy(runtime);
 
     var ctx = config_api.ConfigContext{
@@ -332,7 +332,7 @@ test "require() caches modules by absolute path" {
     try createTestFile(allocator, test_file, "module.exports = { cached: true };");
     defer cleanupTestFile(test_file);
 
-    var runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
+    const runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
     defer c.hermes_runtime_destroy(runtime);
 
     var ctx = config_api.ConfigContext{
@@ -380,7 +380,7 @@ test "require() detects circular dependencies" {
     defer cleanupTestFile(file_a);
     defer cleanupTestFile(file_b);
 
-    var runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
+    const runtime = c.hermes_runtime_create() orelse return error.RuntimeCreationFailed;
     defer c.hermes_runtime_destroy(runtime);
 
     var ctx = config_api.ConfigContext{

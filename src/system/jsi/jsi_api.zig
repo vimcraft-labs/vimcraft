@@ -28,6 +28,7 @@ pub const event_api = @import("event_api.zig");
 pub const highlight_api = @import("highlight_api.zig");
 pub const module_api = @import("module_api.zig");
 pub const metrics_api = @import("metrics_api.zig");
+pub const autocmd_api = @import("autocmd_api.zig");
 pub const loader = @import("loader.zig");
 
 // Import new transpiler system
@@ -46,6 +47,7 @@ pub var global_motion_ctx: ?*motion_api.MotionContext = null;
 pub var global_keymap_ctx: ?*keymap_api.KeymapContext = null;
 pub var global_highlight_ctx: ?*highlight_api.HighlightContext = null;
 pub var global_event_emitter: ?*EventEmitter = null;
+pub var global_autocmd_manager: ?*autocmd_api.AutocmdManager = null;
 pub var global_allocator: ?std.mem.Allocator = null;
 
 /// Global transpiler cache state (initialized in main.zig)
@@ -187,6 +189,16 @@ pub fn initJSI(
 
         // Register vim.on(), vim.off(), vim.emit() JavaScript API
         event_api.register(runtime, emitter);
+
+        // Register autocmd API (vim.api.createAutocmd, vim.api.delAutocmd, etc.)
+        const autocmd_mgr = allocator.create(autocmd_api.AutocmdManager) catch @panic("Failed to allocate AutocmdManager");
+        autocmd_mgr.* = autocmd_api.AutocmdManager.init(allocator, runtime, emitter);
+        global_autocmd_manager = autocmd_mgr;
+        autocmd_api.initAutocmdManager(autocmd_mgr);
+        autocmd_api.register(runtime);
+
+        // Store in Editor for use by native code (firing autocmds on BufEnter, etc.)
+        editor_or_context.autocmd_manager = autocmd_mgr;
     }
 
     // Register highlight API (vim.api.setHighlight, vim.api.getHighlight)
@@ -254,6 +266,13 @@ pub fn deinitJSI() void {
             alloc.destroy(emitter);
         }
         global_event_emitter = null;
+    }
+    if (global_autocmd_manager) |mgr| {
+        mgr.deinit(); // Clean up all autocmds
+        if (global_allocator) |alloc| {
+            alloc.destroy(mgr);
+        }
+        global_autocmd_manager = null;
     }
     // Clean up filetype context (no deinit needed, just free the struct)
     filetype_api.deinit();

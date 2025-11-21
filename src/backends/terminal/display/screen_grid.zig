@@ -12,9 +12,10 @@ pub const Cell = struct {
     underline: bool = false,
     is_continuation: bool = false, // True for the second cell of double-width chars
 
-    // Store up to 2 combining/zero-width characters (e.g., variation selectors)
+    // Store up to 4 combining/zero-width characters (e.g., variation selectors, ZWJ sequences)
     // This allows proper rendering of emoji with variation selectors like 🖥️
-    combining: [2]u21 = [_]u21{0} ** 2,
+    // and complex sequences like family emoji (👨‍👩‍👧‍👦)
+    combining: [4]u21 = [_]u21{0} ** 4,
     combining_count: u8 = 0,
 
     /// Check if two cells are equal (for diffing)
@@ -313,7 +314,7 @@ pub const ScreenGrid = struct {
                         target_col -= 1;
                     }
                     // Add to combining array if there's space
-                    if (self.current[row][target_col].combining_count < 2) {
+                    if (self.current[row][target_col].combining_count < 4) {
                         const idx = self.current[row][target_col].combining_count;
                         self.current[row][target_col].combining[idx] = codepoint;
                         self.current[row][target_col].combining_count += 1;

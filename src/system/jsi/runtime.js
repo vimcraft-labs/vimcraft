@@ -520,6 +520,83 @@ vim.api = {
   //   // Returns: { fg: "#61afef", bold: true }
   getHighlight: function(ns_id, name) {
     return vimApiGetHighlight(ns_id, name);
+  },
+
+  // vim.api.createAutocmd(event, opts)
+  //   event: string | string[] - Event name(s) to trigger on
+  //   opts: object - Configuration options
+  //     - callback: function (required) - Callback function called when event fires
+  //     - pattern: string - File pattern to match (e.g., "*.js", "*.ts")
+  //     - group: string - Autocommand group name
+  //     - once: boolean - Remove autocommand after first execution
+  //     - desc: string - Description for :autocmd listing
+  //   returns: number (autocmd ID for deletion)
+  //
+  // Events:
+  //   BufEnter, BufLeave, BufRead, BufWrite, BufWritePre, BufWritePost,
+  //   FileType, InsertEnter, InsertLeave, ModeChanged, CursorMoved, etc.
+  //
+  // Examples:
+  //   vim.api.createAutocmd('BufEnter', {
+  //       pattern: '*.js',
+  //       callback: (ev) => console.log('Entered JS file:', ev.file),
+  //   });
+  //
+  //   vim.api.createAutocmd(['BufRead', 'BufNewFile'], {
+  //       pattern: ['*.ts', '*.tsx'],
+  //       group: 'typescript',
+  //       callback: (ev) => { /* setup TypeScript */ },
+  //   });
+  createAutocmd: function(event, opts) {
+    if (typeof vimApiCreateAutocmd !== 'undefined') {
+      return vimApiCreateAutocmd(event, opts);
+    }
+    throw new Error('createAutocmd not available (headless mode)');
+  },
+
+  // vim.api.delAutocmd(id)
+  //   id: number - Autocommand ID (returned by createAutocmd)
+  //
+  // Example:
+  //   const id = vim.api.createAutocmd('BufEnter', { callback: () => {} });
+  //   vim.api.delAutocmd(id);
+  delAutocmd: function(id) {
+    if (typeof vimApiDelAutocmd !== 'undefined') {
+      return vimApiDelAutocmd(id);
+    }
+    throw new Error('delAutocmd not available (headless mode)');
+  },
+
+  // vim.api.createAugroup(name, opts)
+  //   name: string - Group name
+  //   opts: object (optional)
+  //     - clear: boolean - Clear all autocmds in group first
+  //   returns: string (group name)
+  //
+  // Example:
+  //   vim.api.createAugroup('my_plugin', { clear: true });
+  //   vim.api.createAutocmd('BufEnter', {
+  //       group: 'my_plugin',
+  //       callback: () => {},
+  //   });
+  createAugroup: function(name, opts) {
+    if (typeof vimApiCreateAugroup !== 'undefined') {
+      return vimApiCreateAugroup(name, opts || {});
+    }
+    throw new Error('createAugroup not available (headless mode)');
+  },
+
+  // vim.api.clearAutocmds(opts)
+  //   opts: object
+  //     - group: string - Clear all autocmds in group
+  //
+  // Example:
+  //   vim.api.clearAutocmds({ group: 'my_plugin' });
+  clearAutocmds: function(opts) {
+    if (typeof vimApiClearAutocmds !== 'undefined') {
+      return vimApiClearAutocmds(opts || {});
+    }
+    throw new Error('clearAutocmds not available (headless mode)');
   }
 };
 

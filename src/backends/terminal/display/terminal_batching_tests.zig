@@ -23,7 +23,7 @@ test "terminal batching: updates sorted correctly" {
     };
 
     // Generate ANSI output (internally sorts updates)
-    const result = try output_renderer.generateANSI(allocator, &unsorted_updates, &grid);
+    const result = try output_renderer.generateANSI(allocator, &unsorted_updates, &grid, true);
     defer {
         allocator.free(result.ansi_bytes);
         for (result.breakdown) |cmd| {
@@ -70,7 +70,7 @@ test "terminal batching: adjacent cells detected" {
         .{ .row = 0, .col = 7, .cell = Cell{ .char = 'C', .fg = null, .bg = null } },
     };
 
-    const result = try output_renderer.generateANSI(allocator, &updates, &grid);
+    const result = try output_renderer.generateANSI(allocator, &updates, &grid, true);
     defer {
         allocator.free(result.ansi_bytes);
         for (result.breakdown) |cmd| {
@@ -100,7 +100,7 @@ test "terminal batching: unsorted increases cursor moves" {
         .{ .row = 5, .col = 11, .cell = Cell{ .char = 'D', .fg = null, .bg = null } },
     };
 
-    const result = try output_renderer.generateANSI(allocator, &scattered_updates, &grid);
+    const result = try output_renderer.generateANSI(allocator, &scattered_updates, &grid, true);
     defer {
         allocator.free(result.ansi_bytes);
         for (result.breakdown) |cmd| {
@@ -146,7 +146,7 @@ test "terminal batching: benchmark sorted vs unsorted" {
         var total_adjacent_skips: usize = 0;
 
         for (0..iterations) |_| {
-            const result = try output_renderer.generateANSI(allocator, updates.items, &grid);
+            const result = try output_renderer.generateANSI(allocator, updates.items, &grid, true);
             defer {
                 allocator.free(result.ansi_bytes);
                 for (result.breakdown) |cmd| {
@@ -191,7 +191,7 @@ test "terminal batching: benchmark sorted vs unsorted" {
         var total_adjacent_skips: usize = 0;
 
         for (0..iterations) |_| {
-            const result = try output_renderer.generateANSI(allocator, updates.items, &grid);
+            const result = try output_renderer.generateANSI(allocator, updates.items, &grid, true);
             defer {
                 allocator.free(result.ansi_bytes);
                 for (result.breakdown) |cmd| {
