@@ -1,14 +1,15 @@
 const std = @import("std");
 const Buffer = @import("../../../editor/buffer/buffer.zig").Buffer;
 const Editor = @import("../../../editor/editor.zig").Editor;
-const debug_log = @import("../../debug/log.zig");
+const EditorContext = @import("../../headless/editor_context.zig").EditorContext;
+const debug_log = @import("../../headless/log.zig");
 const highlights = @import("../../../editor/config/highlights.zig");
 const ScreenGrid = @import("screen_grid.zig").ScreenGrid;
 const Cell = @import("screen_grid.zig").Cell;
 const Update = @import("screen_grid.zig").Update;
-const VisualState = @import("../visual/visual.zig").VisualState;
-const YankHighlight = @import("../visual/yank_highlight.zig").YankHighlight;
-const Position = @import("../visual/visual.zig").Position;
+const VisualState = @import("../../../editor/visual/visual.zig").VisualState;
+const YankHighlight = @import("../../../editor/visual/yank_highlight.zig").YankHighlight;
+const Position = @import("../../../editor/visual/visual.zig").Position;
 const char_width = @import("char_width.zig");
 const gutter = @import("gutter.zig");
 const VirtualTextRenderer = @import("virtual_text.zig").VirtualTextRenderer;
@@ -259,8 +260,11 @@ pub const Display = struct {
     }
 
     /// Clear entire screen
+    /// O1 FIX: Reset cross-frame attribute state after clear (terminal state unknown)
     pub fn clearScreen(self: *Display) !void {
-        return terminal_control.clearScreen(self);
+        try terminal_control.clearScreen(self);
+        // Terminal is now in default state - reset our tracking to match
+        self.resetAttributeState();
     }
 
     /// Move cursor to position (0-indexed)
@@ -495,6 +499,13 @@ pub const Display = struct {
 
                         self.terminal_rows = new_rows;
                         self.terminal_cols = new_cols;
+
+                        // O1 FIX: Reset attribute state after resize
+                        // Terminal state may be unknown after resize event
+                        self.resetAttributeState();
+
+                        // O4: Reset scroll tracking after resize
+                        self.last_viewport_top = 0;
                     }
                 }
                 // If ioctl fails or returns invalid size, keep defaults (24x80)
@@ -518,10 +529,12 @@ pub const Display = struct {
     ) !void {
         // Get buffer from editor (handles both Editor and EditorContext types)
         const T = @TypeOf(editor);
-        const buffer = if (T == *@import("../../../editor/editor.zig").Editor)
+        const buffer = if (T == *Editor)
             editor.getCurrentBuffer() orelse return error.NoCurrentBuffer
+        else if (T == *EditorContext)
+            editor.buffer()
         else
-            &editor.buffer;
+            &editor.buffer; // Duck-typed fallback for MockEditor in benchmarks
 
         // Update terminal size (handles resize and ensures correct dimensions)
         try self.getTerminalSize();
@@ -592,7 +605,14 @@ pub const Display = struct {
 
         // PHASE 2.5: Multi-layer rendering pipeline (ACTIVATED!)
         // STEP 1: Update all layers from buffer state
-        try layer_renderer.updateLayers(self, editor, status, &editor.highlight_registry, visual_state, yank_highlight, cursorline_enabled, list_enabled, listchars);
+        // Get highlight_registry from editor (handles both Editor and EditorContext types)
+        const highlight_registry = if (T == *Editor)
+            &editor.highlight_registry
+        else if (T == *EditorContext)
+            editor.highlight_registry()
+        else
+            &editor.highlight_registry; // Duck-typed fallback for MockEditor in benchmarks
+        try layer_renderer.updateLayers(self, editor, status, highlight_registry, visual_state, yank_highlight, cursorline_enabled, list_enabled, listchars);
 
         // STEP 1.5: Apply virtual text overlay (Neovim-style extmarks)
         // Plugins render arbitrary text via virtual_text_layer
@@ -631,10 +651,21 @@ pub const Display = struct {
         const screen_col = gutter_width + screen_col_text;
         const clamped_col = @min(screen_col, self.terminal_cols - 1);
 
-        // OPTIMIZATION: Only move cursor if position changed (prevent redundant escape codes)
-        // This fixes the cursor flickering bug during rapid movement (holding l/j/k/h)
-        // Without this check, we send 4-5 cursor position codes PER keystroke!
-        if (self.last_cursor_row != screen_row or self.last_cursor_col != clamped_col) {
+        // CRITICAL FIX: When renderUpdates() renders cells, it moves the terminal cursor
+        // around the screen. We must ALWAYS reposition the cursor afterward.
+        // The optimization to skip cursor moves is ONLY valid when no cells were rendered
+        // (i.e., updates.len == 0), because only then is the terminal cursor still at
+        // last_cursor_row/col.
+        //
+        // BUG SCENARIO (before fix):
+        //   1. Cursor at line 22, col 2, screen_row=22
+        //   2. Press 'j' → cursor moves to line 23, viewport scrolls
+        //   3. New screen_row = 23 - 1 = 22 (same as before!)
+        //   4. last_cursor_row == screen_row → skip cursor move
+        //   5. BUT terminal cursor is at last rendered cell (end of line), not col 2!
+        //   6. User sees cursor at wrong position
+        const cursor_moved_by_rendering = updates.len > 0;
+        if (cursor_moved_by_rendering or self.last_cursor_row != screen_row or self.last_cursor_col != clamped_col) {
             try self.moveCursor(screen_row, clamped_col);
             self.last_cursor_row = screen_row;
             self.last_cursor_col = clamped_col;
@@ -672,10 +703,12 @@ pub const Display = struct {
     ) !void {
         // Get buffer from editor (handles both Editor and EditorContext types)
         const T = @TypeOf(editor);
-        const buffer = if (T == *@import("../../../editor/editor.zig").Editor)
+        const buffer = if (T == *Editor)
             editor.getCurrentBuffer() orelse return error.NoCurrentBuffer
+        else if (T == *EditorContext)
+            editor.buffer()
         else
-            &editor.buffer;
+            &editor.buffer; // Duck-typed fallback for MockEditor in benchmarks
 
         // Update gutter cache (Neovim optimization: invalidate on line count change)
         self.updateGutterCache(buffer);
@@ -713,7 +746,14 @@ pub const Display = struct {
         char_width.clearCache();
 
         // STEP 1: Update all layers from buffer state
-        try layer_renderer.updateLayers(self, editor, status, &editor.highlight_registry, visual_state, yank_highlight, cursorline_enabled, list_enabled, listchars);
+        // Get highlight_registry from editor (handles both Editor and EditorContext types)
+        const highlight_registry = if (T == *Editor)
+            &editor.highlight_registry
+        else if (T == *EditorContext)
+            editor.highlight_registry()
+        else
+            &editor.highlight_registry; // Duck-typed fallback for MockEditor in benchmarks
+        try layer_renderer.updateLayers(self, editor, status, highlight_registry, visual_state, yank_highlight, cursorline_enabled, list_enabled, listchars);
 
         // STEP 1.5: Apply virtual text overlay (Neovim-style extmarks)
         self.virtual_text.applyToGrid(&self.virtual_text_layer.grid);
@@ -758,10 +798,12 @@ pub const Display = struct {
     pub fn renderCursorOnly(self: *Display, editor: anytype) !void {
         // Get buffer from editor (handles both Editor and EditorContext types)
         const T = @TypeOf(editor);
-        const buffer = if (T == *@import("../../../editor/editor.zig").Editor)
+        const buffer = if (T == *Editor)
             editor.getCurrentBuffer() orelse return error.NoCurrentBuffer
+        else if (T == *EditorContext)
+            editor.buffer()
         else
-            &editor.buffer;
+            &editor.buffer; // Duck-typed fallback for MockEditor in benchmarks
 
         // Adjust viewport to keep cursor visible
         self.adjustViewport(buffer);
@@ -910,8 +952,11 @@ pub const Display = struct {
         // STEP 6: Swap buffers
         output.swapBuffers();
 
-        // STEP 7: Move cursor to final position if changed
-        if (self.last_cursor_row != screen_row or self.last_cursor_col != clamped_col) {
+        // STEP 7: Move cursor to final position
+        // CRITICAL FIX: When renderUpdates() renders cells, it moves the terminal cursor
+        // around the screen. We must ALWAYS reposition the cursor afterward when there are updates.
+        const cursor_moved_by_rendering = updates.len > 0;
+        if (cursor_moved_by_rendering or self.last_cursor_row != screen_row or self.last_cursor_col != clamped_col) {
             try self.moveCursor(screen_row, clamped_col);
             self.last_cursor_row = screen_row;
             self.last_cursor_col = clamped_col;
@@ -948,6 +993,16 @@ pub const Display = struct {
 
     /// Apply terminal scroll optimization if viewport changed
     /// Returns true if scroll optimization was applied, false if full render needed
+    ///
+    /// KEY INSIGHT: After terminal scroll, we scroll the PREVIOUS buffer to match
+    /// what the terminal now shows. The compositor fills CURRENT normally.
+    /// diff() then only sees the newly revealed rows as different.
+    ///
+    /// Example (scroll down 1 line):
+    ///   Terminal scroll: shifts up by 1 (lines[1-23] visible, bottom blank)
+    ///   Scroll previous: now represents lines[1-23] + blank (matches terminal)
+    ///   Compositor: fills current with lines[1-24]
+    ///   diff(): rows 0-22 unchanged, only row 23 differs → 1 row update instead of 24!
     pub fn applyTerminalScroll(self: *Display) !bool {
         // Check if viewport scrolled
         if (self.viewport_top == self.last_viewport_top) {
@@ -980,10 +1035,11 @@ pub const Display = struct {
         // Reset scroll region
         try self.resetScrollRegion();
 
-        // Also scroll the compositor's output grid to match
-        // This keeps the grid state consistent with what's on terminal
+        // CRITICAL: Scroll the PREVIOUS buffer to match what terminal now shows
+        // Do NOT scroll current - compositor will fill it fresh
+        // This way, diff() only detects newly revealed content as changed
         const output = self.compositor.getOutput();
-        output.scroll(@intCast(scroll_delta));
+        output.scrollPrevious(@intCast(scroll_delta));
 
         // Update tracking
         self.last_viewport_top = self.viewport_top;

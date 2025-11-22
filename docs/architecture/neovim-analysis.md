@@ -980,8 +980,8 @@ All complex APIs use named options instead of positional args.
 **Structure**:
 ```
 ~/.config/vimcraft/
-├── init.lua                    # Main config (compiled from init.js)
-├── init.js                     # User-friendly entry point
+├── init.lua                    # Main config (compiled from index.js)
+├── index.js                     # User-friendly entry point
 ├── plugin/
 │   └── myplugin.js            # Auto-loaded plugins
 ├── ftplugin/
@@ -999,7 +999,7 @@ All complex APIs use named options instead of positional args.
 
 2. **JavaScript API Layer** (user-facing)
    ```javascript
-   // init.js
+   // index.js
    const ov = require('vimcraft');
    ov.keymap.set('n', '<leader>x', () => {
      console.log('hello');

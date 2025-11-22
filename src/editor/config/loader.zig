@@ -20,8 +20,13 @@ pub const ConfigPaths = struct {
         const plugins_dir = try std.fs.path.join(allocator, &[_][]const u8{ config_dir, "plugins" });
         errdefer allocator.free(plugins_dir);
 
-        // index.ts path: ~/.config/vimcraft/index.ts (TypeScript entry point)
-        const index_ts_path = try std.fs.path.join(allocator, &[_][]const u8{ config_dir, "index.ts" });
+        // Check for OPENVIM_CONFIG environment variable to override config path
+        // This allows testing with custom config files: OPENVIM_CONFIG=/tmp/test.js ./vimc
+        const index_ts_path = if (std.posix.getenv("OPENVIM_CONFIG")) |override_path|
+            try allocator.dupe(u8, override_path)
+        else
+            // index.ts path: ~/.config/vimcraft/index.ts (TypeScript entry point)
+            try std.fs.path.join(allocator, &[_][]const u8{ config_dir, "index.ts" });
 
         return .{
             .config_dir = config_dir,

@@ -105,6 +105,11 @@ bool hermes_has_exception(OVHermesRuntime* runtime);
 const char* hermes_get_exception_message(OVHermesRuntime* runtime);
 
 /**
+ * Clear any pending exception
+ */
+void hermes_clear_exception(OVHermesRuntime* runtime);
+
+/**
  * Throw a JavaScript Error from native code
  *
  * This sets a pending throw flag that will be checked by the host function

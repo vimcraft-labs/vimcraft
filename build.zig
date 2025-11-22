@@ -281,12 +281,12 @@ pub fn build(b: *std.Build) void {
         &[_][]const u8{ "-std=c++17", "-fno-sanitize=all" };
 
     exe.addCSourceFile(.{
-        .file = b.path("src/backends/debug/websocket_server.cpp"),
+        .file = b.path("src/backends/headless/websocket_server.cpp"),
         .flags = cdp_flags,
     });
 
     exe.addCSourceFile(.{
-        .file = b.path("src/backends/debug/cdp_debugger.cpp"),
+        .file = b.path("src/backends/headless/cdp_debugger.cpp"),
         .flags = &[_][]const u8{
             "-std=c++17",
             "-fno-sanitize=all",
@@ -338,6 +338,35 @@ pub fn build(b: *std.Build) void {
     // Link directly to our vendored libuv to avoid Homebrew conflicts
     // On macOS, we build universal binaries (arm64 + x86_64) for cross-compilation
     exe.addObjectFile(b.path("vendor/libuv/build/libuv.a"));
+
+    // ============================================================================
+    // libgit2 (Git Operations)
+    // ============================================================================
+    // Pure C implementation of Git core methods (v1.9.0)
+    // Exposes git functionality to JavaScript plugins via JSI
+    // Used by: GitHub, VS Code, GitLab, SourceTree
+    //
+    // Build instructions:
+    //   cd vendor/libgit2
+    //   mkdir build && cd build
+    //   cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DUSE_SSH=OFF -DBUILD_CLI=OFF
+    //   cmake --build .
+    //
+    // Size: ~2MB static library (vs go-git ~15MB)
+    exe.addIncludePath(b.path("vendor/libgit2/include"));
+    exe.addObjectFile(b.path("vendor/libgit2/build/libgit2.a"));
+
+    // libgit2 dependencies (platform-specific)
+    if (target.result.os.tag == .macos) {
+        // macOS: Security.framework for TLS, CoreFoundation for strings
+        exe.linkFramework("Security");
+        exe.linkFramework("CoreFoundation");
+        exe.linkSystemLibrary("iconv");
+        exe.linkSystemLibrary("z");
+    } else if (target.result.os.tag == .linux) {
+        // Linux: OpenSSL for TLS (already linked above for WebSocket)
+        exe.linkSystemLibrary("z");
+    }
 
     // ============================================================================
     // esbuild (TypeScript Transpiler) - Phase 4 - CROSS-PLATFORM
@@ -684,12 +713,12 @@ pub fn build(b: *std.Build) void {
     });
 
     bench.addCSourceFile(.{
-        .file = b.path("src/backends/debug/websocket_server.cpp"),
+        .file = b.path("src/backends/headless/websocket_server.cpp"),
         .flags = cdp_flags,
     });
 
     bench.addCSourceFile(.{
-        .file = b.path("src/backends/debug/cdp_debugger.cpp"),
+        .file = b.path("src/backends/headless/cdp_debugger.cpp"),
         .flags = &[_][]const u8{
             "-std=c++17",
             "-fno-sanitize=all",
@@ -705,6 +734,20 @@ pub fn build(b: *std.Build) void {
     bench.addIncludePath(b.path("vendor/libuv/include"));
     // Link directly to our vendored libuv to avoid Homebrew conflicts
     bench.addObjectFile(b.path("vendor/libuv/build/libuv.a"));
+
+    // libgit2 for benchmarks
+    bench.addIncludePath(b.path("vendor/libgit2/include"));
+    bench.addObjectFile(b.path("vendor/libgit2/build/libgit2.a"));
+
+    // libgit2 dependencies for benchmarks (platform-specific)
+    if (target.result.os.tag == .macos) {
+        bench.linkFramework("Security");
+        bench.linkFramework("CoreFoundation");
+        bench.linkSystemLibrary("iconv");
+        bench.linkSystemLibrary("z");
+    } else if (is_linux) {
+        bench.linkSystemLibrary("z");
+    }
 
     // Tree-sitter for benchmarks
     bench.addIncludePath(b.path("vendor/tree-sitter/lib/include"));
@@ -890,12 +933,12 @@ pub fn build(b: *std.Build) void {
     });
 
     unit_tests.addCSourceFile(.{
-        .file = b.path("src/backends/debug/websocket_server.cpp"),
+        .file = b.path("src/backends/headless/websocket_server.cpp"),
         .flags = cdp_flags,
     });
 
     unit_tests.addCSourceFile(.{
-        .file = b.path("src/backends/debug/cdp_debugger.cpp"),
+        .file = b.path("src/backends/headless/cdp_debugger.cpp"),
         .flags = &[_][]const u8{
             "-std=c++17",
             "-fno-sanitize=all",
@@ -912,6 +955,20 @@ pub fn build(b: *std.Build) void {
     unit_tests.addIncludePath(b.path("vendor/libuv/include"));
     // Link directly to our vendored libuv to avoid Homebrew conflicts
     unit_tests.addObjectFile(b.path("vendor/libuv/build/libuv.a"));
+
+    // libgit2 for tests
+    unit_tests.addIncludePath(b.path("vendor/libgit2/include"));
+    unit_tests.addObjectFile(b.path("vendor/libgit2/build/libgit2.a"));
+
+    // libgit2 dependencies for tests (platform-specific)
+    if (target.result.os.tag == .macos) {
+        unit_tests.linkFramework("Security");
+        unit_tests.linkFramework("CoreFoundation");
+        unit_tests.linkSystemLibrary("iconv");
+        unit_tests.linkSystemLibrary("z");
+    } else if (is_linux) {
+        unit_tests.linkSystemLibrary("z");
+    }
 
     // go-enry for tests (same platform as main exe)
     unit_tests.addLibraryPath(b.path(enry_lib_path));

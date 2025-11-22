@@ -40,12 +40,12 @@ npm install --save-dev ./packages/types
     "typeRoots": ["./node_modules/@types", "./packages/types/src"],
     "moduleResolution": "node"
   },
-  "include": ["init.ts"],
+  "include": ["index.ts"],
   "exclude": ["node_modules", "dist", "vendor"]
 }
 ```
 
-### 3. Create init.ts
+### 3. Create index.ts
 
 ```typescript
 /// <reference types="@vimcraft/types" />
@@ -79,7 +79,7 @@ npm run watch:config
 ### VS Code
 
 1. Open Vimcraft folder in VS Code
-2. Open init.ts
+2. Open index.ts
 3. Start typing `vim.` - see autocomplete!
 
 ### Other IDEs

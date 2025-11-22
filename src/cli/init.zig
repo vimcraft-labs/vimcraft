@@ -3,17 +3,20 @@
 /// Creates:
 /// - tsconfig.json (TypeScript compiler options)
 /// - vim.d.ts (Vim API type definitions - single file)
-/// - init.ts (if doesn't exist)
+/// - index.ts (if doesn't exist) - main config entry point
 /// - plugins/ (plugin directory)
 /// - .vimcraft/ (internal metadata directory)
 
 const std = @import("std");
 
-/// Default tsconfig.json content (loaded from tsconfig.template.json at compile time)
-const TSCONFIG_JSON = @embedFile("tsconfig.template.json");
+/// Default tsconfig.json content (embedded at compile time)
+const TSCONFIG_JSON = @embedFile("tsconfig.json");
 
-/// Default init.ts content (if doesn't exist)
-const INIT_TS =
+/// vim.d.ts content (embedded at compile time - works from anywhere)
+const VIM_DTS_CONTENT = @embedFile("vim.d.ts");
+
+/// Default index.ts content (main config entry point)
+const INDEX_TS =
     \\// Vimcraft Configuration (TypeScript)
     \\// This file is auto-loaded on startup and transpiled to JavaScript
     \\
@@ -28,8 +31,8 @@ const INIT_TS =
     \\// Example: Enable cursor line highlighting
     \\// vim.opt.cursorline = true;
     \\
-    \\// Example: Load plugin (Phase 4+)
-    \\// const smearCursor = require('@vimcraft/smear-cursor');
+    \\// Example: Load plugin
+    \\// import smearCursor from './plugins/smear-cursor';
     \\// smearCursor.setup({ speed: 0.3 });
     \\
     \\// For more examples, see:
@@ -72,34 +75,25 @@ pub fn execute(allocator: std.mem.Allocator, force: bool) !void {
         std.debug.print("✓ tsconfig.json already exists (use --force to overwrite)\n", .{});
     }
 
-    // Step 2: Create init.ts (if doesn't exist)
-    const init_ts_path = try std.fmt.allocPrint(allocator, "{s}/init.ts", .{config_dir});
-    defer allocator.free(init_ts_path);
+    // Step 2: Create index.ts (main config entry point, if doesn't exist)
+    const index_ts_path = try std.fmt.allocPrint(allocator, "{s}/index.ts", .{config_dir});
+    defer allocator.free(index_ts_path);
 
-    if (!fileExists(init_ts_path)) {
-        try writeFile(init_ts_path, INIT_TS);
-        std.debug.print("✓ Created init.ts\n", .{});
+    if (!fileExists(index_ts_path)) {
+        try writeFile(index_ts_path, INDEX_TS);
+        std.debug.print("✓ Created index.ts\n", .{});
     } else {
-        std.debug.print("✓ init.ts already exists\n", .{});
+        std.debug.print("✓ index.ts already exists\n", .{});
     }
 
     // Step 3: Create vim.d.ts (single type definition file)
-    // Copy from source: src/system/jsi/vim.d.ts
-    const vim_dts_source = "src/system/jsi/vim.d.ts";
+    // Uses embedded content - works from anywhere
     const vim_dts_path = try std.fmt.allocPrint(allocator, "{s}/vim.d.ts", .{config_dir});
     defer allocator.free(vim_dts_path);
 
     if (force or !fileExists(vim_dts_path)) {
-        // Read from source and copy to config directory
-        const vim_dts_content = std.fs.cwd().readFileAlloc(allocator, vim_dts_source, 1024 * 1024) catch |err| {
-            std.debug.print("Error: Failed to read vim.d.ts from source: {}\n", .{err});
-            std.debug.print("Make sure you're running from vimcraft/editor directory\n", .{});
-            return err;
-        };
-        defer allocator.free(vim_dts_content);
-
-        try writeFile(vim_dts_path, vim_dts_content);
-        std.debug.print("✓ Created vim.d.ts\n", .{});
+        try writeFile(vim_dts_path, VIM_DTS_CONTENT);
+        std.debug.print("✓ Created vim.d.ts ({d} bytes)\n", .{VIM_DTS_CONTENT.len});
     } else {
         std.debug.print("✓ vim.d.ts already exists (use --force to overwrite)\n", .{});
     }
@@ -131,9 +125,9 @@ pub fn execute(allocator: std.mem.Allocator, force: bool) !void {
     std.debug.print("\n", .{});
     std.debug.print("✓ Initialization complete!\n\n", .{});
     std.debug.print("Next steps:\n", .{});
-    std.debug.print("  1. Open ~/.config/vimcraft/init.ts in your editor\n", .{});
+    std.debug.print("  1. Open ~/.config/vimcraft/index.ts in your editor\n", .{});
     std.debug.print("  2. Start writing TypeScript with full vim.* IntelliSense\n", .{});
-    std.debug.print("  3. Test your config with: vimc run init.ts\n\n", .{});
+    std.debug.print("  3. Run vimc to test your config\n\n", .{});
 }
 
 /// Check if file exists

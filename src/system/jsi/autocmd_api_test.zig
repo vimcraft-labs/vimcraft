@@ -1,4 +1,4 @@
-/// Unit tests for Autocmd API (vim.api.createAutocmd)
+/// Unit tests for AutoCommand API (vim.api.createAutoCommand)
 /// Following TDD principles: Tests specify correct behavior
 ///
 /// NOTE: Tests that require full Hermes runtime (JavaScript evaluation) are
@@ -103,14 +103,14 @@ test "matchPattern: path handling" {
 //
 // The tests are preserved here as documentation of expected behavior:
 //
-// test "AutocmdManager: createAutocmd returns incrementing IDs"
-// test "AutocmdManager: createAutocmd registers for multiple events"
-// test "AutocmdManager: createAutocmd stores pattern correctly"
-// test "AutocmdManager: createAutocmd stores group correctly"
-// test "AutocmdManager: delAutocmd removes autocmd by ID"
-// test "AutocmdManager: delAutocmd is idempotent"
-// test "AutocmdManager: delAutocmd with invalid ID does nothing"
-// test "AutocmdManager: clearGroup removes all autocmds in group"
+// test "AutocmdManager: createAutoCommand returns incrementing IDs"
+// test "AutocmdManager: createAutoCommand registers for multiple events"
+// test "AutocmdManager: createAutoCommand stores pattern correctly"
+// test "AutocmdManager: createAutoCommand stores group correctly"
+// test "AutocmdManager: deleteAutoCommand removes autocommand by ID"
+// test "AutocmdManager: deleteAutoCommand is idempotent"
+// test "AutocmdManager: deleteAutoCommand with invalid ID does nothing"
+// test "AutocmdManager: clearGroup removes all autocommands in group"
 // test "AutocmdManager: clearGroup with nonexistent group does nothing"
-// test "Autocmd: full workflow - create, verify, delete"
-// test "Autocmd: once flag removes autocmd after execution"
+// test "AutoCommand: full workflow - create, verify, delete"
+// test "AutoCommand: once flag removes autocommand after execution"

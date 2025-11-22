@@ -87,10 +87,21 @@ All APIs are fully typed with TypeScript for excellent IDE support.
 **Key topics**:
 - Installing @vimcraft/types
 - Setting up tsconfig.json
-- Using types in init.ts
+- Using types in index.ts
 - Full type coverage
 - IDE integration
 - Type examples
+
+### [vim.e2e Reference](./vim-e2e.md) ✨ NEW
+**Purpose**: E2E testing and plugin development debugging API
+**Read if**: You're writing E2E tests or debugging plugins
+**Key topics**:
+- vim.e2e.keys() - Send raw Vim keystrokes
+- vim.e2e.getCursor(), getState(), getMode() - State queries
+- vim.e2e.describe(), test(), runAll() - Test structure
+- vim.e2e.assert.* - Rich assertions
+- Plugin development debugging workflow
+- Full TypeScript types
 
 ---
 
@@ -181,6 +192,32 @@ if (filetype === "rust") {
 
 See: [vim.filetype Reference](./vim-filetype.md)
 
+### "I want to write E2E tests or debug my plugin"
+
+```typescript
+// Use vim.e2e for testing and debugging
+vim.e2e.describe("My Feature", () => {
+    vim.e2e.test("basic functionality", async () => {
+        await vim.e2e.keys(":e /tmp/test.txt<CR>");
+        await vim.e2e.keys("iHello<ESC>");
+
+        const cursor = await vim.e2e.getCursor();
+        vim.e2e.assert.cursorAt(0, 4);
+    });
+});
+
+vim.e2e.runAll();
+
+// Or for interactive debugging:
+async function debugMyPlugin() {
+    const state = await vim.e2e.getState();
+    const logs = await vim.e2e.getLogs({ level: "error" });
+    console.log(state, logs);
+}
+```
+
+See: [vim.e2e Reference](./vim-e2e.md)
+
 ---
 
 ## 📊 API Tiers (Priority)
@@ -253,7 +290,7 @@ Future features:
 
 1. Read [Quick Reference](./quick-reference.md) - Tier 1 section (15 min)
 2. Learn basic [vim.opt](./vim-opt.md) options
-3. Try examples in your init.ts
+3. Try examples in your index.ts
 
 ### Intermediate (Writing plugins)
 

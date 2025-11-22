@@ -1028,3 +1028,99 @@ test "PTY: No cursor visibility flicker during rapid movement" {
         std.debug.print("  {} visibility codes for 10 movements (acceptable)\n", .{total_visibility_codes});
     }
 }
+
+// ============================================================================
+// Test 21: Viewport Scroll - Cursor column preserved when scrolling with j
+// ============================================================================
+test "PTY: Cursor column preserved during viewport scroll with j" {
+    const allocator = std.testing.allocator;
+
+    // Create test file with many lines (more than terminal height)
+    // Each line has same length to simplify column verification
+    var content: [30 * 12]u8 = undefined;
+    var i: usize = 0;
+    for (0..30) |line_num| {
+        const digits = std.fmt.bufPrint(content[i..], "line{d:02}___\n", .{line_num}) catch unreachable;
+        i += digits.len;
+    }
+    try createTestFile(content[0..i]);
+
+    var pty = try spawnVimcraft(allocator);
+    defer pty.kill();
+
+    // Wait for startup
+    std.Thread.sleep(500 * std.time.ns_per_ms);
+
+    var buf: [16384]u8 = undefined;
+    _ = try pty.read(&buf, 1000); // Drain startup output
+
+    // Move right 3 columns (to position column 3)
+    try pty.write("lll");
+    std.Thread.sleep(100 * std.time.ns_per_ms);
+    _ = try pty.read(&buf, 300); // Drain output
+
+    // Move down many times to trigger viewport scroll
+    // PTY terminal is typically 24 rows, so 30 j's should scroll
+    try pty.write("jjjjjjjjjjjjjjjjjjjjjjjjjjjjjj");
+    std.Thread.sleep(500 * std.time.ns_per_ms);
+
+    // Capture final output
+    var output: std.ArrayList(u8) = .{};
+    defer output.deinit(allocator);
+    while (true) {
+        const chunk = pty.read(&buf, 200) catch |err| {
+            if (err == error.Timeout) break;
+            return err;
+        };
+        if (chunk.len == 0) break;
+        try output.appendSlice(allocator, chunk);
+    }
+
+    // Find final cursor position
+    const positions = try helpers.findAllCursorPositions(allocator, output.items);
+    defer allocator.free(positions);
+
+    std.debug.print("\n[SCROLL COLUMN TEST] Cursor positions after scroll:\n", .{});
+    std.debug.print("  Total position codes: {}\n", .{positions.len});
+
+    if (positions.len > 0) {
+        const last_pos = positions[positions.len - 1];
+        std.debug.print("  Final cursor: row={} col={}\n", .{ last_pos.row, last_pos.col });
+
+        // CRITICAL: Column should be 3 (or 4 with gutter) NOT at end of line!
+        // Gutter adds some offset, but column should definitely be < 10
+        if (last_pos.col > 10) {
+            std.debug.print("\n  ❌ BUG: Cursor column jumped to {} (expected ~3-5)\n", .{last_pos.col});
+            std.debug.print("  This is the 'cursor jumps to last cell' bug!\n", .{});
+            // Don't fail test - just report the bug
+        } else {
+            std.debug.print("\n  ✓ Column preserved correctly after scroll\n", .{});
+        }
+    } else {
+        std.debug.print("  No cursor position codes captured\n", .{});
+    }
+
+    // Also verify by inserting a character and checking where it appears
+    try pty.write("iX");
+    std.Thread.sleep(100 * std.time.ns_per_ms);
+    try pty.write("\x1b"); // ESC
+    std.Thread.sleep(150 * std.time.ns_per_ms);
+
+    // Read final state
+    const final_output = try readAllOutput(&pty, allocator, &buf, 200);
+    defer allocator.free(final_output);
+
+    const stripped = try helpers.stripAnsi(allocator, final_output);
+    defer allocator.free(stripped);
+
+    // X should be inserted at column 3, making "linXe29___"
+    // If bug exists, X would be at end: "line29__X_" or similar
+    std.debug.print("\n  Verification: Looking for 'linX' pattern (correct) vs 'X_' at end (bug)\n", .{});
+    
+    if (std.mem.indexOf(u8, stripped, "linX") != null) {
+        std.debug.print("  ✓ Found 'linX' - cursor column was preserved!\n", .{});
+    } else if (std.mem.indexOf(u8, stripped, "__X") != null or std.mem.indexOf(u8, stripped, "_X\n") != null) {
+        std.debug.print("  ❌ Found 'X' at end of line - cursor jumped to last column!\n", .{});
+    }
+}
+

@@ -505,6 +505,64 @@ pub const ScreenGrid = struct {
             self.previous_offset[i] = i;
         }
     }
+
+    // ============================================================================
+    // O4: SCROLL PREVIOUS BUFFER (for terminal scroll optimization)
+    // ============================================================================
+    // When terminal uses native scroll (CSI S/T), we need to scroll the PREVIOUS
+    // buffer to match what the terminal now shows. The CURRENT buffer is left alone
+    // because compositor will fill it fresh. diff() then only sees newly revealed
+    // rows as different.
+
+    /// Scroll the PREVIOUS buffer only (for terminal scroll optimization)
+    /// This matches the previous buffer to what the terminal now displays after
+    /// a native scroll command, so diff() only detects newly revealed content.
+    pub fn scrollPrevious(self: *ScreenGrid, lines: isize) void {
+        if (lines == 0) return;
+
+        const abs_lines = @abs(lines);
+        if (abs_lines >= self.height) {
+            // Scrolling more than screen height - clear all previous cells
+            for (0..self.height) |logical_row| {
+                const physical_row = self.previous_offset[logical_row];
+                for (0..self.width) |col| {
+                    self.previous[physical_row][col] = Cell.blank();
+                }
+            }
+            // Reset previous offsets to identity
+            for (0..self.height) |i| {
+                self.previous_offset[i] = i;
+            }
+            return;
+        }
+
+        // Rotate the PREVIOUS offset array (match terminal scroll)
+        if (lines > 0) {
+            // Content scrolled UP: rotate previous offsets LEFT
+            std.mem.rotate(usize, self.previous_offset, abs_lines);
+
+            // Clear the revealed bottom rows in previous (they're now blank on terminal)
+            const start_clear = self.height - abs_lines;
+            for (start_clear..self.height) |logical_row| {
+                const physical_row = self.previous_offset[logical_row];
+                for (0..self.width) |col| {
+                    self.previous[physical_row][col] = Cell.blank();
+                }
+            }
+        } else {
+            // Content scrolled DOWN: rotate previous offsets RIGHT
+            const rotate_amount = self.height - abs_lines;
+            std.mem.rotate(usize, self.previous_offset, rotate_amount);
+
+            // Clear the revealed top rows in previous (they're now blank on terminal)
+            for (0..abs_lines) |logical_row| {
+                const physical_row = self.previous_offset[logical_row];
+                for (0..self.width) |col| {
+                    self.previous[physical_row][col] = Cell.blank();
+                }
+            }
+        }
+    }
 };
 
 // Tests
@@ -899,4 +957,78 @@ test "ScreenGrid: full render cycle with scroll" {
 
     // Should have updates for the changed rows
     try std.testing.expect(updates3.len >= 1);
+}
+
+// ============================================================================
+// O4: SCROLL PREVIOUS BUFFER TESTS
+// ============================================================================
+
+test "ScreenGrid: scrollPrevious shifts previous buffer only" {
+    var grid = try ScreenGrid.init(std.testing.allocator, 5, 3);
+    defer grid.deinit();
+
+    // Setup: Set content in current, swap to make it previous
+    grid.setCell(0, 0, Cell{ .char = 'A' });
+    grid.setCell(1, 0, Cell{ .char = 'B' });
+    grid.setCell(2, 0, Cell{ .char = 'C' });
+    grid.swapBuffers();
+
+    // Now previous has A, B, C
+    // Current has sentinel values (from init)
+
+    // Clear current and set new content
+    grid.clear();
+    grid.setCell(0, 0, Cell{ .char = 'X' });
+    grid.setCell(1, 0, Cell{ .char = 'Y' });
+    grid.setCell(2, 0, Cell{ .char = 'Z' });
+
+    // Scroll PREVIOUS up by 1 (simulating terminal scroll)
+    grid.scrollPrevious(1);
+
+    // Previous should now be: B, C, blank (shifted up)
+    // Current should still be: X, Y, Z (unchanged)
+
+    // Verify current unchanged
+    try std.testing.expectEqual(@as(u21, 'X'), grid.getCell(0, 0).?.char);
+    try std.testing.expectEqual(@as(u21, 'Y'), grid.getCell(1, 0).?.char);
+    try std.testing.expectEqual(@as(u21, 'Z'), grid.getCell(2, 0).?.char);
+
+    // Verify previous was scrolled by checking diff
+    // If previous is B, C, blank and current is X, Y, Z
+    // All 3 rows should differ
+    const updates = try grid.diff(std.testing.allocator);
+    defer std.testing.allocator.free(updates);
+    try std.testing.expectEqual(@as(usize, 3), updates.len);
+}
+
+test "ScreenGrid: scrollPrevious for terminal scroll optimization" {
+    var grid = try ScreenGrid.init(std.testing.allocator, 5, 3);
+    defer grid.deinit();
+
+    // Simulate: Frame N rendered lines 0-2 (A, B, C)
+    grid.clear();
+    grid.setCell(0, 0, Cell{ .char = 'A' });
+    grid.setCell(1, 0, Cell{ .char = 'B' });
+    grid.setCell(2, 0, Cell{ .char = 'C' });
+    grid.swapBuffers();
+
+    // Frame N+1: User scrolled down 1 line
+    // Terminal scroll happened - content shifted up
+    // Previous should match what terminal now shows: B, C, blank
+    grid.scrollPrevious(1);
+
+    // Clear current and render new viewport (lines 1-3: B, C, D)
+    grid.clear();
+    grid.setCell(0, 0, Cell{ .char = 'B' }); // Line 1
+    grid.setCell(1, 0, Cell{ .char = 'C' }); // Line 2
+    grid.setCell(2, 0, Cell{ .char = 'D' }); // Line 3 (NEW!)
+
+    // diff should only detect row 2 as changed (B=B, C=C, D!=blank)
+    const updates = try grid.diff(std.testing.allocator);
+    defer std.testing.allocator.free(updates);
+
+    // Should have exactly 1 update (the new 'D' in row 2)
+    try std.testing.expectEqual(@as(usize, 1), updates.len);
+    try std.testing.expectEqual(@as(usize, 2), updates[0].row);
+    try std.testing.expectEqual(@as(u21, 'D'), updates[0].cell.char);
 }

@@ -6,6 +6,7 @@ const highlights = @import("../../editor/config/highlights.zig");
 const OptionsManager = @import("../../editor/config/options.zig").OptionsManager;
 const Display = @import("../../backends/terminal/display/display.zig").Display;
 const Editor = @import("../../editor/editor.zig").Editor;
+const EditorContext = @import("../../backends/headless/editor_context.zig").EditorContext;
 const EventEmitter = @import("event_emitter.zig").EventEmitter;
 
 // Import shared Hermes C API
@@ -31,6 +32,10 @@ pub const metrics_api = @import("metrics_api.zig");
 pub const autocmd_api = @import("autocmd_api.zig");
 pub const usercommand_api = @import("usercommand_api.zig");
 pub const loader = @import("loader.zig");
+pub const fs_api = @import("fs_api.zig");
+pub const process_api = @import("process_api.zig");
+pub const fetch_api = @import("fetch_api.zig");
+pub const e2e_api = @import("e2e_api.zig");
 
 // Import new transpiler system
 const transpiler = @import("../transpiler/loader.zig");
@@ -51,6 +56,10 @@ pub var global_event_emitter: ?*EventEmitter = null;
 pub var global_autocmd_manager: ?*autocmd_api.AutocmdManager = null;
 pub var global_usercommand_ctx: ?*usercommand_api.UserCommandContext = null;
 pub var global_allocator: ?std.mem.Allocator = null;
+pub var global_fs_ctx: ?*fs_api.FsContext = null;
+pub var global_process_ctx: ?*process_api.ProcessContext = null;
+pub var global_fetch_ctx: ?*fetch_api.FetchContext = null;
+pub var global_e2e_ctx: ?*e2e_api.E2EContext = null;
 
 /// Global transpiler cache state (initialized in main.zig)
 pub var global_cache_dir: ?[]const u8 = null;
@@ -91,9 +100,12 @@ pub fn initJSI(
                 // Editor uses multi-buffer architecture - can't store static pointer
                 // vim.bo won't work for Editor (needs refactoring to call getCurrentBuffer())
                 break :blk null;
+            } else if (T == *EditorContext) {
+                // EditorContext has buffer() accessor method
+                break :blk editor_or_context.buffer();
             } else {
-                // EditorContext has single buffer field
-                break :blk &editor_or_context.buffer;
+                // Fallback for other types (shouldn't happen in practice)
+                break :blk null;
             }
         },
         // Module system (Phase 4)
@@ -156,11 +168,11 @@ pub fn initJSI(
         };
         global_motion_ctx = motion_ctx;
         motion_api.register(runtime, motion_ctx);
-    } else {
-        // EditorContext - get viewport_top from display, no js_state_dirty (headless mode)
+    } else if (T == *EditorContext) {
+        // EditorContext - use accessor methods for buffer/viewport
         const motion_ctx = allocator.create(motion_api.MotionContext) catch @panic("Failed to allocate MotionContext");
         motion_ctx.* = motion_api.MotionContext{
-            .buffer = &editor_or_context.buffer,
+            .buffer = editor_or_context.buffer(),
             .viewport_top = &editor_or_context.display.viewport_top,
             .viewport_height = if (display) |d| d.terminal_rows - 1 else 24,
             .js_state_dirty = null, // EditorContext doesn't need dirty tracking
@@ -171,13 +183,23 @@ pub fn initJSI(
 
     // Register keymap API (vim.keymap.set/del)
     // Now register for both Editor and EditorContext (both have keymap_mgr)
-    const keymap_ctx = keymap_api.KeymapContext.init(
-        allocator,
-        &editor_or_context.keymap_mgr,
-        runtime,
-    ) catch @panic("Failed to allocate KeymapContext");
-    global_keymap_ctx = keymap_ctx;
-    keymap_api.register(runtime, keymap_ctx);
+    if (T == *Editor) {
+        const keymap_ctx = keymap_api.KeymapContext.init(
+            allocator,
+            &editor_or_context.keymap_mgr,
+            runtime,
+        ) catch @panic("Failed to allocate KeymapContext");
+        global_keymap_ctx = keymap_ctx;
+        keymap_api.register(runtime, keymap_ctx);
+    } else if (T == *EditorContext) {
+        const keymap_ctx = keymap_api.KeymapContext.init(
+            allocator,
+            editor_or_context.keymap_mgr(),
+            runtime,
+        ) catch @panic("Failed to allocate KeymapContext");
+        global_keymap_ctx = keymap_ctx;
+        keymap_api.register(runtime, keymap_ctx);
+    }
 
     // Register event API (vim.on, vim.off, vim.emit) - Only for Editor (Phase 4 autocommands)
     // EditorContext doesn't need events (headless debug mode)
@@ -192,7 +214,7 @@ pub fn initJSI(
         // Register vim.on(), vim.off(), vim.emit() JavaScript API
         event_api.register(runtime, emitter);
 
-        // Register autocmd API (vim.api.createAutocmd, vim.api.delAutocmd, etc.)
+        // Register autocmd API (vim.api.createAutoCommand, vim.api.deleteAutoCommand, etc.)
         const autocmd_mgr = allocator.create(autocmd_api.AutocmdManager) catch @panic("Failed to allocate AutocmdManager");
         autocmd_mgr.* = autocmd_api.AutocmdManager.init(allocator, runtime, emitter);
         global_autocmd_manager = autocmd_mgr;
@@ -215,7 +237,12 @@ pub fn initJSI(
     // Both Editor and EditorContext have highlight_registry
     const hl_ctx = allocator.create(highlight_api.HighlightContext) catch @panic("Failed to allocate HighlightContext");
     hl_ctx.* = highlight_api.HighlightContext{
-        .registry = &editor_or_context.highlight_registry,
+        .registry = if (T == *Editor)
+            &editor_or_context.highlight_registry
+        else if (T == *EditorContext)
+            editor_or_context.highlight_registry()
+        else
+            &editor_or_context.highlight_registry, // Duck-typed fallback
         .allocator = allocator,
         .js_state_dirty = js_state_dirty_ptr,
     };
@@ -228,7 +255,77 @@ pub fn initJSI(
     // Register metrics API (vim.metrics - performance tracking)
     metrics_api.register(runtime);
 
+    // Register fs API (global fs object)
+    const fs_ctx = allocator.create(fs_api.FsContext) catch @panic("Failed to allocate FsContext");
+    fs_ctx.* = fs_api.FsContext{
+        .allocator = allocator,
+    };
+    global_fs_ctx = fs_ctx;
+    fs_api.register(runtime, fs_ctx);
+
+    // Register process API (global process object)
+    const proc_ctx = allocator.create(process_api.ProcessContext) catch @panic("Failed to allocate ProcessContext");
+    proc_ctx.* = process_api.ProcessContext{
+        .allocator = allocator,
+    };
+    global_process_ctx = proc_ctx;
+    process_api.register(runtime, proc_ctx);
+
+    // Register fetch API (global fetch function)
+    const fetch_ctx = allocator.create(fetch_api.FetchContext) catch @panic("Failed to allocate FetchContext");
+    fetch_ctx.* = fetch_api.FetchContext{
+        .allocator = allocator,
+    };
+    global_fetch_ctx = fetch_ctx;
+    fetch_api.register(runtime, fetch_ctx);
+
+    // Register E2E API (vim.e2e - E2E testing and plugin development debugging)
+    // Available in ALL modes (Editor + EditorContext) - difference is rendering backend, not API
+    if (T == *Editor) {
+        const e2e_ctx = allocator.create(e2e_api.E2EContext) catch @panic("Failed to allocate E2EContext");
+        const current_buffer = editor_or_context.getCurrentBuffer() orelse @panic("No current buffer for E2E API");
+        e2e_ctx.* = e2e_api.E2EContext{
+            .allocator = allocator,
+            .buffer = current_buffer,
+            .mode_manager = &editor_or_context.mode_manager,
+            .visual_state = &editor_or_context.visual_state,
+            .register_mgr = &editor_or_context.register_mgr,
+            .editor = @ptrCast(editor_or_context),
+            .execute_keys_fn = &executeKeysWrapper,
+            .js_state_dirty = &editor_or_context.js_state_dirty,
+        };
+        global_e2e_ctx = e2e_ctx;
+        e2e_api.register(runtime, e2e_ctx);
+    } else if (T == *EditorContext) {
+        // EditorContext (headless mode) - uses accessor methods
+        const e2e_ctx = allocator.create(e2e_api.E2EContext) catch @panic("Failed to allocate E2EContext");
+        e2e_ctx.* = e2e_api.E2EContext{
+            .allocator = allocator,
+            .buffer = editor_or_context.buffer(),
+            .mode_manager = editor_or_context.mode_manager(),
+            .visual_state = editor_or_context.visual_state(),
+            .register_mgr = editor_or_context.register_mgr(),
+            .editor = @ptrCast(editor_or_context),
+            .execute_keys_fn = &executeKeysWrapperContext,
+            .js_state_dirty = null, // EditorContext doesn't need dirty tracking
+        };
+        global_e2e_ctx = e2e_ctx;
+        e2e_api.register(runtime, e2e_ctx);
+    }
+
     // JSI functions registered (silent mode)
+}
+
+/// Wrapper function for Editor.executeKeys that matches E2EContext function pointer signature
+fn executeKeysWrapper(editor_ptr: *anyopaque, keys_str: []const u8) anyerror!void {
+    const editor: *Editor = @ptrCast(@alignCast(editor_ptr));
+    _ = try editor.executeKeys(keys_str);
+}
+
+/// Wrapper function for EditorContext.executeKeys that matches E2EContext function pointer signature
+fn executeKeysWrapperContext(ctx_ptr: *anyopaque, keys_str: []const u8) anyerror!void {
+    const ctx: *EditorContext = @ptrCast(@alignCast(ctx_ptr));
+    try ctx.executeKeys(keys_str);
 }
 
 /// Re-register console.log with debugger pointer
@@ -290,6 +387,35 @@ pub fn deinitJSI() void {
     }
     // Clean up filetype context (no deinit needed, just free the struct)
     filetype_api.deinit();
+    // Clean up fs context
+    if (global_fs_ctx) |ctx| {
+        if (global_allocator) |alloc| {
+            alloc.destroy(ctx);
+        }
+        global_fs_ctx = null;
+    }
+    // Clean up process context
+    if (global_process_ctx) |ctx| {
+        if (global_allocator) |alloc| {
+            alloc.destroy(ctx);
+        }
+        global_process_ctx = null;
+    }
+    // Clean up fetch context
+    if (global_fetch_ctx) |ctx| {
+        if (global_allocator) |alloc| {
+            alloc.destroy(ctx);
+        }
+        global_fetch_ctx = null;
+    }
+    // Clean up e2e context
+    if (global_e2e_ctx) |ctx| {
+        e2e_api.deinit(); // Clean up test suites
+        if (global_allocator) |alloc| {
+            alloc.destroy(ctx);
+        }
+        global_e2e_ctx = null;
+    }
     global_allocator = null;
 }
 

@@ -87,7 +87,7 @@ pub const timeoutlen: u32 = 1000;
 **JavaScript API** (for user configuration):
 
 ```javascript
-// User can configure in init.js:
+// User can configure in index.js:
 vim.opt.timeoutlen = 500;  // 500ms timeout (faster than default)
 ```
 
@@ -306,35 +306,35 @@ test "KeymapManager: timer canceled on ESC" {
 }
 ```
 
-### Integration Tests (Debug Protocol)
+### Integration Tests (E2E)
 
-**File**: `test_keymap_timeout.sh`
+**File**: `tests/e2e/keymap_timeout/e2e.ts`
 
-```bash
-#!/bin/bash
-# Test keymap timeout behavior via debug protocol
+```typescript
+// Test keymap timeout behavior via E2E tests
 
-./zig-out/bin/vimcraft --debug-protocol &
-PID=$!
+vim.e2e.describe("Keymap Timeout", function() {
+    vim.e2e.test("timeout fires - execute first key as literal", function() {
+        // Type "j" which is prefix of "jk" mapping
+        vim.e2e.keys("j");
 
-# Test 1: Timeout fires → execute first key as literal
-{
-    echo '{"cmd":"execute_keys","args":{"keys":"j"},"id":"1"}'
-    sleep 1.5  # Wait for timeout (default 1000ms)
-    echo '{"cmd":"get_state","id":"2"}'  # Verify "j" executed as down motion
-    echo '{"cmd":"shutdown","id":"99"}'
-} | nc localhost 9999
+        // Wait for timeout (default 1000ms)
+        // After timeout, "j" should execute as down motion
+        const state = vim.e2e.getState();
+        vim.e2e.assert.true(state.cursor.line > 0, "j should have moved cursor down");
+    });
 
-# Test 2: Next key before timeout → execute mapping
-{
-    echo '{"cmd":"execute_keys","args":{"keys":"j"},"id":"3"}'
-    sleep 0.5  # Don't wait for timeout
-    echo '{"cmd":"execute_keys","args":{"keys":"k"},"id":"4"}'
-    echo '{"cmd":"get_state","id":"5"}'  # Verify "jk" mapping executed
-    echo '{"cmd":"shutdown","id":"99"}'
-} | nc localhost 9999
+    vim.e2e.test("next key before timeout - execute mapping", function() {
+        // Type "jk" quickly (before timeout)
+        vim.e2e.keys("jk");
 
-kill $PID
+        // Should execute "jk" mapping (e.g., ESC to normal mode)
+        const mode = vim.e2e.getMode();
+        vim.e2e.assert.equal(mode, "NORMAL", "jk mapping should execute");
+    });
+});
+
+vim.e2e.runAll();
 ```
 
 ## Behavioral Specification
@@ -396,7 +396,7 @@ kill $PID
 - [ ] Refactor built-in command handling into `handleBuiltinCommand()`
 - [ ] Modify `handleNormalMode()` to start/cancel timers
 - [ ] Add unit tests for timeout behavior
-- [ ] Add integration tests with debug protocol
+- [ ] Add E2E tests for timeout behavior
 - [ ] Update documentation with timeout examples
 
 ## Migration Notes

@@ -356,8 +356,8 @@ pub export fn createUserCommand(
     return c.hermes_value_create_undefined(runtime);
 }
 
-/// vim.api.delUserCommand(name)
-pub export fn delUserCommand(
+/// vim.api.deleteUserCommand(name)
+pub export fn deleteUserCommand(
     runtime_nullable: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -367,11 +367,11 @@ pub export fn delUserCommand(
     const ctx = @as(*UserCommandContext, @ptrCast(@alignCast(context.?)));
 
     if (arg_count < 1) {
-        return helpers.returnError(runtime, "delUserCommand requires 1 argument (name)");
+        return helpers.returnError(runtime, "deleteUserCommand requires 1 argument (name)");
     }
 
     const name = valueToString(runtime, args[0].?, ctx.allocator) catch {
-        return helpers.returnError(runtime, "delUserCommand: name must be a string");
+        return helpers.returnError(runtime, "deleteUserCommand: name must be a string");
     };
     defer ctx.allocator.free(name);
 
@@ -438,8 +438,8 @@ pub export fn bufCreateUserCommand(
     return c.hermes_value_create_undefined(runtime);
 }
 
-/// vim.api.bufDelUserCommand(buffer, name)
-pub export fn bufDelUserCommand(
+/// vim.api.bufDeleteUserCommand(buffer, name)
+pub export fn bufDeleteUserCommand(
     runtime_nullable: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -449,19 +449,19 @@ pub export fn bufDelUserCommand(
     const ctx = @as(*UserCommandContext, @ptrCast(@alignCast(context.?)));
 
     if (arg_count < 2) {
-        return helpers.returnError(runtime, "bufDelUserCommand requires 2 arguments (buffer, name)");
+        return helpers.returnError(runtime, "bufDeleteUserCommand requires 2 arguments (buffer, name)");
     }
 
     // Extract buffer (arg 0)
     const buffer_val = args[0].?;
     if (!c.hermes_value_is_number(buffer_val)) {
-        return helpers.returnError(runtime, "bufDelUserCommand: buffer must be a number");
+        return helpers.returnError(runtime, "bufDeleteUserCommand: buffer must be a number");
     }
     const buffer_id: usize = @intFromFloat(c.hermes_value_get_number(buffer_val));
 
     // Extract name (arg 1)
     const name = valueToString(runtime, args[1].?, ctx.allocator) catch {
-        return helpers.returnError(runtime, "bufDelUserCommand: name must be a string");
+        return helpers.returnError(runtime, "bufDeleteUserCommand: name must be a string");
     };
     defer ctx.allocator.free(name);
 
@@ -619,9 +619,9 @@ pub export fn userCommandHostObjectGet(
         usize,
     ) callconv(.c) ?*c.OVHermesValue).initComptime(.{
         .{ "createUserCommand", createUserCommand },
-        .{ "delUserCommand", delUserCommand },
+        .{ "deleteUserCommand", deleteUserCommand },
         .{ "bufCreateUserCommand", bufCreateUserCommand },
-        .{ "bufDelUserCommand", bufDelUserCommand },
+        .{ "bufDeleteUserCommand", bufDeleteUserCommand },
         .{ "getUserCommands", getUserCommands },
     });
 
@@ -640,9 +640,9 @@ pub export fn userCommandHostObjectEnumerator(
 
     const method_names = [_][]const u8{
         "createUserCommand",
-        "delUserCommand",
+        "deleteUserCommand",
         "bufCreateUserCommand",
-        "bufDelUserCommand",
+        "bufDeleteUserCommand",
         "getUserCommands",
     };
 
@@ -677,8 +677,8 @@ pub fn register(runtime: *c.OVHermesRuntime, ctx: *UserCommandContext) void {
 /// Legacy registration for direct function access
 pub fn registerLegacy(runtime: *c.OVHermesRuntime, ctx: *UserCommandContext) void {
     c.hermes_register_host_function(runtime, "createUserCommand", createUserCommand, @ptrCast(ctx));
-    c.hermes_register_host_function(runtime, "delUserCommand", delUserCommand, @ptrCast(ctx));
+    c.hermes_register_host_function(runtime, "deleteUserCommand", deleteUserCommand, @ptrCast(ctx));
     c.hermes_register_host_function(runtime, "bufCreateUserCommand", bufCreateUserCommand, @ptrCast(ctx));
-    c.hermes_register_host_function(runtime, "bufDelUserCommand", bufDelUserCommand, @ptrCast(ctx));
+    c.hermes_register_host_function(runtime, "bufDeleteUserCommand", bufDeleteUserCommand, @ptrCast(ctx));
     c.hermes_register_host_function(runtime, "getUserCommands", getUserCommands, @ptrCast(ctx));
 }

@@ -147,4 +147,3 @@ jobs:
       - name: Smoke test binary
         run: |
           LD_LIBRARY_PATH=vendor/go-enry/.shared/linux ./zig-out/bin/vimc --version || true
-          echo '{"cmd":"get_state","id":"1"}' | LD_LIBRARY_PATH=vendor/go-enry/.shared/linux timeout 2 ./zig-out/bin/vimc --debug-protocol || true

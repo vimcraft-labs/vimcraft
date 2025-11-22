@@ -1,15 +1,15 @@
-/// Autocmd API - Neovim-compatible autocommand system
+/// AutoCommand API - Neovim-compatible autocommand system
 ///
-/// Implements vim.api.createAutocmd() following Neovim's API:
+/// Implements vim.api.createAutoCommand() following Neovim's API:
 /// https://neovim.io/doc/user/api.html#nvim_create_autocmd()
 ///
 /// Usage:
-///   vim.api.createAutocmd('BufEnter', {
+///   vim.api.createAutoCommand('BufEnter', {
 ///       pattern: '*.js',
 ///       callback: (ev) => console.log('Entered JS file:', ev.file),
 ///   });
 ///
-///   vim.api.createAutocmd(['BufRead', 'BufNewFile'], {
+///   vim.api.createAutoCommand(['BufRead', 'BufNewFile'], {
 ///       pattern: ['*.ts', '*.tsx'],
 ///       group: 'typescript',
 ///       callback: (ev) => { /* ... */ },
@@ -66,8 +66,8 @@ pub const AutocmdManager = struct {
     }
 
     /// Create an autocommand
-    /// Returns autocmd ID (can be used with delAutocmd)
-    pub fn createAutocmd(
+    /// Returns autocmd ID (can be used with deleteAutoCommand)
+    pub fn createAutoCommand(
         self: *Self,
         events: []const []const u8,
         opts: AutocmdOpts,
@@ -128,7 +128,7 @@ pub const AutocmdManager = struct {
     }
 
     /// Delete an autocommand by ID
-    pub fn delAutocmd(self: *Self, id: u32) void {
+    pub fn deleteAutoCommand(self: *Self, id: u32) void {
         var iter = self.autocmds.iterator();
         while (iter.next()) |entry| {
             var list = entry.value_ptr.*;
@@ -155,7 +155,7 @@ pub const AutocmdManager = struct {
     pub fn clearGroup(self: *Self, group_name: []const u8) void {
         if (self.groups.get(group_name)) |ids| {
             for (ids.items) |id| {
-                self.delAutocmd(id);
+                self.deleteAutoCommand(id);
             }
         }
 
@@ -208,7 +208,7 @@ pub const AutocmdManager = struct {
 
         // Remove "once" autocmds
         for (to_remove.items) |id| {
-            self.delAutocmd(id);
+            self.deleteAutoCommand(id);
         }
     }
 
@@ -274,7 +274,7 @@ pub const AutocmdManager = struct {
     }
 };
 
-/// Options for createAutocmd
+/// Options for createAutoCommand
 pub const AutocmdOpts = struct {
     callback: *c.OVHermesValue,
     pattern: ?[]const u8 = null,
@@ -324,7 +324,7 @@ pub fn initAutocmdManager(manager: *AutocmdManager) void {
     global_autocmd_manager = manager;
 }
 
-/// vim.api.createAutocmd(event, opts)
+/// vim.api.createAutoCommand(event, opts)
 ///
 /// Creates an autocommand event handler.
 ///
@@ -333,7 +333,7 @@ pub fn initAutocmdManager(manager: *AutocmdManager) void {
 ///   opts: { callback, pattern?, group?, once?, desc? }
 ///
 /// Returns: number (autocmd ID)
-pub export fn apiCreateAutocmd(
+pub export fn apiCreateAutoCommand(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -343,7 +343,7 @@ pub export fn apiCreateAutocmd(
     const rt = runtime orelse return null;
 
     if (arg_count < 2) {
-        c.hermes_throw_error(rt, "createAutocmd requires 2 arguments (event, opts)");
+        c.hermes_throw_error(rt, "createAutoCommand requires 2 arguments (event, opts)");
         return null;
     }
 
@@ -367,30 +367,30 @@ pub export fn apiCreateAutocmd(
     }
 
     if (events_count == 0) {
-        c.hermes_throw_error(rt, "createAutocmd: event must be a string");
+        c.hermes_throw_error(rt, "createAutoCommand: event must be a string");
         return null;
     }
 
     // Parse opts object
     const opts_val = args[1] orelse {
-        c.hermes_throw_error(rt, "createAutocmd: opts is required");
+        c.hermes_throw_error(rt, "createAutoCommand: opts is required");
         return null;
     };
 
     if (!c.hermes_value_is_object(opts_val)) {
-        c.hermes_throw_error(rt, "createAutocmd: opts must be an object");
+        c.hermes_throw_error(rt, "createAutoCommand: opts must be an object");
         return null;
     }
 
     // Get callback (required)
     const callback = c.hermes_value_get_property(rt, opts_val, "callback") orelse {
-        c.hermes_throw_error(rt, "createAutocmd: opts.callback is required");
+        c.hermes_throw_error(rt, "createAutoCommand: opts.callback is required");
         return null;
     };
     defer c.hermes_value_destroy(callback);
 
     if (!c.hermes_value_is_function(rt, callback)) {
-        c.hermes_throw_error(rt, "createAutocmd: opts.callback must be a function");
+        c.hermes_throw_error(rt, "createAutoCommand: opts.callback must be a function");
         return null;
     }
 
@@ -451,9 +451,9 @@ pub export fn apiCreateAutocmd(
         .desc = desc_slice,
     };
 
-    const id = manager.createAutocmd(events_buf[0..events_count], opts) catch |err| {
+    const id = manager.createAutoCommand(events_buf[0..events_count], opts) catch |err| {
         var err_buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&err_buf, "createAutocmd failed: {s}", .{@errorName(err)}) catch "createAutocmd failed";
+        const msg = std.fmt.bufPrint(&err_buf, "createAutoCommand failed: {s}", .{@errorName(err)}) catch "createAutoCommand failed";
         c.hermes_throw_error(rt, msg.ptr);
         return null;
     };
@@ -461,9 +461,9 @@ pub export fn apiCreateAutocmd(
     return c.hermes_value_create_number(rt, @floatFromInt(id));
 }
 
-/// vim.api.delAutocmd(id)
+/// vim.api.deleteAutoCommand(id)
 /// Delete an autocommand by ID
-pub export fn apiDelAutocmd(
+pub export fn apiDeleteAutoCommand(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -473,7 +473,7 @@ pub export fn apiDelAutocmd(
     const rt = runtime orelse return null;
 
     if (arg_count < 1) {
-        c.hermes_throw_error(rt, "delAutocmd requires 1 argument (id)");
+        c.hermes_throw_error(rt, "deleteAutoCommand requires 1 argument (id)");
         return null;
     }
 
@@ -483,21 +483,21 @@ pub export fn apiDelAutocmd(
     };
 
     if (!c.hermes_value_is_number(args[0])) {
-        c.hermes_throw_error(rt, "delAutocmd: id must be a number");
+        c.hermes_throw_error(rt, "deleteAutoCommand: id must be a number");
         return null;
     }
 
     const id_f = c.hermes_value_get_number(args[0]);
     const id: u32 = @intFromFloat(id_f);
 
-    manager.delAutocmd(id);
+    manager.deleteAutoCommand(id);
 
     return c.hermes_value_create_undefined(rt);
 }
 
-/// vim.api.createAugroup(name, opts)
+/// vim.api.createAutoGroup(name, opts)
 /// Create or get an autocommand group
-pub export fn apiCreateAugroup(
+pub export fn apiCreateAutoGroup(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -507,7 +507,7 @@ pub export fn apiCreateAugroup(
     const rt = runtime orelse return null;
 
     if (arg_count < 1) {
-        c.hermes_throw_error(rt, "createAugroup requires at least 1 argument (name)");
+        c.hermes_throw_error(rt, "createAutoGroup requires at least 1 argument (name)");
         return null;
     }
 
@@ -517,7 +517,7 @@ pub export fn apiCreateAugroup(
     };
 
     if (!c.hermes_value_is_string(args[0])) {
-        c.hermes_throw_error(rt, "createAugroup: name must be a string");
+        c.hermes_throw_error(rt, "createAutoGroup: name must be a string");
         return null;
     }
 
@@ -549,9 +549,9 @@ pub export fn apiCreateAugroup(
     return c.hermes_value_create_string(rt, group_name.ptr, group_name.len);
 }
 
-/// vim.api.clearAutocmds(opts)
+/// vim.api.clearAutoCommands(opts)
 /// Clear autocommands matching criteria
-pub export fn apiClearAutocmds(
+pub export fn apiClearAutoCommands(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
     args: [*c]?*c.OVHermesValue,
@@ -590,10 +590,10 @@ pub export fn apiClearAutocmds(
 
 /// Register autocmd API functions
 pub fn register(runtime: *c.OVHermesRuntime) void {
-    c.hermes_register_host_function(runtime, "vimApiCreateAutocmd", apiCreateAutocmd, null);
-    c.hermes_register_host_function(runtime, "vimApiDelAutocmd", apiDelAutocmd, null);
-    c.hermes_register_host_function(runtime, "vimApiCreateAugroup", apiCreateAugroup, null);
-    c.hermes_register_host_function(runtime, "vimApiClearAutocmds", apiClearAutocmds, null);
+    c.hermes_register_host_function(runtime, "vimApiCreateAutoCommand", apiCreateAutoCommand, null);
+    c.hermes_register_host_function(runtime, "vimApiDeleteAutoCommand", apiDeleteAutoCommand, null);
+    c.hermes_register_host_function(runtime, "vimApiCreateAutoGroup", apiCreateAutoGroup, null);
+    c.hermes_register_host_function(runtime, "vimApiClearAutoCommands", apiClearAutoCommands, null);
 }
 
 // ============================================================================

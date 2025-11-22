@@ -352,7 +352,7 @@ echo "=== Testing /tmp/ Access (Should Fail) ==="
 echo "const x = 42;" > /tmp/vimcraft-prod-test.ts
 
 # Attempt to load (should fail)
-./zig-out/bin/vimc --debug-protocol << 'EOF' | grep -q "InvalidPath" && echo "✅ /tmp/ BLOCKED" || echo "❌ SECURITY BUG: /tmp/ ALLOWED"
+./zig-out/bin/vimc --headless-debug << 'EOF' | grep -q "InvalidPath" && echo "✅ /tmp/ BLOCKED" || echo "❌ SECURITY BUG: /tmp/ ALLOWED"
 {"cmd":"execute","args":{"code":"require('/tmp/vimcraft-prod-test.ts')"},"id":"1"}
 {"cmd":"shutdown","id":"2"}
 EOF
@@ -362,7 +362,7 @@ echo "=== Testing Case Variants (Should All Fail) ==="
 
 test_case_variant() {
     local path=$1
-    ./zig-out/bin/vimc --debug-protocol << EOF | grep -q "InvalidPath" && echo "✅ $path BLOCKED" || echo "❌ SECURITY BUG: $path ALLOWED"
+    ./zig-out/bin/vimc --headless-debug << EOF | grep -q "InvalidPath" && echo "✅ $path BLOCKED" || echo "❌ SECURITY BUG: $path ALLOWED"
 {"cmd":"execute","args":{"code":"require('$path')"},"id":"1"}
 {"cmd":"shutdown","id":"2"}
 EOF
@@ -376,7 +376,7 @@ echo ""
 echo "=== Testing Symlink Attack (Should Fail) ==="
 
 ln -sf /etc /tmp/vimcraft-prod-symlink
-./zig-out/bin/vimc --debug-protocol << 'EOF' | grep -q "InvalidPath" && echo "✅ Symlink BLOCKED" || echo "❌ SECURITY BUG: Symlink ALLOWED"
+./zig-out/bin/vimc --headless-debug << 'EOF' | grep -q "InvalidPath" && echo "✅ Symlink BLOCKED" || echo "❌ SECURITY BUG: Symlink ALLOWED"
 {"cmd":"execute","args":{"code":"require('/tmp/vimcraft-prod-symlink/passwd')"},"id":"1"}
 {"cmd":"shutdown","id":"2"}
 EOF

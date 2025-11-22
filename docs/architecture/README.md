@@ -10,7 +10,7 @@ Vimcraft follows a **four-layer architecture** inspired by Neovim but implemente
 
 ```
 ┌─────────────────────────────────────────┐
-│  Layer 4: User Configuration (init.js)  │
+│  Layer 4: User Configuration (index.js)  │
 └─────────────────────────────────────────┘
                   ↕
 ┌─────────────────────────────────────────┐
@@ -86,6 +86,17 @@ Vimcraft follows a **four-layer architecture** inspired by Neovim but implemente
 - Module system (CRITICAL - needed for plugins)
 - Error throwing and boundaries
 - Implementation priorities
+
+### [TypeScript Support](./typescript-support.md) 🆕 **Phase 4 Feature**
+**Purpose**: Architecture for TypeScript integration using SWC
+**Read if**: You want to understand TypeScript support design or implement it
+**Key topics**:
+- SWC integration (Rust → C → Zig FFI)
+- Transparent require() for .ts files
+- Plugin ecosystem (GitHub-based, no npm)
+- Optional TypeScript LSP plugin
+- Hot reload with transpile cache
+- Source map support
 
 ---
 

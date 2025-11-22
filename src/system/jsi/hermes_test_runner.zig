@@ -114,14 +114,14 @@ pub const TestRunner = struct {
             \\            fail: vimTestFail
             \\        },
             \\        api: {
-            \\            // Autocmd APIs
-            \\            createAutocmd: function(event, opts) {
+            \\            // AutoCommand APIs
+            \\            createAutoCommand: function(event, opts) {
             \\                autocmdId++;
             \\                return autocmdId;
             \\            },
-            \\            delAutocmd: function(id) {},
-            \\            createAugroup: function(name, opts) { return name; },
-            \\            clearAutocmds: function(opts) {},
+            \\            deleteAutoCommand: function(id) {},
+            \\            createAutoGroup: function(name, opts) { return name; },
+            \\            clearAutoCommands: function(opts) {},
             \\
             \\            // User Command APIs
             \\            createUserCommand: function(name, callback, opts) {
@@ -133,14 +133,14 @@ pub const TestRunner = struct {
             \\                }
             \\                userCommands[name] = { callback: callback, opts: opts || {} };
             \\            },
-            \\            delUserCommand: function(name) {
+            \\            deleteUserCommand: function(name) {
             \\                delete userCommands[name];
             \\            },
             \\            bufCreateUserCommand: function(buffer, name, callback, opts) {
             \\                if (!bufferCommands[buffer]) bufferCommands[buffer] = {};
             \\                bufferCommands[buffer][name] = { callback: callback, opts: opts || {} };
             \\            },
-            \\            bufDelUserCommand: function(buffer, name) {
+            \\            bufDeleteUserCommand: function(buffer, name) {
             \\                if (bufferCommands[buffer]) delete bufferCommands[buffer][name];
             \\            },
             \\            getUserCommands: function(opts) {

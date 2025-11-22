@@ -1,0 +1,996 @@
+/// E2E API - End-to-End Testing and Plugin Development Debugging API
+///
+/// This module provides the vim.e2e JavaScript API for:
+/// 1. E2E tests - Full stack testing with real editor state
+/// 2. Plugin development - Interactive debugging during development
+///
+/// Architecture:
+/// - JavaScript calls vim.e2e.* methods
+/// - Methods execute synchronously via JSI (same process)
+/// - State queries return current editor state
+/// - vim.e2e.keys() simulates actual keystrokes
+///
+/// This is NOT the debug protocol (stdin/stdout JSON-RPC).
+/// This runs IN-PROCESS for fast, synchronous access.
+const std = @import("std");
+const c_api = @import("c_api.zig");
+const c = c_api.c;
+const helpers = @import("helpers.zig");
+const Buffer = @import("../../editor/buffer/buffer.zig").Buffer;
+const ModeManager = @import("../../editor/mode/mode.zig").ModeManager;
+const VisualState = @import("../../editor/visual/visual.zig").VisualState;
+const RegisterManager = @import("../../editor/register/register.zig").RegisterManager;
+
+/// E2E Context - holds references to editor state
+pub const E2EContext = struct {
+    allocator: std.mem.Allocator,
+    buffer: *Buffer,
+    mode_manager: *ModeManager,
+    visual_state: *VisualState,
+    register_mgr: *RegisterManager,
+    /// Editor reference for executeKeys
+    editor: *anyopaque,
+    /// Function pointer to execute keys on editor
+    execute_keys_fn: *const fn (*anyopaque, []const u8) anyerror!void,
+    /// js_state_dirty flag for triggering re-renders
+    js_state_dirty: ?*bool,
+};
+
+/// Global context (set during registration)
+var global_e2e_ctx: ?*E2EContext = null;
+
+// ============================================================================
+// State Query Functions (synchronous)
+// ============================================================================
+
+/// vim.e2e.getCursor() -> { line: number, col: number }
+fn getCursor(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+
+    // Create result object { line: n, col: n }
+    const result = c.hermes_value_create_object(runtime) orelse return helpers.returnUndefined(runtime);
+    const line_val = c.hermes_value_create_number(runtime, @floatFromInt(ctx.buffer.cursor.row));
+    const col_val = c.hermes_value_create_number(runtime, @floatFromInt(ctx.buffer.cursor.col));
+
+    if (line_val != null and col_val != null) {
+        c.hermes_value_set_property(runtime, result, "line", line_val);
+        c.hermes_value_set_property(runtime, result, "col", col_val);
+        c.hermes_value_destroy(line_val);
+        c.hermes_value_destroy(col_val);
+    }
+
+    return result;
+}
+
+/// vim.e2e.getMode() -> string ("NORMAL" | "INSERT" | "VISUAL" | "COMMAND")
+fn getMode(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const mode_str = ctx.mode_manager.getModeString();
+    return c.hermes_value_create_string(runtime, mode_str.ptr, mode_str.len);
+}
+
+/// vim.e2e.getState() -> { mode, cursor, visual, buffer, registers }
+fn getState(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const allocator = ctx.allocator;
+
+    // Create result object
+    const result = c.hermes_value_create_object(runtime) orelse return helpers.returnUndefined(runtime);
+
+    // mode
+    const mode_str = ctx.mode_manager.getModeString();
+    const mode_val = c.hermes_value_create_string(runtime, mode_str.ptr, mode_str.len);
+    if (mode_val) |mv| {
+        c.hermes_value_set_property(runtime, result, "mode", mv);
+        c.hermes_value_destroy(mv);
+    }
+
+    // cursor
+    const cursor_obj = c.hermes_value_create_object(runtime);
+    if (cursor_obj) |co| {
+        const line_val = c.hermes_value_create_number(runtime, @floatFromInt(ctx.buffer.cursor.row));
+        const col_val = c.hermes_value_create_number(runtime, @floatFromInt(ctx.buffer.cursor.col));
+        if (line_val) |lv| {
+            c.hermes_value_set_property(runtime, co, "line", lv);
+            c.hermes_value_destroy(lv);
+        }
+        if (col_val) |cv| {
+            c.hermes_value_set_property(runtime, co, "col", cv);
+            c.hermes_value_destroy(cv);
+        }
+        c.hermes_value_set_property(runtime, result, "cursor", co);
+        c.hermes_value_destroy(co);
+    }
+
+    // visual
+    const visual_obj = c.hermes_value_create_object(runtime);
+    if (visual_obj) |vo| {
+        const active_val = c.hermes_value_create_boolean(runtime, ctx.visual_state.active);
+        if (active_val) |av| {
+            c.hermes_value_set_property(runtime, vo, "active", av);
+            c.hermes_value_destroy(av);
+        }
+        if (ctx.visual_state.active) {
+            const visual_mode = switch (ctx.visual_state.mode) {
+                .char => "char",
+                .line => "line",
+                .block => "block",
+            };
+            const mode_v = c.hermes_value_create_string(runtime, visual_mode.ptr, visual_mode.len);
+            if (mode_v) |m| {
+                c.hermes_value_set_property(runtime, vo, "mode", m);
+                c.hermes_value_destroy(m);
+            }
+
+            const anchor_obj = c.hermes_value_create_object(runtime);
+            if (anchor_obj) |ao| {
+                const anchor_line = c.hermes_value_create_number(runtime, @floatFromInt(ctx.visual_state.anchor.line));
+                const anchor_col = c.hermes_value_create_number(runtime, @floatFromInt(ctx.visual_state.anchor.col));
+                if (anchor_line) |al| {
+                    c.hermes_value_set_property(runtime, ao, "line", al);
+                    c.hermes_value_destroy(al);
+                }
+                if (anchor_col) |ac| {
+                    c.hermes_value_set_property(runtime, ao, "col", ac);
+                    c.hermes_value_destroy(ac);
+                }
+                c.hermes_value_set_property(runtime, vo, "anchor", ao);
+                c.hermes_value_destroy(ao);
+            }
+        }
+        c.hermes_value_set_property(runtime, result, "visual", vo);
+        c.hermes_value_destroy(vo);
+    }
+
+    // buffer
+    const buffer_obj = c.hermes_value_create_object(runtime);
+    if (buffer_obj) |bo| {
+        const modified_val = c.hermes_value_create_boolean(runtime, ctx.buffer.modified);
+        if (modified_val) |mv| {
+            c.hermes_value_set_property(runtime, bo, "modified", mv);
+            c.hermes_value_destroy(mv);
+        }
+        const line_count_val = c.hermes_value_create_number(runtime, @floatFromInt(ctx.buffer.lineCount()));
+        if (line_count_val) |lcv| {
+            c.hermes_value_set_property(runtime, bo, "lineCount", lcv);
+            c.hermes_value_destroy(lcv);
+        }
+
+        // buffer.lines (array of strings)
+        const line_count = ctx.buffer.lineCount();
+        const lines_arr = c.hermes_array_create(runtime, line_count);
+        if (lines_arr) |la| {
+            for (0..line_count) |i| {
+                if (ctx.buffer.getLine(i)) |line| {
+                    defer allocator.free(line);
+                    // Remove trailing newline for cleaner API
+                    const trimmed = if (line.len > 0 and line[line.len - 1] == '\n')
+                        line[0 .. line.len - 1]
+                    else
+                        line;
+                    const line_val = c.hermes_value_create_string(runtime, trimmed.ptr, trimmed.len);
+                    if (line_val) |lv| {
+                        c.hermes_array_set(runtime, la, i, lv);
+                        c.hermes_value_destroy(lv);
+                    }
+                }
+            }
+            c.hermes_value_set_property(runtime, bo, "lines", la);
+            c.hermes_value_destroy(la);
+        }
+        c.hermes_value_set_property(runtime, result, "buffer", bo);
+        c.hermes_value_destroy(bo);
+    }
+
+    return result;
+}
+
+/// vim.e2e.getBufferContent() -> string
+fn getBufferContent(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+
+    // Get full buffer content
+    const content = ctx.buffer.content.toString() catch return helpers.returnUndefined(runtime);
+    defer ctx.buffer.content.allocator.free(content);
+
+    return c.hermes_value_create_string(runtime, content.ptr, content.len);
+}
+
+/// vim.e2e.getLine(line_num) -> string
+fn getLine(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+
+    if (arg_count < 1) return helpers.returnUndefined(runtime);
+
+    const arg = args[0] orelse return helpers.returnUndefined(runtime);
+    const line_num = helpers.extractNumberArg(runtime.?, arg) catch return helpers.returnUndefined(runtime);
+    const line_idx: usize = @intFromFloat(line_num);
+
+    if (ctx.buffer.getLine(line_idx)) |line| {
+        defer ctx.allocator.free(line);
+        // Remove trailing newline
+        const trimmed = if (line.len > 0 and line[line.len - 1] == '\n')
+            line[0 .. line.len - 1]
+        else
+            line;
+        return c.hermes_value_create_string(runtime, trimmed.ptr, trimmed.len);
+    }
+
+    return helpers.returnUndefined(runtime);
+}
+
+// ============================================================================
+// Command Functions
+// ============================================================================
+
+/// vim.e2e.keys(keys_string) -> void
+/// Simulates keystrokes in the editor (synchronous)
+fn keysCmd(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+
+    if (arg_count < 1) return helpers.returnUndefined(runtime);
+
+    // Get keys string
+    var len: usize = 0;
+    const keys_ptr = c.hermes_value_get_string(runtime, args[0], &len);
+    if (keys_ptr == null or len == 0) return helpers.returnUndefined(runtime);
+
+    const keys_str = keys_ptr[0..len];
+
+    // Execute keys via editor
+    ctx.execute_keys_fn(ctx.editor, keys_str) catch |err| {
+        std.debug.print("[E2E] keys() error: {}\n", .{err});
+        return helpers.returnUndefined(runtime);
+    };
+
+    // Mark state dirty for re-render
+    if (ctx.js_state_dirty) |dirty| {
+        dirty.* = true;
+    }
+
+    return helpers.returnUndefined(runtime);
+}
+
+// ============================================================================
+// Test Structure Functions
+// ============================================================================
+
+/// Test suite storage
+const TestCase = struct {
+    name: []const u8,
+    callback: *c.OVHermesValue,
+};
+
+const TestSuite = struct {
+    name: []const u8,
+    tests: std.ArrayListUnmanaged(TestCase),
+};
+
+var test_suites: std.ArrayListUnmanaged(TestSuite) = .empty;
+var test_suites_initialized: bool = false;
+var current_suite: ?*TestSuite = null;
+
+/// vim.e2e.describe(name, fn) - Create test suite
+fn describeCmd(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    test_suites_initialized = true;
+
+    if (arg_count < 2) return helpers.returnUndefined(runtime);
+
+    // Get suite name
+    var name_len: usize = 0;
+    const name_ptr = c.hermes_value_get_string(runtime, args[0], &name_len);
+    if (name_ptr == null) return helpers.returnUndefined(runtime);
+
+    const suite_name = ctx.allocator.dupe(u8, name_ptr[0..name_len]) catch return helpers.returnUndefined(runtime);
+
+    // Create new suite
+    test_suites.append(ctx.allocator, TestSuite{
+        .name = suite_name,
+        .tests = .empty,
+    }) catch return helpers.returnUndefined(runtime);
+
+    // Set current suite and call the setup function
+    current_suite = &test_suites.items[test_suites.items.len - 1];
+    _ = c.hermes_call_function(runtime, args[1], null, 0);
+    current_suite = null;
+
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.test(name, fn) - Add test to current suite
+fn testCmd(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+
+    const suite = current_suite orelse {
+        std.debug.print("[E2E] test() called outside describe()\n", .{});
+        return helpers.returnUndefined(runtime);
+    };
+
+    if (arg_count < 2) return helpers.returnUndefined(runtime);
+
+    // Get test name
+    var name_len: usize = 0;
+    const name_ptr = c.hermes_value_get_string(runtime, args[0], &name_len);
+    if (name_ptr == null) return helpers.returnUndefined(runtime);
+
+    const test_name = ctx.allocator.dupe(u8, name_ptr[0..name_len]) catch return helpers.returnUndefined(runtime);
+
+    // Clone callback to prevent GC (args[1] is temporary)
+    const callback = args[1] orelse return helpers.returnUndefined(runtime);
+    const callback_clone = c.hermes_value_clone(runtime, callback) orelse {
+        ctx.allocator.free(test_name);
+        return helpers.returnUndefined(runtime);
+    };
+
+    suite.tests.append(ctx.allocator, TestCase{
+        .name = test_name,
+        .callback = callback_clone,
+    }) catch return helpers.returnUndefined(runtime);
+
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.runAll() - Run all registered tests
+fn runAllCmd(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse {
+        tests_complete = true;
+        return helpers.returnUndefined(runtime);
+    };
+
+    if (!test_suites_initialized) {
+        std.debug.print("[E2E] No test suites registered\n", .{});
+        tests_complete = true;
+        return helpers.returnUndefined(runtime);
+    }
+
+    var passed: usize = 0;
+    var failed: usize = 0;
+    var result_entries: std.ArrayList(TestResultEntry) = .empty;
+
+    std.debug.print("\n=== E2E Test Results ===\n\n", .{});
+
+    for (test_suites.items) |suite| {
+        std.debug.print("Suite: {s}\n", .{suite.name});
+
+        for (suite.tests.items) |test_case| {
+            // Clear and enable log capture for this test
+            if (current_test_logs.items.len > 0) {
+                // Clear previous logs (don't free, they're owned by results now)
+                current_test_logs.items.len = 0;
+            }
+            log_capture_enabled = true;
+
+            // Capture state BEFORE test execution (LLM debugging)
+            const state_before = captureStateSnapshot(ctx.allocator, ctx);
+
+            const test_start = std.time.milliTimestamp();
+
+            // Call test callback
+            const result = c.hermes_call_function(runtime, test_case.callback, null, 0);
+
+            const test_duration = std.time.milliTimestamp() - test_start;
+
+            // Capture state AFTER test execution (LLM debugging)
+            const state_after = captureStateSnapshot(ctx.allocator, ctx);
+
+            // Disable log capture and get logs
+            log_capture_enabled = false;
+            const test_logs = getAndClearTestLogs();
+            const test_checkpoints = getAndClearTestCheckpoints();
+
+            // Check for exception
+            if (c.hermes_has_exception(runtime)) {
+                const err_msg = c.hermes_get_exception_message(runtime);
+                std.debug.print("  FAIL: {s}\n", .{test_case.name});
+                std.debug.print("        Error: {s}\n", .{err_msg});
+                failed += 1;
+
+                // Clear exception for next test
+                c.hermes_clear_exception(runtime);
+
+                // Store result
+                result_entries.append(ctx.allocator, .{
+                    .name = test_case.name,
+                    .suite = suite.name,
+                    .passed = false,
+                    .error_message = if (err_msg != null) std.mem.span(err_msg) else null,
+                    .duration_ms = test_duration,
+                    .logs = test_logs,
+                    .state_before = state_before,
+                    .state_after = state_after,
+                    .checkpoints = test_checkpoints,
+                }) catch {};
+            } else {
+                std.debug.print("  PASS: {s}\n", .{test_case.name});
+                passed += 1;
+
+                // Store result
+                result_entries.append(ctx.allocator, .{
+                    .name = test_case.name,
+                    .suite = suite.name,
+                    .passed = true,
+                    .error_message = null,
+                    .duration_ms = test_duration,
+                    .logs = test_logs,
+                    .state_before = state_before,
+                    .state_after = state_after,
+                    .checkpoints = test_checkpoints,
+                }) catch {};
+            }
+
+            if (result) |r| {
+                c.hermes_value_destroy(r);
+            }
+        }
+        std.debug.print("\n", .{});
+    }
+
+    std.debug.print("Results: {d} passed, {d} failed\n\n", .{ passed, failed });
+
+    // Mark tests as complete and store results for Zig runner
+    markComplete(passed, failed, result_entries);
+
+    // Return results object to JavaScript
+    const results = c.hermes_value_create_object(runtime) orelse return helpers.returnUndefined(runtime);
+    const passed_val = c.hermes_value_create_number(runtime, @floatFromInt(passed));
+    const failed_val = c.hermes_value_create_number(runtime, @floatFromInt(failed));
+    const total_val = c.hermes_value_create_number(runtime, @floatFromInt(passed + failed));
+
+    if (passed_val) |pv| {
+        c.hermes_value_set_property(runtime, results, "passed", pv);
+        c.hermes_value_destroy(pv);
+    }
+    if (failed_val) |fv| {
+        c.hermes_value_set_property(runtime, results, "failed", fv);
+        c.hermes_value_destroy(fv);
+    }
+    if (total_val) |tv| {
+        c.hermes_value_set_property(runtime, results, "total", tv);
+        c.hermes_value_destroy(tv);
+    }
+
+    return results;
+}
+
+// ============================================================================
+// Assertion Functions
+// ============================================================================
+
+/// vim.e2e.assert.equal(actual, expected, message?)
+fn assertEqual(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    if (arg_count < 2) {
+        c.hermes_throw_error(runtime, "assert.equal requires 2 arguments");
+        return null;
+    }
+
+    // For simple numeric comparison
+    const actual = args[0];
+    const expected = args[1];
+
+    // Check if both are numbers
+    if (c.hermes_value_is_number(actual) and c.hermes_value_is_number(expected)) {
+        const actual_num = c.hermes_value_get_number(actual);
+        const expected_num = c.hermes_value_get_number(expected);
+
+        if (actual_num != expected_num) {
+            var msg_buf: [512]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "Expected {d}, got {d}", .{ expected_num, actual_num }) catch "Assertion failed";
+            // Null-terminate for C string compatibility
+            if (msg.len < msg_buf.len) {
+                msg_buf[msg.len] = 0;
+            }
+            c.hermes_throw_error(runtime, msg.ptr);
+            return null;
+        }
+    }
+
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.assert.mode(expected_mode)
+fn assertMode(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+
+    if (arg_count < 1) {
+        c.hermes_throw_error(runtime, "assert.mode requires 1 argument");
+        return null;
+    }
+
+    var expected_len: usize = 0;
+    const expected_ptr = c.hermes_value_get_string(runtime, args[0], &expected_len);
+    if (expected_ptr == null) {
+        c.hermes_throw_error(runtime, "assert.mode requires string argument");
+        return null;
+    }
+
+    const expected = expected_ptr[0..expected_len];
+    const actual = ctx.mode_manager.getModeString();
+
+    if (!std.mem.eql(u8, expected, actual)) {
+        var msg_buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&msg_buf, "Expected mode {s}, got {s}", .{ expected, actual }) catch "Mode assertion failed";
+        // Null-terminate for C string compatibility
+        if (msg.len < msg_buf.len) {
+            msg_buf[msg.len] = 0;
+        }
+        c.hermes_throw_error(runtime, msg.ptr);
+        return null;
+    }
+
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.assert.cursorAt(line, col)
+fn assertCursorAt(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+
+    if (arg_count < 2) {
+        c.hermes_throw_error(runtime, "assert.cursorAt requires 2 arguments (line, col)");
+        return null;
+    }
+
+    const expected_line = helpers.extractNumberArg(runtime.?, args[0].?) catch {
+        c.hermes_throw_error(runtime, "assert.cursorAt: line must be a number");
+        return null;
+    };
+    const expected_col = helpers.extractNumberArg(runtime.?, args[1].?) catch {
+        c.hermes_throw_error(runtime, "assert.cursorAt: col must be a number");
+        return null;
+    };
+
+    const actual_line = ctx.buffer.cursor.row;
+    const actual_col = ctx.buffer.cursor.col;
+
+    if (@as(usize, @intFromFloat(expected_line)) != actual_line or
+        @as(usize, @intFromFloat(expected_col)) != actual_col)
+    {
+        var msg_buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&msg_buf, "Expected cursor at ({d},{d}), got ({d},{d})", .{ @as(usize, @intFromFloat(expected_line)), @as(usize, @intFromFloat(expected_col)), actual_line, actual_col }) catch "Cursor assertion failed";
+        // Null-terminate for C string compatibility
+        if (msg.len < msg_buf.len) {
+            msg_buf[msg.len] = 0;
+        }
+        c.hermes_throw_error(runtime, msg.ptr);
+        return null;
+    }
+
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.assert.bufferContains(text)
+fn assertBufferContains(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+
+    if (arg_count < 1) {
+        c.hermes_throw_error(runtime, "assert.bufferContains requires 1 argument");
+        return null;
+    }
+
+    var expected_len: usize = 0;
+    const expected_ptr = c.hermes_value_get_string(runtime, args[0], &expected_len);
+    if (expected_ptr == null) {
+        c.hermes_throw_error(runtime, "assert.bufferContains requires string argument");
+        return null;
+    }
+
+    const expected = expected_ptr[0..expected_len];
+
+    // Get buffer content
+    const content = ctx.buffer.content.toString() catch {
+        c.hermes_throw_error(runtime, "Failed to get buffer content");
+        return null;
+    };
+    defer ctx.buffer.content.allocator.free(content);
+
+    if (std.mem.indexOf(u8, content, expected) == null) {
+        var msg_buf: [512]u8 = undefined;
+        const msg = std.fmt.bufPrint(&msg_buf, "Buffer does not contain: {s}", .{expected}) catch "Buffer assertion failed";
+        // Null-terminate for C string compatibility
+        if (msg.len < msg_buf.len) {
+            msg_buf[msg.len] = 0;
+        }
+        c.hermes_throw_error(runtime, msg.ptr);
+        return null;
+    }
+
+    return helpers.returnUndefined(runtime);
+}
+
+// ============================================================================
+// HostObject Registration
+// ============================================================================
+
+/// HostObject getter for vim.e2e
+pub export fn vimE2EHostObjectGet(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    prop_name: [*c]const u8,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+    const name = std.mem.span(prop_name);
+
+    // Map property names to functions
+    const PropertyMap = std.StaticStringMap(*const fn (?*c.OVHermesRuntime, ?*anyopaque, [*c]?*c.OVHermesValue, usize) callconv(.c) ?*c.OVHermesValue).initComptime(.{
+        // State queries
+        .{ "getCursor", getCursor },
+        .{ "getMode", getMode },
+        .{ "getState", getState },
+        .{ "getBufferContent", getBufferContent },
+        .{ "getLine", getLine },
+        // Commands
+        .{ "keys", keysCmd },
+        // Test structure
+        .{ "describe", describeCmd },
+        .{ "test", testCmd },
+        .{ "runAll", runAllCmd },
+        // Debugging
+        .{ "checkpoint", checkpointCmd },
+    });
+
+    // Handle assert sub-object
+    if (std.mem.eql(u8, name, "assert")) {
+        return createAssertObject(runtime);
+    }
+
+    const func = PropertyMap.get(name) orelse return null;
+    return c.hermes_create_function(runtime, prop_name, func, null);
+}
+
+/// Create the assert sub-object
+fn createAssertObject(runtime: ?*c.OVHermesRuntime) ?*c.OVHermesValue {
+    const assert_obj = c.hermes_value_create_object(runtime) orelse return null;
+
+    // Add assertion methods
+    const equal_fn = c.hermes_create_function(runtime, "equal", assertEqual, null);
+    if (equal_fn) |ef| {
+        c.hermes_value_set_property(runtime, assert_obj, "equal", ef);
+        c.hermes_value_destroy(ef);
+    }
+
+    const mode_fn = c.hermes_create_function(runtime, "mode", assertMode, null);
+    if (mode_fn) |mf| {
+        c.hermes_value_set_property(runtime, assert_obj, "mode", mf);
+        c.hermes_value_destroy(mf);
+    }
+
+    const cursor_fn = c.hermes_create_function(runtime, "cursorAt", assertCursorAt, null);
+    if (cursor_fn) |cf| {
+        c.hermes_value_set_property(runtime, assert_obj, "cursorAt", cf);
+        c.hermes_value_destroy(cf);
+    }
+
+    const contains_fn = c.hermes_create_function(runtime, "bufferContains", assertBufferContains, null);
+    if (contains_fn) |cf2| {
+        c.hermes_value_set_property(runtime, assert_obj, "bufferContains", cf2);
+        c.hermes_value_destroy(cf2);
+    }
+
+    return assert_obj;
+}
+
+/// Register vim.e2e API
+pub fn register(runtime: *c.OVHermesRuntime, ctx: *E2EContext) void {
+    global_e2e_ctx = ctx;
+
+    // Register vimE2E HostObject
+    c.hermes_register_host_object(
+        runtime,
+        "vimE2E",
+        vimE2EHostObjectGet,
+        null, // No setter
+        null, // No enumerator
+        @ptrCast(ctx),
+    );
+}
+
+/// Cleanup
+pub fn deinit() void {
+    if (test_suites_initialized) {
+        // Free test suite names, test case names, and cloned callbacks
+        if (global_e2e_ctx) |ctx| {
+            for (test_suites.items) |*suite| {
+                ctx.allocator.free(suite.name);
+                for (suite.tests.items) |test_case| {
+                    ctx.allocator.free(test_case.name);
+                    // Destroy cloned callback to prevent memory leak
+                    c.hermes_value_destroy(test_case.callback);
+                }
+                suite.tests.deinit(ctx.allocator);
+            }
+            test_suites.deinit(ctx.allocator);
+        }
+        test_suites_initialized = false;
+    }
+    global_e2e_ctx = null;
+    tests_complete = false;
+    last_results = null;
+}
+
+// ============================================================================
+// E2E Runner API (called from Zig, not JavaScript)
+// ============================================================================
+
+/// Track test completion state (for async tests)
+var tests_complete: bool = false;
+var last_results: ?TestResults = null;
+
+/// State snapshot for before/after comparison (LLM debugging)
+pub const StateSnapshot = struct {
+    mode: []const u8,
+    cursor_line: usize,
+    cursor_col: usize,
+    line_count: usize,
+    /// First few lines of buffer for context (avoids huge JSON)
+    buffer_preview: []const []const u8,
+};
+
+/// Checkpoint entry (labeled state snapshot during test)
+pub const CheckpointEntry = struct {
+    label: []const u8,
+    state: StateSnapshot,
+};
+
+/// Test results structure returned to Zig runner
+pub const TestResultEntry = struct {
+    name: []const u8,
+    suite: []const u8,
+    passed: bool,
+    error_message: ?[]const u8,
+    duration_ms: i64,
+    /// Console logs captured during test execution
+    logs: std.ArrayListUnmanaged([]const u8),
+    /// Editor state before test execution
+    state_before: ?StateSnapshot,
+    /// Editor state after test execution
+    state_after: ?StateSnapshot,
+    /// Checkpoints captured during test (via vim.e2e.checkpoint())
+    checkpoints: std.ArrayListUnmanaged(CheckpointEntry),
+};
+
+// ============================================================================
+// State Capture (for LLM-friendly debugging)
+// ============================================================================
+
+/// Maximum lines to include in buffer preview (avoids huge JSON)
+const MAX_PREVIEW_LINES: usize = 10;
+
+/// Capture current editor state as a snapshot
+fn captureStateSnapshot(allocator: std.mem.Allocator, ctx: *E2EContext) ?StateSnapshot {
+    // Get mode string (static, no allocation needed)
+    const mode = ctx.mode_manager.getModeString();
+
+    // Get line count
+    const line_count = ctx.buffer.lineCount();
+
+    // Capture first N lines for preview
+    const preview_count = @min(line_count, MAX_PREVIEW_LINES);
+    var preview_lines = allocator.alloc([]const u8, preview_count) catch return null;
+
+    for (0..preview_count) |i| {
+        if (ctx.buffer.getLine(i)) |line| {
+            // Remove trailing newline for cleaner output
+            const trimmed = if (line.len > 0 and line[line.len - 1] == '\n')
+                line[0 .. line.len - 1]
+            else
+                line;
+            preview_lines[i] = allocator.dupe(u8, trimmed) catch {
+                allocator.free(line);
+                // Free already allocated lines on error
+                for (0..i) |j| {
+                    allocator.free(preview_lines[j]);
+                }
+                allocator.free(preview_lines);
+                return null;
+            };
+            allocator.free(line);
+        } else {
+            preview_lines[i] = "";
+        }
+    }
+
+    return StateSnapshot{
+        .mode = mode,
+        .cursor_line = ctx.buffer.cursor.row,
+        .cursor_col = ctx.buffer.cursor.col,
+        .line_count = line_count,
+        .buffer_preview = preview_lines,
+    };
+}
+
+// ============================================================================
+// Checkpoint Capture (for LLM-friendly debugging)
+// ============================================================================
+
+/// Per-test checkpoint buffer - captures vim.e2e.checkpoint() calls
+var current_test_checkpoints: std.ArrayListUnmanaged(CheckpointEntry) = .empty;
+
+/// vim.e2e.checkpoint(label) - Capture labeled state snapshot
+/// Called during test execution to record intermediate states
+fn checkpointCmd(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+
+    // Get label (optional, defaults to "checkpoint")
+    var label: []const u8 = "checkpoint";
+    if (arg_count >= 1) {
+        if (args[0]) |arg| {
+            if (c.hermes_value_is_string(arg)) {
+                var label_len: usize = 0;
+                const label_ptr = c.hermes_value_get_string(runtime, arg, &label_len);
+                if (label_ptr != null and label_len > 0) {
+                    // Duplicate label string
+                    label = ctx.allocator.dupe(u8, label_ptr[0..label_len]) catch "checkpoint";
+                }
+            }
+        }
+    }
+
+    // Capture current state
+    if (captureStateSnapshot(ctx.allocator, ctx)) |state| {
+        current_test_checkpoints.append(ctx.allocator, .{
+            .label = label,
+            .state = state,
+        }) catch {};
+    }
+
+    return helpers.returnUndefined(runtime);
+}
+
+/// Get and clear current test checkpoints (returns ownership to caller)
+fn getAndClearTestCheckpoints() std.ArrayListUnmanaged(CheckpointEntry) {
+    const checkpoints = current_test_checkpoints;
+    current_test_checkpoints = .empty;
+    return checkpoints;
+}
+
+// ============================================================================
+// Log Capture (for LLM-friendly debugging)
+// ============================================================================
+
+/// Per-test log buffer - captures console.log during test execution
+var current_test_logs: std.ArrayListUnmanaged([]const u8) = .empty;
+var log_capture_enabled: bool = false;
+
+/// Enable log capture (called before each test)
+pub fn enableLogCapture() void {
+    log_capture_enabled = true;
+    // Note: current_test_logs is cleared before each test in runAllCmd
+}
+
+/// Disable log capture
+pub fn disableLogCapture() void {
+    log_capture_enabled = false;
+}
+
+/// Add a log entry (called from console.log override)
+pub fn captureLog(msg: []const u8) void {
+    if (!log_capture_enabled) return;
+    const ctx = global_e2e_ctx orelse return;
+
+    // Duplicate the string so it persists after caller frees it
+    const msg_copy = ctx.allocator.dupe(u8, msg) catch return;
+    current_test_logs.append(ctx.allocator, msg_copy) catch |err| {
+        std.debug.print("[E2E] Failed to capture log: {}\n", .{err});
+        ctx.allocator.free(msg_copy);
+    };
+}
+
+/// Get and clear current test logs (returns ownership to caller)
+fn getAndClearTestLogs() std.ArrayListUnmanaged([]const u8) {
+    // Return current logs and reset to empty
+    const logs = current_test_logs;
+    current_test_logs = .empty;
+    return logs;
+}
+
+pub const TestResults = struct {
+    total: usize,
+    passed: usize,
+    failed: usize,
+    tests: std.ArrayList(TestResultEntry),
+};
+
+/// Check if all E2E tests have completed (for async test support)
+/// Called by E2E runner event loop
+pub fn isComplete() bool {
+    // For now, tests are complete after runAll() is called
+    // In the future, this will support async tests with done() callbacks
+    return tests_complete;
+}
+
+/// Get test results after completion
+/// Called by E2E runner to build JSON report
+pub fn getResults() TestResults {
+    if (last_results) |results| {
+        return results;
+    }
+
+    // Return empty results if no tests ran
+    return TestResults{
+        .total = 0,
+        .passed = 0,
+        .failed = 0,
+        .tests = .empty,
+    };
+}
+
+/// Mark tests as complete (called after runAll finishes)
+fn markComplete(passed: usize, failed: usize, results: std.ArrayList(TestResultEntry)) void {
+    tests_complete = true;
+    last_results = TestResults{
+        .total = passed + failed,
+        .passed = passed,
+        .failed = failed,
+        .tests = results,
+    };
+}

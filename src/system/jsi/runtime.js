@@ -522,7 +522,7 @@ vim.api = {
     return vimApiGetHighlight(ns_id, name);
   },
 
-  // vim.api.createAutocmd(event, opts)
+  // vim.api.createAutoCommand(event, opts)
   //   event: string | string[] - Event name(s) to trigger on
   //   opts: object - Configuration options
   //     - callback: function (required) - Callback function called when event fires
@@ -537,66 +537,150 @@ vim.api = {
   //   FileType, InsertEnter, InsertLeave, ModeChanged, CursorMoved, etc.
   //
   // Examples:
-  //   vim.api.createAutocmd('BufEnter', {
+  //   vim.api.createAutoCommand('BufEnter', {
   //       pattern: '*.js',
   //       callback: (ev) => console.log('Entered JS file:', ev.file),
   //   });
   //
-  //   vim.api.createAutocmd(['BufRead', 'BufNewFile'], {
+  //   vim.api.createAutoCommand(['BufRead', 'BufNewFile'], {
   //       pattern: ['*.ts', '*.tsx'],
   //       group: 'typescript',
   //       callback: (ev) => { /* setup TypeScript */ },
   //   });
-  createAutocmd: function(event, opts) {
-    if (typeof vimApiCreateAutocmd !== 'undefined') {
-      return vimApiCreateAutocmd(event, opts);
+  createAutoCommand: function(event, opts) {
+    if (typeof vimApiCreateAutoCommand !== 'undefined') {
+      return vimApiCreateAutoCommand(event, opts);
     }
-    throw new Error('createAutocmd not available (headless mode)');
+    throw new Error('createAutoCommand not available (headless mode)');
   },
 
-  // vim.api.delAutocmd(id)
-  //   id: number - Autocommand ID (returned by createAutocmd)
+  // vim.api.deleteAutoCommand(id)
+  //   id: number - Autocommand ID (returned by createAutoCommand)
   //
   // Example:
-  //   const id = vim.api.createAutocmd('BufEnter', { callback: () => {} });
-  //   vim.api.delAutocmd(id);
-  delAutocmd: function(id) {
-    if (typeof vimApiDelAutocmd !== 'undefined') {
-      return vimApiDelAutocmd(id);
+  //   const id = vim.api.createAutoCommand('BufEnter', { callback: () => {} });
+  //   vim.api.deleteAutoCommand(id);
+  deleteAutoCommand: function(id) {
+    if (typeof vimApiDeleteAutoCommand !== 'undefined') {
+      return vimApiDeleteAutoCommand(id);
     }
-    throw new Error('delAutocmd not available (headless mode)');
+    throw new Error('deleteAutoCommand not available (headless mode)');
   },
 
-  // vim.api.createAugroup(name, opts)
+  // vim.api.createAutoGroup(name, opts)
   //   name: string - Group name
   //   opts: object (optional)
-  //     - clear: boolean - Clear all autocmds in group first
+  //     - clear: boolean - Clear all autocommands in group first
   //   returns: string (group name)
   //
   // Example:
-  //   vim.api.createAugroup('my_plugin', { clear: true });
-  //   vim.api.createAutocmd('BufEnter', {
+  //   vim.api.createAutoGroup('my_plugin', { clear: true });
+  //   vim.api.createAutoCommand('BufEnter', {
   //       group: 'my_plugin',
   //       callback: () => {},
   //   });
-  createAugroup: function(name, opts) {
-    if (typeof vimApiCreateAugroup !== 'undefined') {
-      return vimApiCreateAugroup(name, opts || {});
+  createAutoGroup: function(name, opts) {
+    if (typeof vimApiCreateAutoGroup !== 'undefined') {
+      return vimApiCreateAutoGroup(name, opts || {});
     }
-    throw new Error('createAugroup not available (headless mode)');
+    throw new Error('createAutoGroup not available (headless mode)');
   },
 
-  // vim.api.clearAutocmds(opts)
+  // vim.api.clearAutoCommands(opts)
   //   opts: object
-  //     - group: string - Clear all autocmds in group
+  //     - group: string - Clear all autocommands in group
   //
   // Example:
-  //   vim.api.clearAutocmds({ group: 'my_plugin' });
-  clearAutocmds: function(opts) {
-    if (typeof vimApiClearAutocmds !== 'undefined') {
-      return vimApiClearAutocmds(opts || {});
+  //   vim.api.clearAutoCommands({ group: 'my_plugin' });
+  clearAutoCommands: function(opts) {
+    if (typeof vimApiClearAutoCommands !== 'undefined') {
+      return vimApiClearAutoCommands(opts || {});
     }
-    throw new Error('clearAutocmds not available (headless mode)');
+    throw new Error('clearAutoCommands not available (headless mode)');
+  },
+
+  // vim.api.createUserCommand(name, callback, opts)
+  //   name: string - Command name (must start with uppercase)
+  //   callback: function(args) - Command callback
+  //     args: object containing:
+  //       - name: string (command name)
+  //       - args: string (raw arguments string)
+  //       - fargs: string[] (arguments split by whitespace)
+  //       - bang: boolean (whether ! was used)
+  //       - mods: string (command modifiers)
+  //       - line1, line2, range: (if range option set)
+  //       - count: number (if count option set)
+  //       - reg: string (if register option set)
+  //   opts: object (optional)
+  //     - desc: string (command description)
+  //     - bang: boolean (allow ! modifier)
+  //     - bar: boolean (allow | separator)
+  //     - force: boolean (overwrite existing)
+  //     - range: boolean | '%' | number
+  //     - count: number
+  //     - register: boolean
+  //     - nargs: '0' | '1' | '*' | '?' | '+'
+  //     - complete: string | function
+  //
+  // Example:
+  //   vim.api.createUserCommand('Greet', (args) => {
+  //     console.log(`Hello ${args.args}!`);
+  //   }, { desc: 'Greet someone' });
+  createUserCommand: function(name, callback, opts) {
+    if (typeof createUserCommand !== 'undefined') {
+      return createUserCommand(name, callback, opts || {});
+    }
+    throw new Error('createUserCommand not available (headless mode)');
+  },
+
+  // vim.api.deleteUserCommand(name)
+  //   name: string - Command name to delete
+  //
+  // Example:
+  //   vim.api.deleteUserCommand('Greet');
+  deleteUserCommand: function(name) {
+    if (typeof deleteUserCommand !== 'undefined') {
+      return deleteUserCommand(name);
+    }
+    throw new Error('deleteUserCommand not available (headless mode)');
+  },
+
+  // vim.api.bufCreateUserCommand(buffer, name, callback, opts)
+  //   buffer: number - Buffer number (0 for current)
+  //   name: string - Command name
+  //   callback: function(args) - Command callback
+  //   opts: object (same as createUserCommand)
+  //
+  // Example:
+  //   vim.api.bufCreateUserCommand(0, 'LocalCmd', (args) => {
+  //     console.log('Buffer-local command');
+  //   });
+  bufCreateUserCommand: function(buffer, name, callback, opts) {
+    if (typeof bufCreateUserCommand !== 'undefined') {
+      return bufCreateUserCommand(buffer, name, callback, opts || {});
+    }
+    throw new Error('bufCreateUserCommand not available (headless mode)');
+  },
+
+  // vim.api.bufDeleteUserCommand(buffer, name)
+  //   buffer: number - Buffer number (0 for current)
+  //   name: string - Command name to delete
+  bufDeleteUserCommand: function(buffer, name) {
+    if (typeof bufDeleteUserCommand !== 'undefined') {
+      return bufDeleteUserCommand(buffer, name);
+    }
+    throw new Error('bufDeleteUserCommand not available (headless mode)');
+  },
+
+  // vim.api.getUserCommands(opts)
+  //   opts: object (optional)
+  //     - builtin: boolean (include builtin commands)
+  //   returns: array of command info objects
+  getUserCommands: function(opts) {
+    if (typeof getUserCommands !== 'undefined') {
+      return getUserCommands(opts || {});
+    }
+    throw new Error('getUserCommands not available (headless mode)');
   }
 };
 
@@ -634,4 +718,179 @@ if (typeof vimEventEmitter !== 'undefined') {
 if (typeof vimMetrics !== 'undefined') {
   vim.metrics = vimMetrics;
   Object.freeze(vim.metrics);
+}
+
+// ============================================================================
+// Global Runtime APIs (Node.js/Browser compatible)
+// ============================================================================
+
+// fs - File System API (Node.js-style)
+// Provides file operations via Zig's std.fs
+//
+// fs.readTextFile(path) -> string
+//   Read file contents as UTF-8 string
+//   Example: const content = fs.readTextFile('/tmp/file.txt');
+//
+// fs.readFile(path) -> ArrayBuffer
+//   Read file contents as binary data
+//   Example: const buffer = fs.readFile('/tmp/file.bin');
+//
+// fs.writeFile(path, data) -> void
+//   Write string or ArrayBuffer to file
+//   Example: fs.writeFile('/tmp/file.txt', 'Hello World');
+//
+// fs.exists(path) -> boolean
+//   Check if file/directory exists
+//   Example: if (fs.exists('/tmp/file.txt')) { ... }
+//
+// fs.stat(path) -> { size, mtime, isDirectory, isFile }
+//   Get file metadata
+//   Example: const { size, mtime } = fs.stat('/tmp/file.txt');
+//
+// fs.readDir(path) -> string[]
+//   List directory contents
+//   Example: const files = fs.readDir('/tmp');
+//
+// Path expansion: ~ expands to HOME, relative paths become absolute
+if (typeof __fs !== 'undefined') {
+  globalThis.fs = __fs;
+  Object.freeze(globalThis.fs);
+}
+
+// process - Process API (Node.js-style)
+// Provides process information and subprocess spawning
+//
+// process.platform -> 'darwin' | 'linux' | 'windows'
+//   Get operating system
+//   Example: if (process.platform === 'darwin') { ... }
+//
+// process.arch -> 'arm64' | 'x64' | 'x86'
+//   Get CPU architecture
+//   Example: console.log(process.arch);
+//
+// process.env -> { HOME, PATH, USER, ... }
+//   Get environment variables (read-only)
+//   Example: const home = process.env.HOME;
+//
+// process.cwd() -> string
+//   Get current working directory
+//   Example: const cwd = process.cwd();
+//
+// process.spawn(command, args?, options?) -> { stdout, stderr, code }
+//   Spawn a child process and wait for completion
+//   Example:
+//     const result = process.spawn('ls', ['-la']);
+//     console.log(result.stdout);
+//     console.log('Exit code:', result.code);
+//
+//   Options:
+//     - cwd: string (working directory for subprocess)
+//
+// process.exit(code?) -> never
+//   Exit the editor with given code (default 0)
+//   Example: process.exit(1);
+if (typeof __process !== 'undefined') {
+  globalThis.process = __process;
+  Object.freeze(globalThis.process);
+}
+
+// fetch - HTTP Client API (Browser-style)
+// Provides HTTP requests via Zig's std.http.Client
+//
+// fetch(url, options?) -> Response
+//   Make an HTTP request (synchronous for now, TODO: add Promise)
+//
+//   url: string - Full URL (https://example.com/api)
+//
+//   options: object (optional)
+//     - method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS'
+//     - headers: { 'Content-Type': 'application/json', ... }
+//     - body: string (request body for POST/PUT/PATCH)
+//
+//   Response: object
+//     - status: number (HTTP status code)
+//     - ok: boolean (true if status 200-299)
+//     - statusText: string ('OK', 'Not Found', etc.)
+//     - headers: object (response headers)
+//     - _body: string (raw response body - use text() or json())
+//
+//   Response methods (via prototype):
+//     - text(): string - Get response body as string
+//     - json(): object - Parse response body as JSON
+//
+// Examples:
+//   // GET request
+//   const res = fetch('https://api.example.com/data');
+//   const data = res.json();
+//
+//   // POST with JSON body
+//   const res = fetch('https://api.example.com/data', {
+//     method: 'POST',
+//     headers: { 'Content-Type': 'application/json' },
+//     body: JSON.stringify({ key: 'value' })
+//   });
+if (typeof __fetch !== 'undefined') {
+  // Wrap native fetch to add text() and json() methods
+  globalThis.fetch = function(url, options) {
+    const response = __fetch(url, options);
+
+    // Add text() method (return _body as-is)
+    response.text = function() {
+      return this._body;
+    };
+
+    // Add json() method (parse _body as JSON)
+    response.json = function() {
+      return JSON.parse(this._body);
+    };
+
+    return response;
+  };
+}
+
+// ============================================================================
+// vim.e2e API - E2E Testing and Plugin Development Debugging
+// ============================================================================
+//
+// Provides a first-class TypeScript API for:
+// 1. E2E tests - Full stack testing with real editor state
+// 2. Plugin development - Interactive debugging during development
+//
+// API Overview:
+//
+// State Queries (synchronous):
+//   vim.e2e.getCursor()        -> { line, col }
+//   vim.e2e.getMode()          -> "NORMAL" | "INSERT" | "VISUAL" | "COMMAND"
+//   vim.e2e.getState()         -> { mode, cursor, visual, buffer, registers }
+//   vim.e2e.getBufferContent() -> string
+//   vim.e2e.getLine(n)         -> string
+//
+// Commands:
+//   vim.e2e.keys(keystrokes)   -> void (simulates typing)
+//
+// Test Structure:
+//   vim.e2e.describe(name, fn) -> void (create test suite)
+//   vim.e2e.test(name, fn)     -> void (add test case)
+//   vim.e2e.runAll()           -> { passed, failed, total }
+//
+// Assertions:
+//   vim.e2e.assert.equal(actual, expected, msg?)
+//   vim.e2e.assert.mode(expected)
+//   vim.e2e.assert.cursorAt(line, col)
+//   vim.e2e.assert.bufferContains(text)
+//
+// Example:
+//   vim.e2e.describe("Motion API", () => {
+//     vim.e2e.test("right() moves cursor right", () => {
+//       const before = vim.e2e.getCursor();
+//       vim.motion.right();
+//       const after = vim.e2e.getCursor();
+//       vim.e2e.assert.equal(after.col, before.col + 1);
+//     });
+//   });
+//   vim.e2e.runAll();
+//
+if (typeof vimE2E !== 'undefined') {
+  vim.e2e = vimE2E;
+  Object.freeze(vim.e2e);
 }

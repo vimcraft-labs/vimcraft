@@ -3,6 +3,10 @@ const posix = std.posix;
 
 /// Pseudoterminal wrapper for testing terminal applications
 /// Uses POSIX openpty() to create master/slave pty pair
+///
+/// This provides a PTY for spawning terminal applications and testing
+/// their I/O behavior. For state introspection, use --headless-debug mode
+/// which combines PTY + JSON protocol for LLM testing.
 pub const Pty = struct {
     master: std.fs.File,
     slave_fd: posix.fd_t,

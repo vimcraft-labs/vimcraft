@@ -109,7 +109,7 @@ Neovim uses a proven four-layer design:
 Mirror Neovim's structure:
 ```
 ~/.config/vimcraft/
-├── init.js                  # User config (JS instead of Lua)
+├── index.js                  # User config (JS instead of Lua)
 ├── plugin/*.js              # Auto-loaded plugins
 └── ftplugin/*.js            # File-type plugins
 ```

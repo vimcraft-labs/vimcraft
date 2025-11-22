@@ -4,7 +4,7 @@
 const std = @import("std");
 const Display = @import("../../backends/terminal/display/display.zig").Display;
 const helpers = @import("helpers.zig");
-const debug_log = @import("../../backends/debug/log.zig");
+const debug_log = @import("../../backends/headless/log.zig");
 
 // Import shared Hermes C API
 const c_api = @import("c_api.zig");

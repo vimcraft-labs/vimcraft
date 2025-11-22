@@ -4,7 +4,7 @@ const Display = @import("backends/terminal/display/display.zig").Display;
 const Mode = @import("editor/mode/mode.zig").Mode;
 const ModeManager = @import("editor/mode/mode.zig").ModeManager;
 const movement = @import("editor/movement/movement.zig");
-const debug_log = @import("backends/debug/log.zig");
+const debug_log = @import("backends/headless/log.zig");
 const TestHarness = @import("tools/test/harness.zig").TestHarness;
 const highlights = @import("editor/config/highlights.zig");
 const ConfigPaths = @import("editor/config/loader.zig").ConfigPaths;
@@ -12,11 +12,10 @@ const ConfigWatcher = @import("editor/config/watcher.zig").ConfigWatcher;
 const jsi_api = @import("system/jsi/jsi_api.zig");
 const event_loop = @import("system/event_loop/libuv.zig");
 const EventLoopProcessor = @import("system/event_loop/processor.zig").EventLoopProcessor;
-const debug_protocol = @import("debug.zig");
-const VisualState = @import("backends/terminal/visual/visual.zig").VisualState;
-const VisualMode = @import("backends/terminal/visual/visual.zig").VisualMode;
-const Position = @import("backends/terminal/visual/visual.zig").Position;
-const YankHighlight = @import("backends/terminal/visual/yank_highlight.zig").YankHighlight;
+const VisualState = @import("editor/visual/visual.zig").VisualState;
+const VisualMode = @import("editor/visual/visual.zig").VisualMode;
+const Position = @import("editor/visual/visual.zig").Position;
+const YankHighlight = @import("editor/visual/yank_highlight.zig").YankHighlight;
 const RegisterManager = @import("editor/register/register.zig").RegisterManager;
 const yank = @import("editor/buffer/yank.zig");
 const paste = @import("editor/buffer/paste.zig");
@@ -95,7 +94,7 @@ const DebuggerState = struct {
     fn deinit(self: *DebuggerState) void {
         if (self.debugger_ptr) |ptr| {
             if (self.allocator) |alloc| {
-                const Debugger = @import("backends/debug/debugger.zig").Debugger;
+                const Debugger = @import("backends/headless/debugger.zig").Debugger;
                 const debugger = @as(*Debugger, @ptrCast(@alignCast(ptr)));
                 debugger.deinit();
                 alloc.destroy(debugger);
@@ -398,8 +397,31 @@ pub fn main() !void {
                 }
             };
             return;
-        } else if (std.mem.eql(u8, cmd, "--debug-protocol")) {
-            return try runDebugProtocol(allocator);
+        } else if (std.mem.eql(u8, cmd, "types")) {
+            // vimc types - Sync vim.d.ts to config directory
+            const cmd_types = @import("cli/types.zig");
+            cmd_types.execute(allocator, parsed.check) catch |err| {
+                if (err == error.TypesOutdated) {
+                    // Non-zero exit for CI/CD integration
+                    std.process.exit(1);
+                }
+                std.debug.print("Types sync failed: {}\n", .{err});
+            };
+            return;
+        } else if (std.mem.eql(u8, cmd, "test")) {
+            // vimc test - Run E2E tests (PTY + Hermes + JSON report)
+            const cmd_test = @import("cli/test.zig");
+            const sandbox_path = parsed.file_path orelse {
+                std.debug.print("Error: 'test' requires a sandbox path\n", .{});
+                std.debug.print("Usage: vimc test <sandbox_path>\n", .{});
+                std.debug.print("Example: vimc test tests/e2e/basic\n", .{});
+                return;
+            };
+            const exit_code = cmd_test.execute(allocator, sandbox_path) catch |err| {
+                std.debug.print("Test runner failed: {}\n", .{err});
+                std.process.exit(1);
+            };
+            std.process.exit(exit_code);
         } else if (std.mem.eql(u8, cmd, "--test")) {
             if (parsed.file_path == null) {
                 std.debug.print("Error: --test requires a test file\n", .{});
@@ -435,23 +457,22 @@ fn printHelp() void {
         \\Usage:
         \\  vimc <file>                 Open file in interactive editor
         \\  vimc --debug <file>         Open file with Chrome DevTools debugging
-        \\  vimc --debug-protocol       Start debug protocol server (for ovdb)
-        \\  vimc --test <test_file>     Run automated test script
+        \\  vimc test <sandbox>         Run E2E tests (TypeScript + Hermes)
+        \\  vimc --test <test_file>     Run legacy test script (.test files)
         \\  vimc --repl                 Interactive debugging REPL
         \\  vimc --help                 Show this help message
         \\
         \\Interactive Mode:
         \\  Normal Vim keybindings (hjkl, i/a/o, dd/dw, u, :w, :q, :debug, etc.)
         \\
-        \\Debug Protocol Mode:
-        \\  JSON-based protocol for automated testing and LLM verification
-        \\  Used by ovdb debugger tool (see tools/ovdb/)
-        \\  Communicates via stdin/stdout
+        \\E2E Test Mode (vimc test):
+        \\  Run TypeScript tests with vim.e2e API
+        \\  Sandbox structure: tests/e2e/<name>/{config.ts,e2e.ts}
+        \\  JSON output for LLM debugging (state_before, state_after, checkpoints)
         \\
-        \\Test Mode:
+        \\Legacy Test Mode (--test):
         \\  Run .test files with scripted commands
         \\  Commands: LOAD, CMD, DUMP, DISPLAY, ASSERT_*
-        \\  See TEST_HARNESS.md for details
         \\
         \\REPL Mode:
         \\  Type commands interactively and see results
@@ -459,10 +480,10 @@ fn printHelp() void {
         \\  Type 'help' for available commands, 'quit' to exit
         \\
         \\Examples:
-        \\  vimc myfile.txt            # Edit a file
-        \\  vimc --test bug.test       # Run test script
-        \\  vimc --repl                # Start debugging REPL
-        \\  vimc --debug-protocol      # Start debug server (used by ovdb)
+        \\  vimc myfile.txt              # Edit a file
+        \\  vimc test tests/e2e/motion   # Run E2E tests
+        \\  vimc --test bug.test         # Run legacy test script
+        \\  vimc --repl                  # Start debugging REPL
         \\
     ;
     std.debug.print("{s}", .{help});
@@ -508,132 +529,6 @@ fn loadConfigFromTs(allocator: std.mem.Allocator, config: *highlights.HighlightC
         config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
         config.cursorline_enabled = true;
     }
-}
-
-/// Run debug protocol server (headless, stdin/stdout communication)
-fn runDebugProtocol(allocator: std.mem.Allocator) !void {
-    const EditorContext = @import("backends/debug/editor_context.zig").EditorContext;
-
-    // Create headless editor context (includes Display for visual debugging)
-    var editor_ctx = try EditorContext.init(allocator);
-    defer editor_ctx.deinit();
-
-    // Initialize JavaScript runtime for plugins (headless mode)
-    var debugger_state = DebuggerState{ .allocator = allocator };
-    defer debugger_state.deinit();
-
-    var highlight_config = highlights.HighlightConfig.init(allocator);
-    defer highlight_config.deinit();
-
-    const OptionsManager = @import("editor/config/options.zig").OptionsManager;
-    var options_mgr = OptionsManager.init(allocator);
-    defer options_mgr.deinit();
-
-    // Wire options manager to editor context
-    editor_ctx.options_manager = &options_mgr;
-
-    // Mark Hermes initialization start (if metrics enabled)
-    if (metrics_mod.getGlobalMetrics()) |m| {
-        m.markHermesInitStart();
-    }
-
-    // Initialize JavaScript runtime for config loading
-    const runtime_nullable = hermes_c.hermes_runtime_create();
-    if (runtime_nullable == null) {
-        std.debug.print("ERROR: Failed to create Hermes runtime\n", .{});
-        return error.HermesInitFailed;
-    }
-    const runtime = runtime_nullable.?;
-    defer hermes_c.hermes_runtime_destroy(runtime);
-
-    // Mark Hermes initialization end (if metrics enabled)
-    if (metrics_mod.getGlobalMetrics()) |m| {
-        m.markHermesInitEnd();
-    }
-
-    // Store runtime in debugger state
-    debugger_state.runtime = runtime;
-
-    // Register JSI host functions for EditorContext (headless mode)
-    jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &options_mgr, &editor_ctx, &editor_ctx.display);
-    defer jsi_api.deinitJSI(); // Clean up ConfigContext BEFORE runtime destruction
-
-    // Mark config load start (if metrics enabled)
-    if (metrics_mod.getGlobalMetrics()) |m| {
-        m.markConfigLoadStart();
-    }
-
-    // Load TypeScript config and plugins for headless debugging
-    // NOTE: Display exists but won't render output (no terminal flush)
-    // This allows visual debugging commands to inspect layer state
-    try loadConfigFromTs(allocator, &highlight_config, &debugger_state);
-
-    // Mark config load end (if metrics enabled)
-    if (metrics_mod.getGlobalMetrics()) |m| {
-        m.markConfigLoadEnd();
-    }
-
-    // Ensure cursorline has a default color if not set by init.ts
-    // This is critical for visual debugging commands (get_layer, get_output_grid)
-    if (highlight_config.cursorline == null) {
-        const cursorline_bg = try highlights.Color.fromHex("#1E202F");
-        highlight_config.cursorline = highlights.Highlight{ .bg = cursorline_bg };
-    }
-
-    // Apply sign column config BEFORE loading plugins (headless mode)
-    // This ensures getGutterWidth() returns correct value during plugin initialization
-    try editor_ctx.display.setSignColumn(highlight_config.signcolumn_mode);
-
-    // NOW load plugins with correct gutter width (headless mode)
-    var plugin_paths = try ConfigPaths.init(allocator);
-    defer plugin_paths.deinit();
-    if (plugin_paths.indexTsExists()) {
-        var plugin_files = try plugin_paths.discoverPlugins(allocator);
-        defer {
-            for (plugin_files.items) |*plugin| {
-                plugin.deinit(allocator);
-            }
-            plugin_files.deinit(allocator);
-        }
-
-        for (plugin_files.items) |plugin| {
-            if (plugin.has_entry) {
-                const filename = std.fs.path.basename(plugin.index_path);
-                const load_start = std.time.milliTimestamp();
-
-                jsi_api.loadPlugin(@ptrCast(runtime), plugin.index_path, allocator) catch |err| {
-                    std.debug.print("WARNING: Failed to load plugin {s}: {}\n", .{ filename, err });
-                    continue;
-                };
-
-                // Record plugin load time (if metrics enabled)
-                if (metrics_mod.getGlobalMetrics()) |m| {
-                    const load_time = std.time.milliTimestamp() - load_start;
-                    m.recordPluginLoad(filename, load_time) catch {};
-                }
-            }
-        }
-    }
-
-    // Create debug server with editor context (has Display for visual debugging)
-    var server = debug_protocol.server.Server.init(
-        allocator,
-        .{ .use_stdio = true },
-        &editor_ctx,
-    );
-    defer server.deinit();
-
-    // Start server with integrated event loop (supports animations and timers)
-    // The server now uses non-blocking stdin reads with poll() and interleaves:
-    // 1. Process stdin commands (non-blocking with 10ms poll timeout)
-    // 2. Run event_loop.runOnce()
-    // 3. Process timer queue
-    // 4. Process animation frame callbacks
-    // This enables animated plugins like Smear cursor in headless debug mode!
-    try server.start();
-
-    // Cleanup timers after server shuts down
-    jsi_api.deinitTimers();
 }
 
 /// Run the interactive editor (normal mode)
@@ -958,7 +853,7 @@ fn launchChromeDevTools(port: u16) !void {
 fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !void {
     const Editor = @import("editor/editor.zig").Editor;
     const TerminalBackend = @import("backends/terminal/backend.zig").TerminalBackend;
-    const Debugger = @import("backends/debug/debugger.zig").Debugger;
+    const Debugger = @import("backends/headless/debugger.zig").Debugger;
 
     // Initialize cellwidth system
     try cellwidth.initGlobal(allocator);
@@ -1049,7 +944,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     global_debugger = @ptrCast(&debugger);
 
     const LogEntry = @import("editor/log.zig").LogEntry;
-    const DebuggerLogLevel = @import("backends/debug/debugger.zig").LogLevel;
+    const DebuggerLogLevel = @import("backends/headless/debugger.zig").LogLevel;
 
     const logCallback = struct {
         fn callback(entry: LogEntry) void {
@@ -1526,6 +1421,7 @@ comptime {
     _ = @import("editor/editor_test.zig");
     _ = @import("system/jsi/jsi_tests.zig");
     _ = @import("editor/treesitter.zig"); // Tree-sitter tests
+    _ = @import("backends/headless/editor_context.zig"); // Headless editor + viewport scroll tests
 }
 
 // ============================================================================

@@ -3,10 +3,10 @@ const Buffer = @import("buffer/buffer.zig").Buffer;
 const ModeManager = @import("mode/mode.zig").ModeManager;
 const EditOps = @import("buffer/edit.zig").EditOps;
 const RegisterManager = @import("register/register.zig").RegisterManager;
-const VisualState = @import("../backends/terminal/visual/visual.zig").VisualState;
-const YankHighlight = @import("../backends/terminal/visual/yank_highlight.zig").YankHighlight;
+const VisualState = @import("visual/visual.zig").VisualState;
+const YankHighlight = @import("visual/yank_highlight.zig").YankHighlight;
 const movement = @import("movement/movement.zig");
-const Position = @import("../backends/terminal/visual/visual.zig").Position;
+const Position = @import("visual/visual.zig").Position;
 const yank = @import("buffer/yank.zig");
 const paste = @import("buffer/paste.zig");
 const visual_ops = @import("buffer/visual_ops.zig");
@@ -180,7 +180,7 @@ pub const Editor = struct {
     // Null until JSI runtime is available (terminal backend sets this during JSI setup)
     event_emitter: ?*EventEmitter = null,
 
-    // Autocmd manager for Neovim-compatible autocommands (vim.api.createAutocmd)
+    // Autocmd manager for Neovim-compatible autocommands (vim.api.createAutoCommand)
     // Null until JSI runtime is available (terminal backend sets this during JSI setup)
     autocmd_manager: ?*AutocmdManager = null,
 
@@ -1019,6 +1019,11 @@ pub const Editor = struct {
                         movement.moveToFileStart(buf);
                         self.pending_cmd.clear();
                         return true; // Moved to file start
+                    } else {
+                        // Not a valid g-command (e.g., user pressed g then G)
+                        // Clear pending and fall through to process char as standalone command
+                        self.pending_cmd.clear();
+                        // Fall through to single-char handling below (don't return)
                     }
                 }
 
@@ -1118,8 +1123,14 @@ pub const Editor = struct {
                     }
                 }
             }
-            self.pending_cmd.clear();
-            return true; // Pending command executed (dd, yy, etc.), state changed
+            // Only return if pending_cmd is still set (meaning a command was executed)
+            // If pending_cmd was cleared by a handler for fallthrough (e.g., 'g' then 'G'),
+            // we should continue to single-char handling instead of returning
+            if (self.pending_cmd.get() != null) {
+                self.pending_cmd.clear();
+                return true; // Pending command executed (dd, yy, etc.), state changed
+            }
+            // Fallthrough: pending_cmd was cleared by handler, process char as standalone
         }
 
         // Single character commands

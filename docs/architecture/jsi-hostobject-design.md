@@ -395,8 +395,8 @@ test "HostObject GC cleanup" {
 #### Day 9: Integration Tests + Benchmarks
 
 ```bash
-# Integration test via debug protocol
-./scripts/test_hostobject_integration.sh
+# Integration test via vim.e2e
+vimc test tests/e2e/hostobject
 
 # Performance benchmarks
 ./scripts/benchmark_jsi.sh
@@ -479,7 +479,7 @@ void vimcraft_plugin_init(VimcraftRuntime* rt) {
 ### JavaScript Usage
 
 ```javascript
-// ~/.config/vimcraft/init.js
+// ~/.config/vimcraft/index.js
 
 // Load native plugin
 vim.plugins.load('fzf-native', { path: '~/.vimcraft/plugins/fzf-native.so' });

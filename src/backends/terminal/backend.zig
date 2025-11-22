@@ -26,6 +26,10 @@ pub const TerminalBackend = struct {
     // If length unchanged, assume only cursor moved → use lightweight renderCursorOnly()
     last_buffer_length: usize = 0,
 
+    // Viewport tracking (for zz/zt/zb scroll detection)
+    // Track viewport_top to detect if viewport scrolled (requires full re-render)
+    last_viewport_top: usize = 0,
+
     // Visual selection tracking (for cursor-only render in visual mode)
     // Track previous visual state to detect if selection region changed
     // If only cursor moved but anchor unchanged, still use cursor-only render
@@ -376,7 +380,7 @@ pub const TerminalBackend = struct {
 
                         if (had_visual_selection) {
                             const visual_ops = @import("../../editor/buffer/visual_ops.zig");
-                            const Position = @import("visual/visual.zig").Position;
+                            const Position = @import("../../editor/visual/visual.zig").Position;
 
                             const cursor_pos = Position{
                                 .line = buf.cursor.row,
@@ -710,9 +714,26 @@ pub const TerminalBackend = struct {
         self.last_cursor_line = current_cursor_line;
         self.last_cursor_col = current_cursor_col;
 
-        // CURSOR-ONLY RENDER PATH: Skip compositor if only cursor moved
+        // CRITICAL FIX: Detect if viewport scroll is needed
+        // If cursor moved beyond viewport boundaries, we MUST do a full render to update screen content
+        // renderCursorOnly() only moves the terminal cursor, it doesn't re-render buffer content
+        const viewport_scroll_needed = if (buf) |b| blk: {
+            const text_rows = if (self.display.terminal_rows > 1) self.display.terminal_rows - 1 else 1;
+            const cursor_below_viewport = b.cursor.row >= self.display.viewport_top + text_rows;
+            const cursor_above_viewport = b.cursor.row < self.display.viewport_top;
+            break :blk cursor_below_viewport or cursor_above_viewport;
+        } else false;
+
+        // CRITICAL FIX: Detect if viewport_top changed (zz/zt/zb commands)
+        // These commands change viewport_top without moving cursor outside viewport
+        // We must track viewport_top changes separately to trigger full re-render
+        const viewport_top_changed = (self.display.viewport_top != self.last_viewport_top);
+        self.last_viewport_top = self.display.viewport_top;
+
+        // CURSOR-ONLY RENDER PATH: Skip compositor if only cursor moved AND no viewport scroll needed
         // This reduces 457 cursor position codes to 1!
-        if (!buffer_changed and !yank_active and !visual_active) {
+        // CRITICAL: Also check viewport_top_changed for zz/zt/zb commands (scroll without cursor moving out of viewport)
+        if (!buffer_changed and !yank_active and !visual_active and !viewport_scroll_needed and !viewport_top_changed) {
             // Only cursor moved (Normal mode) - use lightweight path
             try self.display.renderCursorOnly(self.editor);
 

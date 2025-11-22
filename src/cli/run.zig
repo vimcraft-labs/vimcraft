@@ -14,7 +14,7 @@
 const std = @import("std");
 const jsi_api = @import("../system/jsi/jsi_api.zig");
 const highlights = @import("../editor/config/highlights.zig");
-const EditorContext = @import("../backends/debug/editor_context.zig").EditorContext;
+const EditorContext = @import("../backends/headless/editor_context.zig").EditorContext;
 const c_api = @import("../system/jsi/c_api.zig");
 const c = c_api.c;
 
@@ -51,7 +51,7 @@ pub fn execute(
     defer options_mgr.deinit();
 
     // Wire options manager to editor context
-    editor_ctx.options_manager = &options_mgr;
+    editor_ctx.setOptionsManager(&options_mgr);
 
     // Create Hermes runtime
     const runtime = c.hermes_runtime_create() orelse {

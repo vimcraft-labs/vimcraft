@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 // Test cursorline rendering using Debug Protocol
-// This spawns Vimcraft in --debug-protocol mode and verifies layer state
+// This spawns Vimcraft in --headless-debug mode and verifies layer state
 // TODO: This test is flaky - BrokenPipe errors and complex layer rendering issues
 // Need to investigate timing issues or improve the test harness.
 test "Cursorline: renders background to cursor layer via debug protocol" {

@@ -1,9 +1,11 @@
 /// Console API Module
 /// Handles console.log JSI function with Chrome DevTools Console integration
 /// Forwards logs to BOTH CDP debugger AND editor.logger (Core→Backend architecture)
+/// Also supports E2E mode log capture for LLM debugging
 const std = @import("std");
 const Editor = @import("../../editor/editor.zig").Editor;
-const EditorContext = @import("../../backends/debug/editor_context.zig").EditorContext;
+const EditorContext = @import("../../backends/headless/editor_context.zig").EditorContext;
+const e2e_api = @import("e2e_api.zig");
 
 // Import shared Hermes C API
 const c_api = @import("c_api.zig");
@@ -11,7 +13,7 @@ const c = c_api.c;
 
 // Import CDP debugger for console.log
 const cdp_c = @cImport({
-    @cInclude("backends/debug/cdp_debugger.h");
+    @cInclude("backends/headless/cdp_debugger.h");
 });
 
 /// Configuration for object serialization
@@ -221,12 +223,20 @@ export fn consoleLog(
     }
 
     // Forward to logger (info level for console.log)
-    // Only reaches here when NO CDP debugger (--debug-protocol mode or no debugging)
+    // Only reaches here when NO CDP debugger (--headless-debug mode or no debugging)
     const log_message = fbs.getWritten();
+
+    // Capture logs for E2E mode (LLM-friendly debugging)
+    e2e_api.captureLog(log_message);
+
     if (global_editor_with_logger) |editor| {
         editor.logger.info("{s}", .{log_message}) catch {};
     } else if (global_editor_context) |ctx| {
-        ctx.logger.info("{s}", .{log_message}) catch {};
+        ctx.logger().info("{s}", .{log_message}) catch {};
+    } else {
+        // Fallback: write to stderr if no logger is set
+        // This helps debug issues where setEditor wasn't called correctly
+        std.debug.print("[console.log] {s}\n", .{log_message});
     }
 
     return c.hermes_value_create_undefined(runtime_nullable);

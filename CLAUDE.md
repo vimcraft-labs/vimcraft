@@ -5,7 +5,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 ## Quick Navigation
 
 **Critical Workflows**:
-- [Testing Architecture](#testing-architecture-hybrid-approach) - PTY + Debug Protocol (complementary systems)
+- [Testing Architecture](#testing-architecture-two-level-design) - Unit tests + E2E (vimc test)
 - [Test-Driven Development (TDD)](#test-driven-development-tdd) - MANDATORY workflow: write tests first
 - [Logging Architecture](#logging-architecture) - Use `editor.logger`, not `std.debug.print`
 - [Debugging Principles](#debugging-principles) - 8 proven principles + tool selection guide
@@ -39,140 +39,211 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 **Reference Codebases**: `../neovim` (API compatibility), `../helix` (design patterns), `../ghostty` (Zig best practices)
 
-## Testing Architecture: Hybrid Approach
+## Testing Architecture: Two-Level Design
 
-**Critical**: Vimcraft uses **two complementary testing systems** for comprehensive coverage:
+**Critical**: Vimcraft uses a **simple two-level test architecture**:
 
-1. **PTY Testing** (95% terminal coverage) - Tests actual terminal backend via pseudoterminals
-2. **Debug Protocol** (100% state introspection) - Inspects internal state and logs
-
-See [docs/development/pty-testing.md](docs/development/pty-testing.md) for complete PTY guide.
-
-### Quick Reference: When to Use Each System
-
-**PTY Tests** (`zig build pty_tests`):
-- ✅ **Terminal I/O validation** - Input parsing, ANSI output, user experience
-- ✅ **Regression tests** - User-facing bugs (like `Aii` inserting on wrong line)
-- ✅ **Render timing bugs** - Issues that only appear when rendering between keystrokes
-
-**Debug Protocol** (`./zig-out/bin/vimc --debug-protocol`):
-- ✅ **State inspection** - Cursor position, mode, registers, buffer content
-- ✅ **Layer debugging** - Compositor pipeline, layer composition
-- ✅ **Log analysis** - Filtered logs with `get_logs` command
-
-**Best Practice**: Use BOTH! PTY reproduces user-facing bugs, Debug Protocol diagnoses root causes.
-
-### Example: Hybrid Debugging Workflow
-
-```bash
-# Step 1: Reproduce bug with PTY (simulates real user)
-zig test src/backends/terminal/tests/core_tests.zig --test-filter "Aii"
-# Test fails: "ii" appears on line 2 instead of line 1
-
-# Step 2: Diagnose with Debug Protocol (inspect internal state)
-./zig-out/bin/vimc --debug-protocol &
-PID=$!
-
-echo '{"cmd":"load_file","args":{"path":"/tmp/test.txt"},"id":"1"}'
-echo '{"cmd":"get_state","id":"2"}'
-# Response shows: cursor at (0,12), mode=INSERT
-
-echo '{"cmd":"get_logs","args":{"level":"debug","max_bytes":4096},"id":"3"}'
-# Logs reveal: "Skipping buildLineIndex (in transaction)"
-
-kill $PID
-
-# Step 3: Identify root cause
-# enterInsertMode() starts transaction → prevents line_starts rebuild
-
-# Step 4: Fix and verify with both systems
-zig build test         # Unit tests pass
-zig build pty_tests    # PTY tests pass (user experience validated)
+```
+tests/
+├── unit/           # Level 1: Pure Zig only (no Hermes)
+└── e2e/            # Level 2: Full stack (PTY + Hermes + TypeScript)
 ```
 
-## Debug Protocol & Verification System
+See [docs/development/testing-architecture.md](docs/development/testing-architecture.md) for complete guide.
 
-**Role**: State introspection and logging (complements PTY tests, does NOT replace them)
+### Level 1: Unit Tests (Pure Zig)
 
-### Background Mode (REQUIRED for Multi-Command Debugging)
+**Location**: `tests/unit/`
+**Run**: `zig build test`
+**Speed**: ~1ms per test
 
-**❌ WRONG** (one-shot mode wastes 67% on startup):
-```bash
-echo '{"cmd":"get_state","id":"1"}' | ./zig-out/bin/vimcraft --debug-protocol  # 195ms (130ms startup!)
+**What belongs here**:
+- Buffer operations (insert, delete, getLine)
+- Rope data structure (balance, split, concat)
+- Movement calculations (cursor math, boundary checks)
+- Compositor logic (cell blending, layer operations)
+- Pure functions with no external dependencies
+
+**Key rule**: **NO Hermes runtime in unit tests**. If it needs JavaScript, it's an E2E test.
+
+```zig
+// tests/unit/buffer_test.zig
+test "buffer insert at position" {
+    var buffer = try Buffer.init(allocator);
+    defer buffer.deinit();
+
+    try buffer.insertAt(0, "hello");
+    try std.testing.expectEqualStrings("hello", buffer.content.items);
+}
 ```
 
-**✅ CORRECT** (background mode - 10x faster):
-```bash
-./zig-out/bin/vimcraft --debug-protocol &
-VIMCRAFT_PID=$!
-echo '{"cmd":"get_state","id":"1"}'        # 65ms (no startup overhead)
-echo '{"cmd":"execute_keys","args":{"keys":"viw"},"id":"2"}'  # 65ms
-kill $VIMCRAFT_PID
+### Level 2: E2E Tests (Full Stack)
+
+**Location**: `tests/e2e/`
+**Run**: `vimc test <sandbox>` (e.g., `vimc test tests/e2e/motion`)
+**Speed**: ~100ms per test (fresh process each)
+
+**What belongs here**:
+- Vim command sequences (`jjj`, `viwd`, `dd`)
+- TypeScript plugin behavior (`vim.motion.*`, `vim.opt.*`)
+- User-facing workflows (editing, visual mode, registers)
+- Terminal rendering validation (ANSI escape codes)
+- Anything that needs Hermes/JSI
+
+**Architecture**: PTY + JSON protocol
+
+```
+┌────────────────────────────────────────────┐
+│              Vimcraft Process              │
+│                                            │
+│   stdin ──> Vim commands ──> Editor        │
+│                                │           │
+│                                v           │
+│                          Terminal renders  │
+│                          to PTY (internal) │
+│                                │           │
+│   stdout <── JSON state responses          │
+│                                            │
+└────────────────────────────────────────────┘
 ```
 
-**Rule**: ALWAYS use background mode for 2+ commands. Startup cost amortized → 2.5x faster for 10 commands.
+**Each E2E test has a sandbox** with its own TypeScript plugin:
 
-### Core Features
-
-**Architecture**: Dual implementation with shared handlers (73% code deduplication)
-- Terminal Mode: Unix socket server for live sessions (`debug_socket.zig`)
-- Headless Mode: stdio/socket server for automated testing (`server.zig`)
-- Shared Handlers: 5 unified command implementations (`handlers.zig`)
-- Protocol: JSON-RPC over stdin/stdout (MCP-style) → Deep introspection, fast iteration, deterministic results
-
-**Key Commands**:
-- `get_state` - Full editor snapshot (mode, cursor, buffer, visual, registers)
-- `execute_keys "viw"` - Simulate keystrokes
-- `get_layers` - Layer state inspection
-- `get_logs {"level":"info","max_bytes":4096}` - Query logs (size-limited for LLM context)
-
-**Status**: Background mode ready ✅, JSON parser robust ✅, 8 layers tracked ✅, Handler unification complete ✅. See [docs/development/debug-protocol.md](docs/development/debug-protocol.md) for protocol spec, [docs/reviews/debug-handlers-unification-review.md](docs/reviews/debug-handlers-unification-review.md) for architecture details.
-
-### When and How to Use Debug Protocol
-
-**Decision Checklist** (use debug protocol when):
-- [ ] Debugging crashes or panics → ALWAYS use to get exact line numbers
-- [ ] Investigating rendering bugs → Use to inspect layer state at each stage
-- [ ] Verifying multi-step operations → Use to check state after each step
-- [ ] Testing new features → Use to verify correctness systematically
-- [ ] User reports "X doesn't work" → Use to reproduce and inspect state
-
-**Workflow Template for Bugs**:
-```bash
-# 1. Start in background mode (CRITICAL for multi-command debugging)
-./zig-out/bin/vimcraft --debug-protocol &
-PID=$!
-
-# 2. Load test case
-echo '{"cmd":"load_file","args":{"path":"/tmp/test.txt"},"id":"1"}'
-
-# 3. Execute operation that triggers bug
-echo '{"cmd":"execute_keys","args":{"keys":"viw"},"id":"2"}'
-
-# 4. Inspect state at each pipeline stage
-echo '{"cmd":"get_state","id":"3"}'        # Overall state
-echo '{"cmd":"get_layers","id":"4"}'       # Layer composition
-echo '{"cmd":"get_logs","args":{"level":"debug","max_bytes":4096},"id":"5"}'  # Debug logs
-
-# 5. Analyze results, implement fix, repeat
-kill $PID
+```
+tests/e2e/
+├── motion/
+│   ├── config.ts        # TypeScript plugin for this test
+│   └── test.zig         # PTY test cases
+├── usercommand/
+│   ├── config.ts        # Plugin that creates :MyCommand
+│   └── test.zig
+└── ...
 ```
 
-**Common Debugging Scenarios**:
+**Example E2E test**:
+```zig
+// tests/e2e/motion/test.zig
+test "vim.motion.left moves cursor" {
+    var pty = try spawnWithConfig("tests/e2e/motion/config.ts");
+    defer pty.kill();
 
-| Symptom | Debug Protocol Workflow |
-|---------|------------------------|
-| **Crash/Panic** | Run with `--debug-protocol` to get stack trace with exact line numbers |
-| **No text rendered** | `get_layers` → check buffer layer has text → `get_logs` → check compositor blending |
-| **Wrong colors** | `get_state` → inspect fg/bg values → `get_layers` → check layer colors |
-| **Command doesn't work** | `execute_keys` → `get_state` → verify mode/cursor changed as expected |
-| **Performance issue** | Check `duration_ns` in responses → identify slow commands |
+    // Setup: cursor at col 5
+    try pty.sendKeys(":e /tmp/test.txt\n");
+    try pty.sendKeys("lllll");  // Move to col 5
 
-**Key Principle**: For ANY bug investigation with 2+ debug commands, ALWAYS use background mode (not one-shot).
+    // Execute: vim.motion.left() via plugin
+    try pty.sendKeys(":lua vim.motion.left()\n");
+
+    // Assert: cursor moved to col 4
+    const state = try pty.queryState();
+    try std.testing.expectEqual(@as(usize, 4), state.cursor.col);
+}
+```
+
+### Test Isolation: Fresh Process Per Test
+
+**Critical**: Each E2E test spawns a **fresh Vimcraft process** for 100% isolation.
+
+Why not session reuse?
+- Hermes has no "unload module" capability
+- Global JS variables persist between tests
+- Timers, user commands, keymaps leak across tests
+- 100ms startup is fast enough
+
+```zig
+test "test A" {
+    var pty = try spawnVimcraft();  // Fresh process
+    defer pty.kill();
+    // ... test A ...
+}  // Process killed
+
+test "test B" {
+    var pty = try spawnVimcraft();  // Fresh process (no state from A)
+    defer pty.kill();
+    // ... test B ...
+}
+```
+
+### PTY + JSON Protocol
+
+**Input**: Raw Vim commands (what you'd type in Vim)
+**Output**: JSON state responses (structured, parseable)
+
+```bash
+# Send Vim commands
+:e /tmp/test.txt
+jjj
+:DebugState
+
+# Receive JSON
+{"cursor":{"row":3,"col":0},"mode":"NORMAL","modified":false}
+```
+
+**Available debug commands**:
+- `:DebugState` - Full editor state snapshot
+- `:DebugLayers` - Compositor layer info
+- `:DebugRegisters` - All register contents
+- `:DebugLogs` - Recent log entries
+
+### TypeScript Plugin Flow in E2E
+
+```
+config.ts → esbuild → config.js → hermesc → config.hbc → Hermes
+```
+
+1. **Write TypeScript plugin** (`config.ts`)
+2. **Transpile** to JavaScript via esbuild
+3. **Compile** to Hermes bytecode (.hbc)
+4. **Cache** for subsequent runs
+5. **Load** in fresh Vimcraft process
+
+### Build Commands
+
+```bash
+zig build test                          # Run unit tests only (fast, ~100ms total)
+vimc test tests/e2e/motion              # Run single E2E test sandbox
+for d in tests/e2e/*/; do vimc test "$d"; done  # Run all E2E tests
+```
+
+### When to Write Each Type
+
+| Scenario | Test Type | Why |
+|----------|-----------|-----|
+| Buffer insert/delete | Unit | Pure Zig logic |
+| Rope balancing | Unit | Data structure |
+| Cursor boundary check | Unit | Pure calculation |
+| `vim.motion.left()` works | E2E | Needs Hermes + Editor |
+| `:MyCommand` works | E2E | Needs plugin loaded |
+| Visual mode + yank | E2E | User workflow |
+| ANSI escape codes | E2E | Terminal rendering |
+
+### Migration from Old Structure
+
+| Old Location | New Location |
+|--------------|--------------|
+| `src/**/*_test.zig` | `tests/unit/` |
+| `tests/hermes/*.ts` | `tests/e2e/*/config.ts` |
+| `src/backends/terminal/tests/core_tests.zig` | `tests/e2e/` |
+
+### Quick Reference
+
+```
+Unit tests:
+- Pure Zig only
+- No Hermes
+- ~1ms per test
+- zig build test
+
+E2E tests:
+- Full stack (Hermes + TypeScript)
+- Fresh process per test
+- ~100ms per test
+- vimc test tests/e2e/<sandbox>
+```
 
 ## Logging Architecture
 
-**Core→Backend design**: ALL logging through `editor.logger` (or `editor_ctx.logger` in headless).
+**Core→Backend design**: ALL logging through `editor.logger`.
 
 **Principle**: Single Source of Truth
 - ✅ `editor.logger.debug("Cursor at row={} col={}", .{row, col})`
@@ -183,7 +254,7 @@ kill $PID
 
 **Backends**:
 - Terminal mode (`--debug`): Chrome DevTools Console via CDP
-- Headless mode (`--debug-protocol`): `get_logs` command with size limits
+- E2E mode (`vimc test`): `vim.e2e.getLogs()` for test introspection
 - Ring buffer (1000 entries, FIFO)
 
 **When to Log**: State transitions, user actions, errors, transformations. AVOID hot loops, trivial getters.
@@ -199,15 +270,15 @@ kill $PID
 5. **Log Transformations** - Show before→after, not just final state
 6. **Targeted Tests** - Verify fix + edge cases + no side effects
 7. **Follow Breadcrumbs** - User reports contain critical clues
-8. **Use the Right Tool** - Debug Protocol for logic bugs, PTY for rendering bugs
+8. **Use the Right Tool** - E2E tests for logic bugs, PTY for rendering bugs
 
-### Debug Protocol vs PTY Testing: Real-World Case Study
+### E2E vs PTY Testing: Real-World Case Study
 
 **Cursor Flickering Bug** (January 2025) - Perfect example of tool selection:
 
 **Bug**: Cursor flickered between bright/faded states during rapid input (holding 'j')
 
-**What Debug Protocol Shows** (not helpful for this bug):
+**What E2E Tests Show** (not helpful for this bug):
 ```json
 {"mode":"NORMAL","cursor":{"line":10,"col":0}}  // Internal state correct ✅
 // But NO information about terminal escape codes being sent!
@@ -238,11 +309,11 @@ test "cursor codes not redundant" {
 1. Redundant cursor shape codes (`\x1b[2 q`) sent 20× per second
 2. Redundant cursor visibility toggle (`\x1b[?25l`, `\x1b[?25h`) 40× per second
 
-**Key Insight**: Debug Protocol shows state is correct, but PTY testing reveals rendering bugs. Neither tool alone is sufficient - you need BOTH!
+**Key Insight**: E2E tests show state is correct, but PTY testing reveals rendering bugs. Neither tool alone is sufficient - you need BOTH!
 
 ### Tool Selection Guide
 
-**Use Debug Protocol When**:
+**Use E2E Tests (`vimc test`) When**:
 - ✅ Debugging crashes/panics (exact stack traces)
 - ✅ Verifying internal state (cursor position, mode, buffer content)
 - ✅ Tracing logic errors (wrong calculations, incorrect flow)
@@ -258,12 +329,12 @@ test "cursor codes not redundant" {
 
 **Use BOTH When**:
 - ✅ Complex bugs with state + rendering components
-- ✅ First reproducing with PTY, then diagnosing with Debug Protocol
+- ✅ First reproducing with PTY, then diagnosing with E2E tests
 - ✅ Verifying complete fix (state correct AND rendering smooth)
 
 ### Common Bug Patterns by Tool
 
-**Caught by Debug Protocol**:
+**Caught by E2E Tests**:
 - Early return optimization → Skips validation (check opacity >= 1.0 returns)
 - Type conversion → Loses data (@intFromFloat with NaN/Infinity)
 - Null handling → Assumes non-null when optional (check .? usage)
@@ -278,7 +349,7 @@ test "cursor codes not redundant" {
 - Performance issues → Too many escape codes overwhelming terminal
 
 **Requires Both Tools**:
-- Input handling bugs → Key processed (Debug) but display wrong (PTY)
+- Input handling bugs → Key processed (E2E) but display wrong (PTY)
 - Rendering pipeline bugs → State correct but output corrupted
 - Timing bugs → State updates but render lags
 
@@ -286,30 +357,35 @@ test "cursor codes not redundant" {
 
 **Mandatory Workflow for Crashes**:
 ```
-1. REPRODUCE with debug protocol (get exact stack trace)
+1. REPRODUCE with E2E test (get exact stack trace)
 2. READ error output (don't guess - read the panic message)
 3. ZONE scope (narrow to exact function/line, not "somewhere in X")
 4. IMPLEMENT fix (single targeted fix, not shotgun approach)
-5. VERIFY with debug protocol (test passes = bug fixed)
+5. VERIFY with E2E test (test passes = bug fixed)
 6. ITERATE if needed (but should fix in 1-2 iterations max)
 ```
 
 **Rendering Bug Investigation Workflow**:
-```bash
-# Use debug protocol to inspect each pipeline stage
-./zig-out/bin/vimcraft --debug-protocol &
+```typescript
+// Use vim.e2e API to inspect each pipeline stage
+vim.e2e.describe("Debug rendering bug", function() {
+    vim.e2e.test("check layer composition", function() {
+        // 1. Verify source data (Buffer layer)
+        const state = vim.e2e.getState();
+        console.log("Buffer:", state.buffer);
 
-# 1. Verify source data (Buffer layer)
-echo '{"cmd":"get_state","id":"1"}'  # Check buffer content
+        // 2. Check layer composition (Compositor)
+        const layers = vim.e2e.getLayers();
+        console.log("Layers:", layers);
 
-# 2. Check layer composition (Compositor)
-echo '{"cmd":"get_layers","id":"2"}'  # Are layers enabled/dirty?
+        // 3. Query debug logs (transformations)
+        const logs = vim.e2e.getLogs({ level: "debug", maxBytes: 4096 });
+        console.log("Logs:", logs);
 
-# 3. Query debug logs (transformations)
-echo '{"cmd":"get_logs","args":{"max_bytes":4096},"id":"3"}'  # Check blend/diff logs
-
-# 4. Identify WHERE data is lost (Buffer→Compositor→Diff→Terminal)
-# Bug is in the stage where data exists before but not after
+        // 4. Identify WHERE data is lost (Buffer→Compositor→Diff→Terminal)
+    });
+});
+vim.e2e.runAll();
 ```
 
 **Terminal Output Bug Workflow** (NEW):
@@ -339,7 +415,7 @@ editor.logger.debug("ESCAPE: sending {s}", .{escape_code});
 editor.logger.debug("CURSOR: shape={s} visibility={}", .{shape, visible});
 ```
 
-**Success Metrics**: Fix in 1-2 iterations (not 5-10), root cause identified (not guessed), verified with BOTH debug protocol AND PTY tests.
+**Success Metrics**: Fix in 1-2 iterations (not 5-10), root cause identified (not guessed), verified with BOTH E2E tests AND PTY tests.
 
 **Reference**: See [docs/bugfixes/cursor-flickering-fix.md](docs/bugfixes/cursor-flickering-fix.md) for detailed case study.
 
@@ -395,7 +471,7 @@ test "o command opens line AFTER current line" {
 2. **Test Correct Behavior**: Specify what SHOULD happen, not what currently happens.
 3. **Edge Cases**: Explicitly test boundaries (empty lines, end of file, etc.).
 4. **One Test Per Behavior**: Each test verifies ONE specific behavior.
-5. **Use Debug Protocol**: Verify fixes with `--debug-protocol` for integration testing.
+5. **Use E2E Tests**: Verify fixes with `vimc test` for integration testing.
 
 ### Example: TDD for Bug Fix
 
@@ -432,22 +508,25 @@ test "o command does NOT include last character" {
 **Step 4: Verify Test Passes** (run `zig build test`)
 - All tests pass ✅
 
-**Step 5: Verify with Debug Protocol**
-```bash
-# Create integration test
-cat > /tmp/test_o.txt << 'EOF'
-abc
-EOF
+**Step 5: Verify with E2E Test**
+```typescript
+// tests/e2e/o_command/e2e.ts
+vim.e2e.describe("o command bug fix", function() {
+    vim.e2e.test("o does NOT include last character", function() {
+        // Setup: Create file with "abc"
+        vim.e2e.keys(":e /tmp/test_o.txt<CR>");
+        vim.e2e.keys("cwabc<Esc>");
 
-{
-    echo '{"cmd":"load_file","args":{"path":"/tmp/test_o.txt"},"id":"1"}'
-    echo '{"cmd":"execute_keys","args":{"keys":"o"},"id":"2"}'
-    echo '{"cmd":"execute_keys","args":{"keys":"def"},"id":"3"}'
-    echo '{"cmd":"get_cursor","id":"4"}'
-    echo '{"cmd":"shutdown","id":"99"}'
-} | ./zig-out/bin/vimcraft --debug-protocol
+        // Execute 'o' from position (0,0)
+        vim.e2e.keys("0o");
+        vim.e2e.keys("def<Esc>");
 
-# Verify: cursor at (1,3), file contains "abc\ndef"
+        // Verify: cursor at (1,3), file contains "abc\ndef"
+        const cursor = vim.e2e.getCursor();
+        vim.e2e.assert.cursorAt(1, 2);  // After ESC, cursor at col 2
+    });
+});
+vim.e2e.runAll();
 ```
 
 ### Common TDD Mistakes
@@ -458,20 +537,20 @@ EOF
 4. **No Edge Cases** → Bugs slip through common-case tests
 5. **Ignoring Test Failures** → "I'll fix the test later" → Technical debt
 
-### TDD + Debug Protocol
+### TDD + E2E Tests
 
-**Best Practice**: Combine unit tests (fast) with debug protocol (integration):
+**Best Practice**: Combine unit tests (fast) with E2E tests (integration):
 
 ```
-Unit Test (zig build test)     → Verify logic correctness
-Debug Protocol (--debug-protocol) → Verify end-to-end behavior
+Unit Test (zig build test)    → Verify logic correctness
+E2E Test (vimc test)          → Verify end-to-end behavior
 ```
 
 **Workflow**:
 1. Write unit test specifying behavior
 2. Implement until unit test passes
-3. Verify with debug protocol to catch integration issues
-4. If debug protocol reveals issues, write MORE unit tests
+3. Verify with E2E test to catch integration issues
+4. If E2E test reveals issues, write MORE unit tests
 
 ### Success Criteria
 
@@ -479,7 +558,7 @@ Debug Protocol (--debug-protocol) → Verify end-to-end behavior
 - ✅ Test fails initially (proves it catches the bug)
 - ✅ Test specifies correct behavior (not current behavior)
 - ✅ Test passes after implementation
-- ✅ Debug protocol confirms fix works end-to-end
+- ✅ E2E test confirms fix works end-to-end
 
 **Remember**: Tests are specifications, not validation. Write the test you WISH you had when debugging.
 
@@ -508,9 +587,8 @@ vimcraft/
 │   │   │   ├── backend.zig   # Terminal I/O (bracketed paste)
 │   │   │   ├── display/      # Terminal rendering
 │   │   │   └── visual/       # Visual mode
-│   │   └── debug/            # Debug protocol backend
-│   │       ├── protocol.zig  # JSON-RPC commands
-│   │       ├── server.zig    # Debug server
+│   │   └── debug/            # Debug utilities
+│   │       ├── protocol.zig  # JSON-RPC commands (used by E2E)
 │   │       └── state.zig     # State serialization
 │   ├── mode/mode.zig         # Mode state machine
 │   ├── movement/movement.zig # Vim movement primitives
@@ -652,7 +730,7 @@ JavaScript → Proxy → C++ CustomHostObject → Zig HostObject Getter → Impl
 3. **Zig HostObject Getter** (`*_api.zig`) - O(1) dispatch via StaticStringMap
 4. **Zig Implementation** - Core functionality
 
-#### Migrated APIs (7 total, 11 HostObjects)
+#### Migrated APIs (8 total, 12 HostObjects)
 
 **1. vim.motion** (motion_api.zig)
 - 13 cursor movement primitives
@@ -684,6 +762,14 @@ JavaScript → Proxy → C++ CustomHostObject → Zig HostObject Getter → Impl
 - getLineContent(n) → ArrayBuffer (line view)
 - getLength(), getLineCount()
 - Use case: Zero-copy buffer content access from JavaScript
+
+**8. vim.e2e** (e2e_api.zig) - NEW!
+- E2E testing and plugin development debugging API
+- keys(), getCursor(), getState(), getMode(), getLayers(), getLogs()
+- describe(), test(), runAll() - Jest/Mocha-style test structure
+- assert.* - Rich assertion library (equal, mode, cursorAt, bufferContains)
+- Use case: E2E tests AND interactive plugin debugging
+- See [docs/api/vim-e2e.md](docs/api/vim-e2e.md) for complete API reference
 
 #### Implementation Pattern
 
@@ -1385,7 +1471,7 @@ make -f Makefile.hermes test-jsi # Run JS→Zig demo
 **Backends**:
 - `src/backends/terminal/backend.zig` - Terminal I/O (bracketed paste)
 - `src/backends/terminal/display/` - Terminal rendering
-- `src/backends/debug/{protocol,server,state}.zig` - Debug protocol
+- `src/backends/debug/{protocol,state}.zig` - State serialization (used by E2E)
 
 **System**:
 - `src/main.zig` - Entry point

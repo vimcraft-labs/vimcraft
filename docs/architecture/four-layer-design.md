@@ -44,7 +44,7 @@ User-facing API exposed to configuration.
 
 **Why JavaScript**: Familiar, rich ecosystem, TypeScript support.
 
-### Layer 4: User Configuration (init.js)
+### Layer 4: User Configuration (index.js)
 User's configuration and plugins.
 
 **Responsibilities**:
@@ -60,7 +60,7 @@ User's configuration and plugins.
 ## Communication Flow
 
 ```
-User Config (init.js)
+User Config (index.js)
     │  vim.opt.number = true
     ↓
 JavaScript API (vim.opt)

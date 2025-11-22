@@ -3,7 +3,7 @@
 /// React Native pattern: JavaScript manages callbacks, Zig only triggers them
 /// Uses libuv for async timer management with thread-safe queue
 const std = @import("std");
-const debug_log = @import("../../backends/debug/log.zig");
+const debug_log = @import("../../backends/headless/log.zig");
 
 // Import shared Hermes C API
 const c_api = @import("c_api.zig");

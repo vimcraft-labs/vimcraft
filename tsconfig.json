@@ -1,17 +1,18 @@
 {
   "compilerOptions": {
     "target": "ES2017",
-    "module": "commonjs",
-    "lib": ["ES2017"],
-    "outDir": "/Users/le/.config/vimcraft",
-    "rootDir": "./",
+    "module": "CommonJS",
+    "lib": ["ES2020"],
     "strict": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "typeRoots": ["./node_modules/@types", "./packages/types/src"],
-    "moduleResolution": "node"
+    "moduleResolution": "node",
+    "resolveJsonModule": true
   },
-  "include": ["init.ts"],
+  "include": [
+    "src/cli/vim.d.ts",
+    "init.ts"
+  ],
   "exclude": ["node_modules", "dist", "vendor", "zig-out", "zig-cache"]
 }

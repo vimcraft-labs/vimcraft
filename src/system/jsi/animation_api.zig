@@ -3,7 +3,7 @@
 /// Integrates with editor's render loop for smooth animations
 /// React Native pattern: JavaScript provides callback IDs
 const std = @import("std");
-const debug_log = @import("../../backends/debug/log.zig");
+const debug_log = @import("../../backends/headless/log.zig");
 
 // Import shared Hermes C API
 const c_api = @import("c_api.zig");

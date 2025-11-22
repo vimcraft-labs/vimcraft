@@ -2,10 +2,11 @@ const std = @import("std");
 const Display = @import("display.zig").Display;
 const Buffer = @import("../../../editor/buffer/buffer.zig").Buffer;
 const Editor = @import("../../../editor/editor.zig").Editor;
+const EditorContext = @import("../../headless/editor_context.zig").EditorContext;
 const highlights = @import("../../../editor/config/highlights.zig");
-const VisualState = @import("../visual/visual.zig").VisualState;
-const YankHighlight = @import("../visual/yank_highlight.zig").YankHighlight;
-const Position = @import("../visual/visual.zig").Position;
+const VisualState = @import("../../../editor/visual/visual.zig").VisualState;
+const YankHighlight = @import("../../../editor/visual/yank_highlight.zig").YankHighlight;
+const Position = @import("../../../editor/visual/visual.zig").Position;
 const char_width = @import("char_width.zig");
 const ListChars = @import("../../../editor/config/listchars.zig").ListChars;
 const SyntaxHighlighter = @import("../../../editor/treesitter/syntax_highlighter.zig").SyntaxHighlighter;
@@ -37,10 +38,12 @@ pub fn updateLayers(
 ) !void {
     // Get buffer from editor (handles both Editor and EditorContext types)
     const T = @TypeOf(editor);
-    const buffer = if (T == *@import("../../../editor/editor.zig").Editor)
+    const buffer = if (T == *Editor)
         editor.getCurrentBuffer() orelse return error.NoCurrentBuffer
+    else if (T == *EditorContext)
+        editor.buffer()
     else
-        &editor.buffer;
+        &editor.buffer; // Duck-typed fallback for MockEditor in benchmarks
 
     const text_rows = if (self.terminal_rows > 1) self.terminal_rows - 1 else 1;
 
@@ -126,10 +129,12 @@ fn updateBaseLayer(
 ) !void {
     // Get buffer from editor (handles both Editor and EditorContext types)
     const T = @TypeOf(editor);
-    const buffer = if (T == *@import("../../../editor/editor.zig").Editor)
+    const buffer = if (T == *Editor)
         editor.getCurrentBuffer() orelse return error.NoCurrentBuffer
+    else if (T == *EditorContext)
+        editor.buffer()
     else
-        &editor.buffer;
+        &editor.buffer; // Duck-typed fallback for MockEditor in benchmarks
     const gutter_width = self.gutter_manager.getTotalWidth();
 
     // Get Normal highlight from unified registry (Neovim/Helix pattern)
@@ -144,15 +149,25 @@ fn updateBaseLayer(
         undefined; // Won't be used if list_enabled = false
 
     // Create syntax highlighter if tree-sitter syntax available
-    // Both Editor and EditorContext have .syntax field
+    // Editor has .syntax field, EditorContext has .syntax() method
     var syntax_highlighter: ?SyntaxHighlighter = null;
-    if (@hasField(@TypeOf(editor.*), "syntax")) {
+    // Note: T is already defined above as @TypeOf(editor)
+    if (T == *Editor) {
         if (editor.syntax) |*syntax| {
             // SAFETY: Syntax and HighlightRegistry outlive this function
             syntax_highlighter = SyntaxHighlighter.init(
                 self.allocator, // Use Display's allocator (not page_allocator)
                 @constCast(syntax),
                 &editor.highlight_registry,
+            );
+        }
+    } else if (T == *EditorContext) {
+        if (editor.syntax()) |syntax| {
+            // SAFETY: Syntax and HighlightRegistry outlive this function
+            syntax_highlighter = SyntaxHighlighter.init(
+                self.allocator, // Use Display's allocator (not page_allocator)
+                @constCast(syntax),
+                editor.highlight_registry(),
             );
         }
     }

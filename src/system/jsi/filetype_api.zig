@@ -216,12 +216,15 @@ pub fn register(runtime: *c.OVHermesRuntime, editor_or_context: anytype, allocat
     // Allocate FiletypeContext on heap (cleaned up in jsi_api.deinitJSI())
     const ctx = allocator.create(FiletypeContext) catch @panic("Failed to allocate FiletypeContext");
     const T = @TypeOf(editor_or_context);
+    const EditorContext = @import("../../backends/headless/editor_context.zig").EditorContext;
     // TODO: This buffer pointer becomes stale when user switches buffers (Editor only)
     // Need to refactor FiletypeContext to store *Editor and call getCurrentBuffer()
     const buffer_ptr = if (T == *@import("../../editor/editor.zig").Editor)
         editor_or_context.getCurrentBuffer() orelse @panic("No current buffer for filetype API")
+    else if (T == *EditorContext)
+        editor_or_context.buffer()
     else
-        &editor_or_context.buffer;
+        &editor_or_context.buffer; // Duck-typed fallback
     ctx.* = FiletypeContext{
         .buffer = buffer_ptr,
         .allocator = allocator,
@@ -237,35 +240,6 @@ pub fn register(runtime: *c.OVHermesRuntime, editor_or_context: anytype, allocat
         filetypeHostObjectGet,
         null, // No setter (read-only methods)
         filetypeHostObjectEnumerator,
-        @ptrCast(ctx),
-    );
-}
-
-/// Legacy registration (backwards compatibility)
-/// TODO: Remove after all examples/tests updated
-pub fn registerLegacy(runtime: *c.OVHermesRuntime, editor_or_context: anytype, allocator: std.mem.Allocator) void {
-    // Allocate FiletypeContext on heap (cleaned up in jsi_api.deinitJSI())
-    const ctx = allocator.create(FiletypeContext) catch @panic("Failed to allocate FiletypeContext");
-    const T = @TypeOf(editor_or_context);
-    // TODO: This buffer pointer becomes stale when user switches buffers (Editor only)
-    // Need to refactor FiletypeContext to store *Editor and call getCurrentBuffer()
-    const buffer_ptr = if (T == *@import("../../editor/editor.zig").Editor)
-        editor_or_context.getCurrentBuffer() orelse @panic("No current buffer for filetype API")
-    else
-        &editor_or_context.buffer;
-    ctx.* = FiletypeContext{
-        .buffer = buffer_ptr,
-        .allocator = allocator,
-    };
-
-    // Store in globals for cleanup
-    global_filetype_ctx = ctx;
-    global_allocator = allocator;
-
-    c.hermes_register_host_function(
-        runtime,
-        "vim_filetype_match",
-        vim_filetype_match,
         @ptrCast(ctx),
     );
 }

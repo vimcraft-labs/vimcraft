@@ -4,11 +4,6 @@ on:
   release:
     types: [created]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag to build'
-        required: true
-        type: string
 
 # Cancel in-progress runs for same ref
 concurrency:
@@ -27,29 +22,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS builds
+          # macOS builds (native - each runner builds for its own architecture)
           - os: macos-15-intel  # Intel x86_64 (official replacement for macos-13)
             platform: macos
             arch: x86_64
-            zig_target: x86_64-macos
 
           - os: macos-14  # Apple Silicon ARM64
             platform: macos
             arch: arm64
-            zig_target: aarch64-macos
 
-          # Linux builds (native - no cross-compilation)
+          # Linux builds (native - each runner builds for its own architecture)
           - os: ubuntu-22.04
             platform: linux
             arch: x86_64
-            zig_target: x86_64-linux-gnu  # Not used (native build)
 
           # ARM64 Linux (native build with clang++ + libc++)
           # Note: Free ARM64 runners for public repos use 'ubuntu-22.04-arm' label
           - os: ubuntu-22.04-arm
             platform: linux
             arch: arm64
-            zig_target: aarch64-linux-gnu  # Not used (native build)
 
     steps:
       - name: Checkout code
@@ -182,6 +173,44 @@ jobs:
           # Verify library exists
           ls -lh vendor/libuv/build/ || echo "Warning: libuv/build directory missing"
 
+      - name: Cache libgit2 build
+        id: cache-libgit2
+        uses: actions/cache@v4
+        with:
+          path: vendor/libgit2/build
+          key: libgit2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/libgit2/**/*.c', 'vendor/libgit2/**/*.h') }}
+          restore-keys: |
+            libgit2-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build libgit2
+        run: |
+          # Check if libgit2 library exists
+          LIBGIT2_BUILT=false
+          if [ -f "vendor/libgit2/build/libgit2.a" ]; then
+            LIBGIT2_BUILT=true
+          fi
+
+          if [ "$LIBGIT2_BUILT" = false ]; then
+            echo "libgit2 library not found, building..."
+            cd vendor/libgit2
+            mkdir -p build
+            cd build
+            cmake .. \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DBUILD_TESTS=OFF \
+              -DBUILD_CLI=OFF \
+              -DUSE_SSH=OFF \
+              -DUSE_HTTPS=ON
+            cmake --build . --target libgit2package
+            echo "✓ libgit2 built successfully"
+          else
+            echo "✓ libgit2 library found in cache"
+          fi
+
+          # Verify library exists
+          ls -lh vendor/libgit2/build/libgit2.a || echo "Warning: libgit2.a missing"
+
       - name: Cache go-enry build
         id: cache-enry
         uses: actions/cache@v4
@@ -275,25 +304,35 @@ jobs:
           # Show versions
           zig version
 
-          # Build with optimizations
-          # Note: Linux builds are native (no -Dtarget needed), macOS uses explicit target for cross-compile support
-          if [ "$RUNNER_OS" == "Linux" ]; then
-            zig build -Doptimize=ReleaseFast
-          else
-            zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseFast
-          fi
+          # Build with optimizations (native builds on all platforms)
+          # We have native runners for each architecture, so no cross-compilation needed:
+          # - macos-15-intel (x86_64) builds x86_64 natively
+          # - macos-14 (arm64) builds arm64 natively
+          # - ubuntu-22.04 (x86_64) builds x86_64 natively
+          # - ubuntu-22.04-arm (arm64) builds arm64 natively
+          zig build -Doptimize=ReleaseFast
 
           # Replace RPATH with release-appropriate paths
           # Binary will find libraries at ../lib relative to executable
           if [ "$RUNNER_OS" == "macOS" ]; then
-            # macOS: Delete build-time RPATHs and add release RPATH
-            install_name_tool -delete_rpath "$(pwd)/vendor/hermes/build/API/hermes" zig-out/bin/vimc || true
-            install_name_tool -delete_rpath "$(pwd)/vendor/hermes/build/jsi" zig-out/bin/vimc || true
-            install_name_tool -delete_rpath "$(pwd)/vendor/go-enry/.shared/darwin" zig-out/bin/vimc || true
+            # Show current RPATHs for debugging
+            echo "Current RPATHs before modification:"
+            otool -l zig-out/bin/vimc | grep -A2 "LC_RPATH" || echo "(none)"
+
+            # macOS: Delete absolute build-time RPATHs
+            # These are set by build.zig for local development but need to be relative for release
+            # Note: Paths may differ on CI vs local, so use || true
+            install_name_tool -delete_rpath "$(pwd)/vendor/hermes/build/API/hermes" zig-out/bin/vimc 2>/dev/null || true
+            install_name_tool -delete_rpath "$(pwd)/vendor/hermes/build/jsi" zig-out/bin/vimc 2>/dev/null || true
+            install_name_tool -delete_rpath "$(pwd)/vendor/go-enry/.shared/darwin" zig-out/bin/vimc 2>/dev/null || true
+            # Note: No vendor/esbuild-wrapper rpath exists - build.zig uses @executable_path directly (line 443)
+
+            # Add @executable_path/../lib for hermes/jsi/enry in lib/ directory
             install_name_tool -add_rpath "@executable_path/../lib" zig-out/bin/vimc
+            # Note: @executable_path for esbuild is already added by Zig build (build.zig:443)
           else
-            # Linux: Replace all RPATHs with release RPATH
-            patchelf --set-rpath '$ORIGIN/../lib' zig-out/bin/vimc
+            # Linux: Set RPATH for both lib/ and bin/ (esbuild is next to binary)
+            patchelf --set-rpath '$ORIGIN/../lib:$ORIGIN' zig-out/bin/vimc
           fi
 
           # Verify RPATH is set correctly
@@ -319,11 +358,12 @@ jobs:
       - name: Package binary
         id: package
         run: |
-          # Get version from tag or input
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.tag }}"
-          else
+          # Get version from release tag or git ref
+          if [ "${{ github.event_name }}" = "release" ]; then
             VERSION="${{ github.event.release.tag_name }}"
+          else
+            # Manual workflow_dispatch: use branch/tag name or short SHA
+            VERSION="${GITHUB_REF_NAME:-dev-$(git rev-parse --short HEAD)}"
           fi
 
           echo "Building package for version: $VERSION"
@@ -335,27 +375,27 @@ jobs:
           # Copy binary to bin/
           cp zig-out/bin/vimc vimcraft-package/bin/
 
-          # Bundle shared libraries to lib/ (required at runtime)
+          # Bundle shared libraries (hermes/enry to lib/, esbuild to bin/)
           if [ "$RUNNER_OS" == "Linux" ]; then
             cp vendor/hermes/build/API/hermes/libhermes_lean.so vimcraft-package/lib/
             cp vendor/hermes/build/jsi/libjsi.so vimcraft-package/lib/
             cp vendor/go-enry/.shared/linux/libenry.so vimcraft-package/lib/
-            # esbuild library (architecture-specific)
+            # esbuild library goes to bin/ (next to executable, uses $ORIGIN)
             if [ "${{ matrix.arch }}" == "arm64" ]; then
-              cp vendor/esbuild-wrapper/libesbuild_linux_aarch64.so vimcraft-package/lib/
+              cp vendor/esbuild-wrapper/libesbuild_linux_aarch64.so vimcraft-package/bin/
             else
-              cp vendor/esbuild-wrapper/libesbuild_linux_x86_64.so vimcraft-package/lib/
+              cp vendor/esbuild-wrapper/libesbuild_linux_x86_64.so vimcraft-package/bin/
             fi
           else
             # macOS: Copy .dylib files
             cp vendor/hermes/build/API/hermes/libhermes_lean.dylib vimcraft-package/lib/ || echo "Warning: libhermes_lean.dylib not found"
             cp vendor/hermes/build/jsi/libjsi.dylib vimcraft-package/lib/ || echo "Warning: libjsi.dylib not found"
             cp vendor/go-enry/.shared/darwin/libenry.dylib vimcraft-package/lib/ || echo "Warning: libenry.dylib not found"
-            # esbuild library (architecture-specific)
+            # esbuild library goes to bin/ (next to executable, uses @executable_path)
             if [ "${{ matrix.arch }}" == "arm64" ]; then
-              cp vendor/esbuild-wrapper/libesbuild_darwin_arm64.dylib vimcraft-package/lib/ || echo "Warning: libesbuild_darwin_arm64.dylib not found"
+              cp vendor/esbuild-wrapper/libesbuild_darwin_arm64.dylib vimcraft-package/bin/ || echo "Warning: libesbuild_darwin_arm64.dylib not found"
             else
-              cp vendor/esbuild-wrapper/libesbuild_darwin_x86_64.dylib vimcraft-package/lib/ || echo "Warning: libesbuild_darwin_x86_64.dylib not found"
+              cp vendor/esbuild-wrapper/libesbuild_darwin_x86_64.dylib vimcraft-package/bin/ || echo "Warning: libesbuild_darwin_x86_64.dylib not found"
             fi
           fi
 

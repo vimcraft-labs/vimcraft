@@ -248,14 +248,26 @@ OVHermesValue* hermes_evaluate_bytecode(
 }
 
 bool hermes_has_exception(OVHermesRuntime* runtime) {
-    return !runtime->last_exception_message.empty();
+    // Check both pending_throw (from host functions) and last_exception_message (from JS errors)
+    return runtime->pending_throw || !runtime->last_exception_message.empty();
 }
 
 const char* hermes_get_exception_message(OVHermesRuntime* runtime) {
-    if (runtime->last_exception_message.empty()) {
-        return nullptr;
+    // Prioritize pending_throw message (from host functions like assertions)
+    if (runtime->pending_throw) {
+        return runtime->pending_throw_message.c_str();
     }
-    return runtime->last_exception_message.c_str();
+    if (!runtime->last_exception_message.empty()) {
+        return runtime->last_exception_message.c_str();
+    }
+    return nullptr;
+}
+
+void hermes_clear_exception(OVHermesRuntime* runtime) {
+    if (!runtime) return;
+    runtime->pending_throw = false;
+    runtime->pending_throw_message.clear();
+    runtime->last_exception_message.clear();
 }
 
 void hermes_throw_error(OVHermesRuntime* runtime, const char* message) {
@@ -339,6 +351,9 @@ void hermes_register_host_function(
 
                 // Check if callback requested throw (Phase 4 - Error Throwing)
                 if (ctx.runtime->pending_throw) {
+                    // Save message to last_exception_message BEFORE throwing
+                    // This ensures hermes_get_exception_message() can retrieve it
+                    ctx.runtime->last_exception_message = ctx.runtime->pending_throw_message;
                     ctx.runtime->pending_throw = false;  // Reset flag
 
                     try {
@@ -573,6 +588,9 @@ OVHermesValue* hermes_create_function(
 
                 // Check if callback requested throw (Phase 4 - Error Throwing)
                 if (ctx.runtime->pending_throw) {
+                    // Save message to last_exception_message BEFORE throwing
+                    // This ensures hermes_get_exception_message() can retrieve it
+                    ctx.runtime->last_exception_message = ctx.runtime->pending_throw_message;
                     ctx.runtime->pending_throw = false;  // Reset flag
 
                     try {
@@ -781,11 +799,22 @@ OVHermesValue* hermes_call_function(
         }
 
         return new OVHermesValue(std::move(result));
-    } catch (const facebook::jsi::JSIException& e) {
+    } catch (const JSError& e) {
+        // JSError contains the actual error message from JavaScript
+        runtime->last_exception_message = e.getMessage();
+        return nullptr;
+    } catch (const JSIException& e) {
         runtime->last_exception_message = e.what();
         return nullptr;
+    } catch (const std::exception& e) {
+        runtime->last_exception_message = std::string("std::exception: ") + e.what();
+        return nullptr;
     } catch (...) {
-        runtime->last_exception_message = "Unknown error calling function";
+        // Only set generic message if no specific error was already captured
+        // (e.g., from pending_throw before the throw statement)
+        if (runtime->last_exception_message.empty()) {
+            runtime->last_exception_message = "Unknown error calling function";
+        }
         return nullptr;
     }
 }

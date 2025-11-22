@@ -10,6 +10,7 @@ pub const ParseResult = struct {
     debug: bool,
     no_cache: bool,
     metrics: bool,
+    check: bool, // For 'types --check'
     help: bool,
     version: bool,
     allocator: std.mem.Allocator,
@@ -37,6 +38,7 @@ pub fn parse(allocator: std.mem.Allocator) !ParseResult {
         .debug = false,
         .no_cache = false,
         .metrics = false,
+        .check = false,
         .help = false,
         .version = false,
         .allocator = allocator,
@@ -63,9 +65,16 @@ pub fn parse(allocator: std.mem.Allocator) !ParseResult {
             result.no_cache = true;
         } else if (std.mem.eql(u8, arg, "--metrics")) {
             result.metrics = true;
-        } else if (std.mem.eql(u8, arg, "--debug-protocol")) {
-            // Special mode - return immediately
-            result.command = try allocator.dupe(u8, arg);
+        } else if (std.mem.eql(u8, arg, "--check") or std.mem.eql(u8, arg, "-c")) {
+            result.check = true;
+        } else if (std.mem.eql(u8, arg, "test")) {
+            // Test runner - PTY + Hermes + JSON report
+            result.command = try allocator.dupe(u8, "test");
+            // Next argument is the sandbox path
+            if (i + 1 < args.len) {
+                i += 1;
+                result.file_path = try allocator.dupe(u8, args[i]);
+            }
             return result;
         } else if (std.mem.eql(u8, arg, "--test")) {
             result.command = try allocator.dupe(u8, arg);
@@ -101,28 +110,30 @@ pub fn printHelp() void {
         \\COMMANDS:
         \\  init [--force]              Initialize TypeScript toolchain
         \\  run <file> [--debug] [--no-cache]  Execute TypeScript/JavaScript file
+        \\  test <sandbox_path>         Run tests (PTY + Hermes + JSON report)
         \\  install <package>           Install plugin from Git URL (TODO)
         \\  list                        List installed plugins (TODO)
-        \\  types                       Regenerate vim.d.ts from source (TODO)
+        \\  types [--check]             Sync vim.d.ts (--check to verify without updating)
         \\
         \\OPTIONS:
         \\  -h, --help                  Display this help and exit
         \\  -v, --version               Show version information
         \\  -f, --force                 Force overwrite existing files (init command)
         \\  -d, --debug                 Enable debug mode
+        \\  -c, --check                 Check mode (types command)
         \\      --no-cache              Disable bytecode caching
         \\      --metrics               Enable performance metrics tracking
         \\
         \\EDITOR MODES:
         \\  vimc <file>                 Open file in interactive editor
         \\  vimc --debug <file>         Open file with Chrome DevTools debugging
-        \\  vimc --debug-protocol       Start debug protocol server
         \\  vimc --test <test_file>     Run automated test script
         \\  vimc --repl                 Interactive debugging REPL
         \\
         \\EXAMPLES:
         \\  vimc init                   Initialize TypeScript toolchain
         \\  vimc run plugin.ts          Execute TypeScript plugin
+        \\  vimc test tests/e2e/basic   Run tests in sandbox
         \\  vimc README.md              Edit file in Vim mode
         \\  vimc --debug init.js        Debug JavaScript config
         \\

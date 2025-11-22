@@ -31,3 +31,6 @@
 [submodule "vendor/tree-sitter-zig"]
 	path = vendor/tree-sitter-zig
 	url = https://github.com/maxxnino/tree-sitter-zig
+[submodule "vendor/libgit2"]
+	path = vendor/libgit2
+	url = https://github.com/libgit2/libgit2.git

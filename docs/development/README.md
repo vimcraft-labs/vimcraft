@@ -60,6 +60,18 @@ Welcome to Vimcraft development! This guide will help you set up your developmen
 - Review process
 - Community guidelines
 
+### [Testing Architecture](./testing-architecture.md)
+**Purpose**: Two-level test architecture (Unit + E2E)
+**Read if**: You're writing new tests or understanding the test structure
+**Key topics**:
+- Two-level design (Unit vs E2E)
+- Unit tests (Pure Zig only)
+- E2E tests (PTY + Hermes + TypeScript)
+- PTY + JSON protocol
+- Test isolation (fresh process per test)
+- TypeScript plugin compilation flow
+- Migration from tests/hermes/ to tests/e2e/
+
 ### [PTY Testing Guide](./pty-testing.md)
 **Purpose**: Testing with pseudoterminals
 **Read if**: You're testing terminal I/O, ANSI output, or user-facing bugs
@@ -141,7 +153,7 @@ npm run build:config
 npm run watch:config &
 
 # Run with hot reload
-./zig-out/bin/vimcraft init.ts
+./zig-out/bin/vimcraft index.ts
 ```
 
 ### 3. Make Your First Change
@@ -199,7 +211,7 @@ vimcraft/
 │   └── ghostty/              # Reference
 ├── build.zig                 # Zig build system
 ├── Makefile.hermes          # Hermes+JSI build
-├── init.ts                   # Example config
+├── index.ts                   # Example config
 └── CLAUDE.md                 # Project context
 ```
 
@@ -240,9 +252,9 @@ git push origin feature/my-feature
 npm run watch:config
 
 # Terminal 2: Run Vimcraft
-./zig-out/bin/vimcraft init.ts
+./zig-out/bin/vimcraft index.ts
 
-# Edit init.ts
+# Edit index.ts
 # Save file
 # Config reloads automatically!
 ```

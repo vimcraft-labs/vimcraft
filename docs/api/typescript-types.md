@@ -189,10 +189,10 @@ console.log('✅ Config loaded!');
 ## Building Your Config
 
 ```bash
-# Edit init.ts
-vim init.ts
+# Edit index.ts
+vim index.ts
 
-# Build to ~/.config/vimcraft/init.js
+# Build to ~/.config/vimcraft/index.ts
 npm run build:config
 
 # Watch mode (auto-rebuild on changes)
