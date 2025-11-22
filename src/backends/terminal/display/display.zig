@@ -1206,29 +1206,31 @@ pub const Display = struct {
         return self.captured_output.items.len;
     }
 
-    /// Write to both stdout and capture buffer (if capture mode enabled)
+    /// Write to capture buffer (if capture mode) OR stdout (if not)
     /// This is the central write function that terminal_control.zig uses
+    /// In capture mode, output is ONLY buffered (not sent to stdout) to keep test output clean
     pub fn writeOutput(self: *Display, bytes: []const u8) !void {
-        // Always write to stdout
-        try self.stdout.writeAll(bytes);
-
-        // Capture if in capture mode
         if (self.capture_mode) {
+            // Capture mode: buffer only, don't write to stdout (keeps E2E test output clean)
             try self.captured_output.appendSlice(self.allocator, bytes);
+            return;
         }
+        // Normal mode: write to stdout
+        try self.stdout.writeAll(bytes);
     }
 
-    /// Print formatted output to both stdout and capture buffer (if capture mode enabled)
+    /// Print formatted output to capture buffer (if capture mode) OR stdout (if not)
+    /// In capture mode, output is ONLY buffered (not sent to stdout) to keep test output clean
     pub fn printOutput(self: *Display, comptime format: []const u8, args: anytype) !void {
         // Format to buffer
         const formatted = try std.fmt.bufPrint(&self.stdout_buf, format, args);
 
-        // Always write to stdout
-        try self.stdout.writeAll(formatted);
-
-        // Capture if in capture mode
         if (self.capture_mode) {
+            // Capture mode: buffer only, don't write to stdout
             try self.captured_output.appendSlice(self.allocator, formatted);
+            return;
         }
+        // Normal mode: write to stdout
+        try self.stdout.writeAll(formatted);
     }
 };
