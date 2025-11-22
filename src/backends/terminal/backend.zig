@@ -707,6 +707,10 @@ pub const TerminalBackend = struct {
             self.last_cursor_col != current_cursor_col
         );
 
+        // CRITICAL: Save previous cursor line BEFORE updating tracking state
+        // Used below for cursor_row_changed check (cursorline/relativenumber/linenumber)
+        const prev_cursor_line = self.last_cursor_line;
+
         // Update tracking state for next render
         self.last_visual_active = visual_active;
         self.last_visual_anchor_line = current_anchor_line;
@@ -730,10 +734,36 @@ pub const TerminalBackend = struct {
         const viewport_top_changed = (self.display.viewport_top != self.last_viewport_top);
         self.last_viewport_top = self.display.viewport_top;
 
+        // CRITICAL FIX: Check if cursor ROW changed (affects cursorline + active line number)
+        // Cursorline highlight and CursorLineNr in gutter must be re-rendered when cursor moves to different line
+        // Check cursorline option BEFORE the optimization decision
+        const cursorline_enabled = if (self.editor.options_manager) |opts|
+            opts.getBoolean("cursorline") orelse false
+        else
+            false;
+
+        // Also check relativenumber - relative line numbers change when cursor row changes
+        const relativenumber_enabled = if (self.editor.options_manager) |opts|
+            opts.getBoolean("relativenumber") orelse false
+        else
+            false;
+
+        // Also check number - active line number (CursorLineNr) changes when cursor row changes
+        const number_enabled = if (self.editor.options_manager) |opts|
+            opts.getBoolean("number") orelse false
+        else
+            false;
+
+        // CRITICAL FIX: Compare with prev_cursor_line (saved BEFORE updating tracking state)
+        // Previously compared with self.last_cursor_line which was already updated → always false!
+        const cursor_row_changed = (current_cursor_line != prev_cursor_line);
+        const needs_layer_update = cursor_row_changed and (cursorline_enabled or relativenumber_enabled or number_enabled);
+
         // CURSOR-ONLY RENDER PATH: Skip compositor if only cursor moved AND no viewport scroll needed
         // This reduces 457 cursor position codes to 1!
         // CRITICAL: Also check viewport_top_changed for zz/zt/zb commands (scroll without cursor moving out of viewport)
-        if (!buffer_changed and !yank_active and !visual_active and !viewport_scroll_needed and !viewport_top_changed) {
+        // CRITICAL FIX: Also check needs_layer_update for cursorline/relativenumber/linenumber (cursor row changed)
+        if (!buffer_changed and !yank_active and !visual_active and !viewport_scroll_needed and !viewport_top_changed and !needs_layer_update) {
             // Only cursor moved (Normal mode) - use lightweight path
             try self.display.renderCursorOnly(self.editor);
 
@@ -799,11 +829,7 @@ pub const TerminalBackend = struct {
         } else
             ListChars{};
 
-        // Get cursorline option (for current line highlighting)
-        const cursorline_enabled = if (self.editor.options_manager) |opts|
-            opts.getBoolean("cursorLine") orelse false
-        else
-            false;
+        // NOTE: cursorline_enabled already retrieved above (line 736) for needs_layer_update check
 
         // Render to display
         try self.display.render(
