@@ -661,7 +661,9 @@ pub const TerminalBackend = struct {
                     return true;
                 },
                 .arrow_right => {
-                    _ = movement_module.moveRight(buf);
+                    // INSERT MODE: Use moveRightInsert to allow cursor AFTER last character
+                    // moveRight (normal mode) stops ON last char, but insert mode needs to go past it
+                    _ = movement_module.moveRightInsert(buf);
                     return true;
                 },
                 else => return false,

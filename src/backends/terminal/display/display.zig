@@ -1027,6 +1027,24 @@ pub const Display = struct {
             return false; // No scroll, do full render
         }
 
+        // CRITICAL: Disable scroll optimization when gutter is visible
+        //
+        // Terminal scroll (CSI S/T) shifts the ENTIRE screen including gutter columns.
+        // There's no way to scroll just the text area while keeping gutter static,
+        // unless the terminal supports left/right margins (DECLRMM mode) - most don't.
+        //
+        // This is how Neovim handles it: only use terminal scroll for full-width
+        // operations, or when terminal has left/right margin support.
+        // Helix doesn't use terminal scroll at all.
+        //
+        // With diff-based rendering, scrolling is still fast enough (we only
+        // re-render changed cells), and this eliminates all flickering.
+        const gutter_width = self.gutter_manager.getTotalWidth();
+        if (gutter_width > 0) {
+            self.last_viewport_top = self.viewport_top;
+            return false; // Use diff-based rendering instead
+        }
+
         const scroll_delta = @as(isize, @intCast(self.viewport_top)) - @as(isize, @intCast(self.last_viewport_top));
         const abs_delta = @abs(scroll_delta);
 

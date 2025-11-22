@@ -60,12 +60,14 @@ pub fn moveLeft(buffer: *Buffer) bool {
 
 /// Move right (l)
 /// Returns true if cursor moved, false if already at boundary
+/// In normal mode, cursor stops ON the last character (not after it)
 pub fn moveRight(buffer: *Buffer) bool {
     const line = buffer.getLine(buffer.cursor.row) orelse return false;
     defer buffer.allocator.free(line);
-    const line_len = buffer.getLineLength(buffer.cursor.row);
+    // Use visual length (excludes newline) - Vim behavior: cursor stops ON last char in normal mode
+    const visual_len = buffer.getLineLengthVisual(buffer.cursor.row);
 
-    if (line_len > 0 and buffer.cursor.col < line_len - 1) {
+    if (visual_len > 0 and buffer.cursor.col < visual_len - 1) {
         var pos = buffer.cursor.col;
         var state: grapheme.BreakState = .{};
 
@@ -74,14 +76,14 @@ pub fn moveRight(buffer: *Buffer) bool {
         const first_len = std.unicode.utf8ByteSequenceLength(line[pos]) catch 1;
         pos += first_len;
 
-        // Keep going until we find a grapheme break
-        while (pos < line_len - 1) {
+        // Keep going until we find a grapheme break (but don't go past last visible char)
+        while (pos < visual_len - 1) {
             // Decode previous codepoint (from prev_start to pos)
             const cp1 = std.unicode.utf8Decode(line[prev_start..pos]) catch break;
 
             // Decode current codepoint
             const curr_len = std.unicode.utf8ByteSequenceLength(line[pos]) catch break;
-            if (pos + curr_len > line_len) break;
+            if (pos + curr_len > visual_len) break;
             const cp2 = std.unicode.utf8Decode(line[pos..][0..curr_len]) catch break;
 
             // Check for grapheme break
@@ -94,11 +96,40 @@ pub fn moveRight(buffer: *Buffer) bool {
             pos += curr_len;
         }
 
-        buffer.cursor.col = @min(pos, line_len - 1);
+        buffer.cursor.col = @min(pos, visual_len - 1);
         buffer.cursor.goal_column = buffer.cursor.col;
         return true;
     }
     return false; // Already at right boundary
+}
+
+/// Move right for INSERT MODE - allows cursor to go AFTER last character
+/// This is the Vim behavior: in insert mode, cursor can be at position visual_len (after last char)
+/// Returns true if cursor moved, false if already at boundary
+pub fn moveRightInsert(buffer: *Buffer) bool {
+    // In insert mode, cursor can go up to visual_len (AFTER last visible char)
+    const visual_len = buffer.getLineLengthVisual(buffer.cursor.row);
+
+    // Can move if cursor is before the end position (visual_len)
+    if (buffer.cursor.col < visual_len) {
+        buffer.cursor.col += 1;
+        buffer.cursor.goal_column = buffer.cursor.col;
+        return true;
+    }
+    return false; // Already at right boundary (after last char)
+}
+
+/// Clamp cursor to valid position for NORMAL mode
+/// Call this when exiting insert mode to ensure cursor is ON a character, not after
+pub fn clampCursorForNormalMode(buffer: *Buffer) void {
+    const visual_len = buffer.getLineLengthVisual(buffer.cursor.row);
+    if (visual_len == 0) {
+        buffer.cursor.col = 0;
+    } else if (buffer.cursor.col >= visual_len) {
+        // Cursor is past last char, move it back to last char
+        buffer.cursor.col = visual_len - 1;
+    }
+    buffer.cursor.goal_column = buffer.cursor.col;
 }
 
 /// Move up (k)
@@ -625,4 +656,251 @@ test "Movement: 'b' handles line starting with non-word characters" {
     moveWordBackward(&buffer);
     try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
     try std.testing.expectEqual(@as(usize, 0), buffer.cursor.col); // Should be at col 0, not stuck at col 1
+}
+
+test "Movement: 'l' stops ON last character (Vim normal mode behavior)" {
+    // This test verifies the fix for cursor going past the last character.
+    // In Vim normal mode, the cursor should stop ON the last character, not AFTER it.
+    // For line "abc\n", cursor can be at 0='a', 1='b', 2='c' (NOT 3=newline)
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_cursor_boundary.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll("abc\n"); // 3 chars + newline
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Start at column 0 (on 'a')
+    buffer.cursor.col = 0;
+
+    // Move right to 'b' (col 1)
+    try std.testing.expect(moveRight(&buffer));
+    try std.testing.expectEqual(@as(usize, 1), buffer.cursor.col);
+
+    // Move right to 'c' (col 2) - this is the last visible character
+    try std.testing.expect(moveRight(&buffer));
+    try std.testing.expectEqual(@as(usize, 2), buffer.cursor.col);
+
+    // Try to move right again - should FAIL (already at last char)
+    // This is the key fix: cursor should NOT move past 'c' to the newline
+    try std.testing.expect(!moveRight(&buffer)); // Returns false = couldn't move
+    try std.testing.expectEqual(@as(usize, 2), buffer.cursor.col); // Still on 'c'
+}
+
+test "Movement: moveRightInsert allows cursor AFTER last character (insert mode)" {
+    // In insert mode, cursor CAN go after the last character (for appending)
+    // For line "abc\n", cursor can be at 0='a', 1='b', 2='c', 3=after 'c'
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_insert_cursor.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll("abc\n"); // 3 chars + newline
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+    buffer.cursor.col = 0;
+
+    // Move through all characters
+    try std.testing.expect(moveRightInsert(&buffer));
+    try std.testing.expectEqual(@as(usize, 1), buffer.cursor.col); // on 'b'
+
+    try std.testing.expect(moveRightInsert(&buffer));
+    try std.testing.expectEqual(@as(usize, 2), buffer.cursor.col); // on 'c'
+
+    // In insert mode, can move PAST 'c' (the key difference from normal mode!)
+    try std.testing.expect(moveRightInsert(&buffer));
+    try std.testing.expectEqual(@as(usize, 3), buffer.cursor.col); // AFTER 'c'
+
+    // Now at end, can't move further
+    try std.testing.expect(!moveRightInsert(&buffer));
+    try std.testing.expectEqual(@as(usize, 3), buffer.cursor.col); // Still after 'c'
+}
+
+test "Movement: normal vs insert mode cursor boundary comparison" {
+    // This test demonstrates the key difference between normal and insert mode
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_mode_comparison.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll("xy\n"); // 2 chars + newline, visual_len = 2
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // NORMAL MODE: max position is 1 (on 'y')
+    buffer.cursor.col = 0;
+    try std.testing.expect(moveRight(&buffer)); // 0 -> 1
+    try std.testing.expectEqual(@as(usize, 1), buffer.cursor.col);
+    try std.testing.expect(!moveRight(&buffer)); // Cannot go past 'y'
+    try std.testing.expectEqual(@as(usize, 1), buffer.cursor.col);
+
+    // INSERT MODE: max position is 2 (after 'y')
+    buffer.cursor.col = 0;
+    try std.testing.expect(moveRightInsert(&buffer)); // 0 -> 1
+    try std.testing.expectEqual(@as(usize, 1), buffer.cursor.col);
+    try std.testing.expect(moveRightInsert(&buffer)); // 1 -> 2 (AFTER 'y')
+    try std.testing.expectEqual(@as(usize, 2), buffer.cursor.col);
+    try std.testing.expect(!moveRightInsert(&buffer)); // Cannot go past position 2
+    try std.testing.expectEqual(@as(usize, 2), buffer.cursor.col);
+}
+
+test "Movement: empty line handling" {
+    // Empty lines should handle cursor position correctly
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_empty_line.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll("\n"); // Just a newline (empty line)
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+    buffer.cursor.col = 0;
+
+    // On empty line, neither normal nor insert mode should move right
+    try std.testing.expect(!moveRight(&buffer));
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.col);
+
+    try std.testing.expect(!moveRightInsert(&buffer));
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.col);
+}
+
+test "Movement: single character line" {
+    // Single char line: "a\n" -> visual_len = 1
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_single_char.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll("a\n"); // 1 char + newline
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+    buffer.cursor.col = 0;
+
+    // NORMAL MODE: Already on last char, can't move right
+    try std.testing.expect(!moveRight(&buffer));
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.col);
+
+    // INSERT MODE: Can move to position 1 (after 'a')
+    try std.testing.expect(moveRightInsert(&buffer));
+    try std.testing.expectEqual(@as(usize, 1), buffer.cursor.col);
+
+    // Can't go further
+    try std.testing.expect(!moveRightInsert(&buffer));
+    try std.testing.expectEqual(@as(usize, 1), buffer.cursor.col);
+}
+
+test "Movement: line without trailing newline (last line of file)" {
+    // Last line might not have newline: "abc" -> visual_len = 3
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_no_newline.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll("abc"); // NO trailing newline
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+    buffer.cursor.col = 0;
+
+    // NORMAL MODE: max position is 2 (on 'c')
+    try std.testing.expect(moveRight(&buffer)); // 0 -> 1
+    try std.testing.expect(moveRight(&buffer)); // 1 -> 2
+    try std.testing.expect(!moveRight(&buffer)); // Cannot go past 'c'
+    try std.testing.expectEqual(@as(usize, 2), buffer.cursor.col);
+
+    // INSERT MODE: max position is 3 (after 'c')
+    buffer.cursor.col = 2;
+    try std.testing.expect(moveRightInsert(&buffer)); // 2 -> 3
+    try std.testing.expectEqual(@as(usize, 3), buffer.cursor.col);
+    try std.testing.expect(!moveRightInsert(&buffer)); // Cannot go past 3
+}
+
+test "Movement: $ (moveToLineEnd) stops ON last char" {
+    // $ command in normal mode should stop ON last character
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_dollar.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll("hello\n"); // 5 chars + newline
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+    buffer.cursor.col = 0;
+
+    moveToLineEnd(&buffer);
+    // Should be on 'o' (position 4), not after it (position 5)
+    try std.testing.expectEqual(@as(usize, 4), buffer.cursor.col);
+}
+
+test "Movement: cursor boundary with multiple lines" {
+    // Test that cursor boundary works correctly across multiple lines
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_multiline.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll("ab\ncd\nef\n"); // 3 lines of 2 chars each
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Line 0: "ab\n" -> visual_len = 2, max normal pos = 1
+    buffer.cursor.row = 0;
+    buffer.cursor.col = 0;
+    try std.testing.expect(moveRight(&buffer)); // 0 -> 1
+    try std.testing.expect(!moveRight(&buffer)); // Can't go past 'b'
+    try std.testing.expectEqual(@as(usize, 1), buffer.cursor.col);
+
+    // Line 1: "cd\n" -> same behavior
+    buffer.cursor.row = 1;
+    buffer.cursor.col = 0;
+    try std.testing.expect(moveRight(&buffer)); // 0 -> 1
+    try std.testing.expect(!moveRight(&buffer)); // Can't go past 'd'
+    try std.testing.expectEqual(@as(usize, 1), buffer.cursor.col);
+
+    // Line 2: "ef\n" -> same behavior
+    buffer.cursor.row = 2;
+    buffer.cursor.col = 0;
+    try std.testing.expect(moveRight(&buffer)); // 0 -> 1
+    try std.testing.expect(!moveRight(&buffer)); // Can't go past 'f'
+    try std.testing.expectEqual(@as(usize, 1), buffer.cursor.col);
 }

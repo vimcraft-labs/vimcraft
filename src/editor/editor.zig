@@ -1312,15 +1312,24 @@ pub const Editor = struct {
                 'a' => {
                     self.pending_cmd.clear();
                     self.pending_register.clear();
-                    _ = movement.moveRight(buf); // May fail at line end, that's OK
+                    // Move cursor AFTER current character (insert mode allows past end)
+                    // Don't use moveRight() which is blocked at line end in normal mode
+                    const visual_len = buf.getLineLengthVisual(buf.cursor.row);
+                    if (buf.cursor.col < visual_len) {
+                        buf.cursor.col += 1; // Move after current char
+                    }
+                    buf.cursor.goal_column = buf.cursor.col;
                     self.enterInsertMode();
                     return true; // Mode changed (movement is secondary)
                 },
                 'A' => {
                     self.pending_cmd.clear();
                     self.pending_register.clear();
-                    movement.moveToLineEnd(buf);
-                    _ = movement.moveRight(buf); // May fail, that's OK
+                    // Move cursor AFTER last character for append (insert mode allows this)
+                    // Don't use moveRight() which is blocked at line end in normal mode
+                    const visual_len = buf.getLineLengthVisual(buf.cursor.row);
+                    buf.cursor.col = visual_len; // Position after last char
+                    buf.cursor.goal_column = buf.cursor.col;
                     self.enterInsertMode();
                     return true; // Mode changed
                 },
@@ -1457,17 +1466,21 @@ pub const Editor = struct {
             // Trigger InsertLeave autocommand (Phase 4) BEFORE mode change
             self.triggerAutocommand("InsertLeave");
 
+            // CRITICAL: Clamp cursor position for normal mode (Vim behavior)
+            // In insert mode, cursor can be AFTER last char; in normal mode it must be ON a char
+            movement.clampCursorForNormalMode(buf);
+
             self.keymap_mgr.clearPending(); // Clear pending state on mode change
             self.mode_manager.enterNormal();
             return true; // Mode changed
         }
 
-        // Arrow keys
+        // Arrow keys (insert mode allows cursor past last char)
         if (input.len == 3 and input[0] == 27 and input[1] == '[') {
             return switch (input[2]) {
                 'A' => movement.moveUp(buf),
                 'B' => movement.moveDown(buf),
-                'C' => movement.moveRight(buf),
+                'C' => movement.moveRightInsert(buf), // Insert mode: can go after last char
                 'D' => movement.moveLeft(buf),
                 else => false, // Unknown arrow key
             };

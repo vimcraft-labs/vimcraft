@@ -514,6 +514,28 @@ pub const ScreenGrid = struct {
     // because compositor will fill it fresh. diff() then only sees newly revealed
     // rows as different.
 
+    /// Invalidate specific columns in the PREVIOUS buffer
+    /// This forces diff() to detect those columns as changed, even if content matches.
+    /// Used to force gutter re-render after terminal scroll (line numbers change).
+    ///
+    /// CRITICAL: Terminal scroll shifts EVERYTHING, but gutter content changes:
+    /// - Absolute line numbers change when viewport scrolls
+    /// - Relative line numbers ALL change when cursor moves
+    /// - This method clears gutter columns in previous so they get re-rendered
+    pub fn invalidatePreviousColumns(self: *ScreenGrid, start_col: usize, end_col: usize) void {
+        const col_start = @min(start_col, self.width);
+        const col_end = @min(end_col, self.width);
+
+        for (0..self.height) |logical_row| {
+            const physical_row = self.previous_offset[logical_row];
+            for (col_start..col_end) |col| {
+                // Set to sentinel value (char=0) to force diff() to detect as changed
+                self.previous[physical_row][col] = Cell{ .char = 0 };
+            }
+            self.dirty_lines.set(logical_row);
+        }
+    }
+
     /// Scroll the PREVIOUS buffer only (for terminal scroll optimization)
     /// This matches the previous buffer to what the terminal now displays after
     /// a native scroll command, so diff() only detects newly revealed content.
