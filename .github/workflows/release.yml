@@ -76,7 +76,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: vendor/hermes/build
-          key: hermes-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/hermes/**/*.cpp', 'vendor/hermes/**/*.h') }}
+          key: hermes-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/hermes/CMakeLists.txt') }}
           restore-keys: |
             hermes-${{ runner.os }}-${{ runner.arch }}-
 
@@ -146,7 +146,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: vendor/libuv/build
-          key: libuv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/libuv/**/*.c', 'vendor/libuv/**/*.h') }}
+          key: libuv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/libuv/CMakeLists.txt') }}
           restore-keys: |
             libuv-${{ runner.os }}-${{ runner.arch }}-
 
@@ -178,7 +178,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: vendor/libgit2/build
-          key: libgit2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/libgit2/**/*.c', 'vendor/libgit2/**/*.h') }}
+          key: libgit2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/libgit2/CMakeLists.txt') }}
           restore-keys: |
             libgit2-${{ runner.os }}-${{ runner.arch }}-
 
@@ -216,7 +216,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: vendor/go-enry/.shared
-          key: enry-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/go-enry/shared/**/*.go') }}
+          key: enry-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/go-enry/shared/*.go') }}
           restore-keys: |
             enry-${{ runner.os }}-${{ runner.arch }}-
 

@@ -213,8 +213,8 @@ pub fn initJSI(
         keymap_api.register(runtime, keymap_ctx);
     }
 
-    // Register event API (vim.on, vim.off, vim.emit) - Only for Editor (Phase 4 autocommands)
-    // EditorContext doesn't need events (headless debug mode)
+    // Register event API (vim.on, vim.off, vim.emit) and autocmd API
+    // Now register for both Editor and EditorContext (E2E tests need autocmd API)
     if (T == *Editor) {
         const emitter = allocator.create(EventEmitter) catch @panic("Failed to allocate EventEmitter");
         emitter.* = EventEmitter.init(allocator, runtime);
@@ -243,6 +243,26 @@ pub fn initJSI(
 
         // Store in Editor for use by native code (executing user commands)
         editor_or_context.usercommand_ctx = usercommand_ctx;
+    } else if (T == *EditorContext) {
+        // EditorContext (headless mode) - also needs event + autocmd API for E2E tests
+        const emitter = allocator.create(EventEmitter) catch @panic("Failed to allocate EventEmitter");
+        emitter.* = EventEmitter.init(allocator, runtime);
+        global_event_emitter = emitter;
+
+        // Register vim.on(), vim.off(), vim.emit() JavaScript API
+        event_api.register(runtime, emitter);
+
+        // Register autocmd API (vim.api.createAutoCommand, vim.api.deleteAutoCommand, etc.)
+        const autocmd_mgr = allocator.create(autocmd_api.AutocmdManager) catch @panic("Failed to allocate AutocmdManager");
+        autocmd_mgr.* = autocmd_api.AutocmdManager.init(allocator, runtime, emitter);
+        global_autocmd_manager = autocmd_mgr;
+        autocmd_api.initAutocmdManager(autocmd_mgr);
+        autocmd_api.register(runtime);
+
+        // Register user command API (for completeness in headless mode)
+        const usercommand_ctx = usercommand_api.UserCommandContext.init(allocator, runtime) catch @panic("Failed to allocate UserCommandContext");
+        global_usercommand_ctx = usercommand_ctx;
+        usercommand_api.register(runtime, usercommand_ctx);
     }
 
     // Register highlight API (vim.api.setHighlight, vim.api.getHighlight)

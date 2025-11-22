@@ -1242,110 +1242,12 @@ pub fn build(b: *std.Build) void {
     jsi_bench_step.dependOn(&run_jsi_bench.step);
 
     // ============================================================================
-    // Hermes TypeScript Test Runner
-    // ============================================================================
-    // Runs TypeScript tests compiled to Hermes bytecode (HBC)
-    // Pipeline: TypeScript → esbuild → JavaScript → hermesc → HBC → Hermes Runtime
-    //
-    // Usage: zig build hermes-tests
-    //
-    // Test files: tests/hermes/*.ts
-    // Cache: .zig-cache/hermes-tests/*.hbc
-    const hermes_tests = b.addExecutable(.{
-        .name = "hermes-test-runner",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/system/jsi/hermes_test_runner.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-
-    // Create transpiler modules for hermes-tests
-    // Create esbuild module with proper include path
-    const esbuild_mod_for_tests = b.createModule(.{
-        .root_source_file = b.path("src/system/transpiler/esbuild.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    esbuild_mod_for_tests.addIncludePath(b.path("vendor/esbuild-wrapper"));
-    // cache.zig is imported internally by esbuild.zig
-
-    // Create hermes_compiler module
-    const hermes_compiler_mod_for_tests = b.createModule(.{
-        .root_source_file = b.path("src/system/transpiler/hermes.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // Add transpiler modules
-    hermes_tests.root_module.addImport("esbuild", esbuild_mod_for_tests);
-    hermes_tests.root_module.addImport("hermes_compiler", hermes_compiler_mod_for_tests);
-
-    // Link C and C++ for Hermes
-    hermes_tests.linkLibC();
-    hermes_tests.linkLibCpp();
-
-    // Hermes include paths
-    hermes_tests.addIncludePath(b.path("src"));
-    hermes_tests.addIncludePath(b.path("vendor/hermes/API"));
-    hermes_tests.addIncludePath(b.path("vendor/hermes/API/jsi"));
-    hermes_tests.addIncludePath(b.path("vendor/hermes/public"));
-
-    // Add esbuild include path for transpiler
-    hermes_tests.addIncludePath(b.path("vendor/esbuild-wrapper"));
-
-    // Add C++ source files for Hermes+JSI wrapper
-    hermes_tests.addCSourceFile(.{
-        .file = b.path("src/system/jsi/hermes_c_api.cpp"),
-        .flags = &[_][]const u8{
-            "-std=c++17",
-            "-fno-sanitize=all",
-        },
-    });
-
-    hermes_tests.addCSourceFile(.{
-        .file = b.path("vendor/hermes/API/jsi/jsi/jsi.cpp"),
-        .flags = &[_][]const u8{
-            "-std=c++17",
-            "-fno-sanitize=all",
-        },
-    });
-
-    // Link Hermes dynamically (use hermes_lean for bytecode execution)
-    hermes_tests.addLibraryPath(b.path("vendor/hermes/build/API/hermes"));
-    hermes_tests.addLibraryPath(b.path("vendor/hermes/build/jsi"));
-    hermes_tests.linkSystemLibrary("hermes_lean");
-    hermes_tests.linkSystemLibrary("jsi");
-
-    // Set RPATH for finding Hermes libraries at runtime
-    hermes_tests.addRPath(b.path("vendor/hermes/build/API/hermes"));
-    hermes_tests.addRPath(b.path("vendor/hermes/build/jsi"));
-
-    // Link esbuild library for TypeScript transpilation
-    hermes_tests.addObjectFile(b.path(esbuild_source_path));
-
-    // Set RPATH for esbuild (platform-specific)
-    if (target.result.os.tag == .macos) {
-        hermes_tests.addRPath(.{ .cwd_relative = "@executable_path" });
-    } else if (target.result.os.tag == .linux) {
-        hermes_tests.addRPath(.{ .cwd_relative = "$ORIGIN" });
-    }
-
-    b.installArtifact(hermes_tests);
-
-    const run_hermes_tests = b.addRunArtifact(hermes_tests);
-    run_hermes_tests.step.dependOn(b.getInstallStep());
-
-    const hermes_tests_step = b.step("hermes-tests", "Run TypeScript tests with full Hermes runtime (TS→JS→HBC→Hermes)");
-    hermes_tests_step.dependOn(&run_hermes_tests.step);
-
-    // ============================================================================
     // NOTE: Hermes+JSI Integration
     // ============================================================================
     // Hermes is now fully integrated into the main build system!
     //
-    // The previous Makefile.hermes workaround is no longer needed for the main
-    // executable. It remains available for standalone demos/testing.
+    // TypeScript E2E tests are run via: vimc test tests/e2e/<sandbox>
+    // which uses the main vimc executable with PTY + Hermes runtime.
     //
     // JavaScript configuration is loaded from ~/.config/vimcraft/init.js
 }

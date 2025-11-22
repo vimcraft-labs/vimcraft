@@ -26,6 +26,7 @@ const TimerData = struct {
     is_repeat: bool,
     allocator: std.mem.Allocator,
     timer_id: usize, // JavaScript-provided ID
+    closing: bool = false, // Prevent double-close
 };
 
 var timer_allocator: std.mem.Allocator = undefined;
@@ -104,6 +105,9 @@ pub fn clearAll() void {
     defer timers_copy.deinit(timer_allocator);
 
     for (timers_copy.items) |timer_data| {
+        // Skip if already closing (prevents double-close)
+        if (timer_data.closing) continue;
+        timer_data.closing = true;
         _ = uv.uv_timer_stop(&timer_data.timer);
         uv.uv_close(@ptrCast(&timer_data.timer), onTimerClose);
     }
@@ -229,6 +233,9 @@ fn onTimerFire(handle: [*c]uv.uv_timer_t) callconv(.c) void {
     // Get our timer data from the handle
     const timer_data = @as(*TimerData, @ptrCast(@alignCast(handle.*.data)));
 
+    // Skip if already closing (prevents double-close)
+    if (timer_data.closing) return;
+
     // ✅ SAFE: Add timer ID to queue (thread-safe operation)
     // Main event loop will process this and call JavaScript
     if (timer_queue_initialized) {
@@ -237,6 +244,7 @@ fn onTimerFire(handle: [*c]uv.uv_timer_t) callconv(.c) void {
 
     // If this is a one-shot timeout (not interval), clean up
     if (!timer_data.is_repeat) {
+        timer_data.closing = true;
         _ = uv.uv_timer_stop(handle);
         uv.uv_close(@ptrCast(handle), onTimerClose);
     }
@@ -432,10 +440,13 @@ export fn clearTimerNative(
         }
     }
 
-    // If found, stop and close it
+    // If found and not already closing, stop and close it
     if (timer_data) |td| {
-        _ = uv.uv_timer_stop(&td.timer);
-        uv.uv_close(@ptrCast(&td.timer), onTimerClose);
+        if (!td.closing) {
+            td.closing = true;
+            _ = uv.uv_timer_stop(&td.timer);
+            uv.uv_close(@ptrCast(&td.timer), onTimerClose);
+        }
     }
 
     return c.hermes_value_create_undefined(runtime);

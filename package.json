@@ -8,7 +8,9 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "zig build test",
+    "test:e2e": "failed=0; for dir in tests/e2e/*/; do ./zig-out/bin/vimc test \"$dir\" || failed=1; done; exit $failed",
     "build:config": "tsc --project tsconfig.json",
     "watch:config": "tsc --project tsconfig.json --watch"
   },
@@ -24,8 +26,6 @@
     "url": "https://github.com/vimcraft-labs/vimcraft/issues"
   },
   "homepage": "https://github.com/vimcraft-labs/vimcraft#readme",
-  "devDependencies": {
-    "@vimcraft/types": "file:packages/types"
-  },
+  "devDependencies": {},
   "packageManager": "yarn@4.10.3"
 }
