@@ -150,10 +150,16 @@ pub const EditorContext = struct {
             const viewport_height = text_rows;
             const viewport_top = self.display.viewport_top;
 
+            // Get 'startofline' option - default is false (preserve sticky column)
+            const start_of_line = if (self.editor.options_manager) |opts_mgr|
+                opts_mgr.getBoolean("startofline") orelse false
+            else
+                false;
+
             switch (cmd) {
-                'H' => movement.moveToViewportTop(buf, viewport_top),
-                'M' => movement.moveToViewportMiddle(buf, viewport_top, viewport_height),
-                'L' => movement.moveToViewportBottom(buf, viewport_top, viewport_height),
+                'H' => movement.moveToViewportTop(buf, viewport_top, start_of_line),
+                'M' => movement.moveToViewportMiddle(buf, viewport_top, viewport_height, start_of_line),
+                'L' => movement.moveToViewportBottom(buf, viewport_top, viewport_height, start_of_line),
                 else => {},
             }
 
@@ -207,6 +213,27 @@ pub const EditorContext = struct {
                 _ = try self.editor.executeKeys(input);
                 i += 3;
             } else {
+                const char = keys[i];
+
+                // Handle Ctrl+D (4) and Ctrl+U (21) - scroll commands
+                // These are handled by the renderer in terminal backend, so we need to handle them here
+                if (char == 4 or char == 21) {
+                    const text_rows = if (self.display.terminal_rows > 1)
+                        self.display.terminal_rows - 1
+                    else
+                        1;
+
+                    if (char == 4) {
+                        // Ctrl+D - scroll half page down
+                        self.editor.scroll(.down, text_rows);
+                    } else {
+                        // Ctrl+U - scroll half page up
+                        self.editor.scroll(.up, text_rows);
+                    }
+                    i += 1;
+                    continue;
+                }
+
                 // Single character
                 const input = keys[i .. i + 1];
                 _ = try self.editor.executeKeys(input);

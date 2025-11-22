@@ -405,6 +405,23 @@ pub fn scrollHalfPageDown(buffer: *Buffer, viewport_height: usize) void {
     }
 }
 
+/// Restore cursor to goal column (sticky column), clamped to line length
+/// Used when 'startofline' is off to preserve horizontal cursor position
+fn restoreGoalColumn(buffer: *Buffer) void {
+    const goal = buffer.cursor.goal_column orelse buffer.cursor.col;
+    const line_len = buffer.getLineLength(buffer.cursor.row);
+    const visual_len = if (line_len > 0) line_len - 1 else 0; // Exclude newline
+
+    if (visual_len == 0) {
+        buffer.cursor.col = 0;
+    } else if (goal < visual_len) {
+        buffer.cursor.col = goal;
+    } else {
+        // Clamp to last valid position in normal mode (visual_len - 1)
+        buffer.cursor.col = visual_len - 1;
+    }
+}
+
 /// Scroll half page up (Ctrl+U)
 pub fn scrollHalfPageUp(buffer: *Buffer, viewport_height: usize) void {
     // Set goal column to current column if not already set
@@ -430,25 +447,62 @@ pub fn scrollHalfPageUp(buffer: *Buffer, viewport_height: usize) void {
 }
 
 /// Move to top of viewport (H - High)
-pub fn moveToViewportTop(buffer: *Buffer, viewport_top: usize) void {
+/// If start_of_line is true, moves cursor to first non-blank character (Vim default)
+/// If start_of_line is false, preserves the "sticky column" position (modern preference)
+pub fn moveToViewportTop(buffer: *Buffer, viewport_top: usize, start_of_line: bool) void {
+    // Set goal column if not already set (for preserving sticky column)
+    if (buffer.cursor.goal_column == null) {
+        buffer.cursor.goal_column = buffer.cursor.col;
+    }
+
     buffer.cursor.row = viewport_top;
-    moveToFirstNonBlank(buffer); // Move to first non-blank char (Vim behavior)
+
+    if (start_of_line) {
+        moveToFirstNonBlank(buffer);
+    } else {
+        // Restore goal column, clamped to line length
+        restoreGoalColumn(buffer);
+    }
 }
 
 /// Move to middle of viewport (M - Middle)
-pub fn moveToViewportMiddle(buffer: *Buffer, viewport_top: usize, viewport_height: usize) void {
+/// If start_of_line is true, moves cursor to first non-blank character (Vim default)
+/// If start_of_line is false, preserves the "sticky column" position (modern preference)
+pub fn moveToViewportMiddle(buffer: *Buffer, viewport_top: usize, viewport_height: usize, start_of_line: bool) void {
+    // Set goal column if not already set (for preserving sticky column)
+    if (buffer.cursor.goal_column == null) {
+        buffer.cursor.goal_column = buffer.cursor.col;
+    }
+
     const middle = viewport_top + (viewport_height / 2);
     buffer.cursor.row = @min(middle, buffer.lineCount() -| 1);
-    moveToFirstNonBlank(buffer); // Move to first non-blank char (Vim behavior)
+
+    if (start_of_line) {
+        moveToFirstNonBlank(buffer);
+    } else {
+        restoreGoalColumn(buffer);
+    }
 }
 
 /// Move to bottom of viewport (L - Low)
-pub fn moveToViewportBottom(buffer: *Buffer, viewport_top: usize, viewport_height: usize) void {
+/// If start_of_line is true, moves cursor to first non-blank character (Vim default)
+/// If start_of_line is false, preserves the "sticky column" position (modern preference)
+pub fn moveToViewportBottom(buffer: *Buffer, viewport_top: usize, viewport_height: usize, start_of_line: bool) void {
+    // Set goal column if not already set (for preserving sticky column)
+    if (buffer.cursor.goal_column == null) {
+        buffer.cursor.goal_column = buffer.cursor.col;
+    }
+
     // Calculate bottom line (viewport_top + height - 1, clamped to buffer end)
     // CRITICAL: Use saturating addition to prevent overflow when viewport_top is huge
     const bottom = (viewport_top +| viewport_height) -| 1;
     buffer.cursor.row = @min(bottom, buffer.lineCount() -| 1);
-    moveToFirstNonBlank(buffer); // Move to first non-blank char (Vim behavior)
+
+    if (start_of_line) {
+        moveToFirstNonBlank(buffer);
+    } else {
+        restoreGoalColumn(buffer);
+    }
 }
 
 /// Center current line in viewport (zz)
@@ -903,4 +957,303 @@ test "Movement: cursor boundary with multiple lines" {
     try std.testing.expect(moveRight(&buffer)); // 0 -> 1
     try std.testing.expect(!moveRight(&buffer)); // Can't go past 'f'
     try std.testing.expectEqual(@as(usize, 1), buffer.cursor.col);
+}
+
+// ============================================================================
+// startofline Option Tests (H/M/L viewport movement)
+// ============================================================================
+
+test "Viewport H: startofline=false preserves sticky column" {
+    // When startofline is OFF (default), H should preserve the horizontal cursor position
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_h_startofline.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        // 20 lines with varying indentation
+        try file.writeAll(
+            \\    first line with indent
+            \\    second line
+            \\third line no indent
+            \\    fourth line
+            \\fifth
+            \\    sixth line
+            \\seventh line
+            \\    eighth line
+            \\ninth line
+            \\    tenth line
+            \\eleventh
+            \\    twelfth line
+            \\
+        );
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Start at row 5, column 10 (in the middle of "sixth line")
+    buffer.cursor.row = 5;
+    buffer.cursor.col = 10;
+    buffer.cursor.goal_column = 10; // Set sticky column
+
+    // Press H (viewport top) with startofline=false
+    const viewport_top: usize = 0;
+    moveToViewportTop(&buffer, viewport_top, false);
+
+    // Should be on row 0, but column should be preserved (clamped to line length)
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
+    // "    first line with indent" has 25 chars, col 10 is preserved
+    try std.testing.expectEqual(@as(usize, 10), buffer.cursor.col);
+}
+
+test "Viewport H: startofline=true moves to first non-blank" {
+    // When startofline is ON, H should move to first non-blank character
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_h_sol_true.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll(
+            \\    first line with indent
+            \\second line
+            \\
+        );
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Start at row 1, column 5
+    buffer.cursor.row = 1;
+    buffer.cursor.col = 5;
+    buffer.cursor.goal_column = 5;
+
+    // Press H with startofline=true
+    moveToViewportTop(&buffer, 0, true);
+
+    // Should be on row 0, column 4 (first non-blank, after 4 spaces)
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 4), buffer.cursor.col);
+}
+
+test "Viewport L: startofline=false preserves sticky column" {
+    // When startofline is OFF, L should preserve the horizontal cursor position
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_l_startofline.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll(
+            \\first line
+            \\second line
+            \\third line
+            \\fourth line
+            \\    fifth with indent
+            \\
+        );
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Start at row 0, column 5 (on 'l' in "first line")
+    buffer.cursor.row = 0;
+    buffer.cursor.col = 5;
+    buffer.cursor.goal_column = 5;
+
+    // Press L (viewport bottom) with startofline=false
+    // viewport_top=0, viewport_height=10 -> bottom = min(9, 4) = 4
+    moveToViewportBottom(&buffer, 0, 10, false);
+
+    // Should be on row 4, column 5 preserved
+    try std.testing.expectEqual(@as(usize, 4), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 5), buffer.cursor.col);
+}
+
+test "Viewport L: startofline=true moves to first non-blank" {
+    // When startofline is ON, L should move to first non-blank character
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_l_sol_true.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll(
+            \\first line
+            \\second line
+            \\third line
+            \\fourth line
+            \\    fifth with indent
+            \\
+        );
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Start at row 0, column 5
+    buffer.cursor.row = 0;
+    buffer.cursor.col = 5;
+    buffer.cursor.goal_column = 5;
+
+    // Press L with startofline=true
+    moveToViewportBottom(&buffer, 0, 10, true);
+
+    // Should be on row 4, column 4 (first non-blank after 4 spaces)
+    try std.testing.expectEqual(@as(usize, 4), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 4), buffer.cursor.col);
+}
+
+test "Viewport M: startofline=false preserves sticky column" {
+    // When startofline is OFF, M should preserve the horizontal cursor position
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_m_startofline.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll(
+            \\first line
+            \\second line
+            \\    third with indent
+            \\fourth line
+            \\fifth line
+            \\
+        );
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Start at row 0, column 6
+    buffer.cursor.row = 0;
+    buffer.cursor.col = 6;
+    buffer.cursor.goal_column = 6;
+
+    // Press M (viewport middle) with startofline=false
+    // viewport_top=0, viewport_height=10 -> middle = 5, clamped to 4
+    moveToViewportMiddle(&buffer, 0, 10, false);
+
+    // Should be on row 4 (middle clamped), column 6 preserved (but clamped if shorter)
+    try std.testing.expectEqual(@as(usize, 4), buffer.cursor.row);
+    // "fifth line" has 10 chars, col 6 is preserved
+    try std.testing.expectEqual(@as(usize, 6), buffer.cursor.col);
+}
+
+test "Viewport M: startofline=true moves to first non-blank" {
+    // When startofline is ON, M should move to first non-blank character
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_m_sol_true.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll(
+            \\first line
+            \\second line
+            \\    third with indent
+            \\fourth line
+            \\    fifth with indent
+            \\
+        );
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Start at row 0, column 6
+    buffer.cursor.row = 0;
+    buffer.cursor.col = 6;
+    buffer.cursor.goal_column = 6;
+
+    // Press M with startofline=true
+    moveToViewportMiddle(&buffer, 0, 10, true);
+
+    // Should be on row 4 (middle), column 4 (first non-blank)
+    try std.testing.expectEqual(@as(usize, 4), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 4), buffer.cursor.col);
+}
+
+test "Viewport: sticky column clamps to shorter lines" {
+    // When sticky column is larger than target line, clamp to line end
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_sticky_clamp.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll(
+            \\this is a very long first line with lots of characters
+            \\short
+            \\
+        );
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Start at row 0, column 40 (way past the end of "short")
+    buffer.cursor.row = 0;
+    buffer.cursor.col = 40;
+    buffer.cursor.goal_column = 40;
+
+    // Press L with startofline=false
+    moveToViewportBottom(&buffer, 0, 10, false);
+
+    // Should be on row 1, column clamped to line length
+    // "short" has 5 chars (0-4), so col should be 4 (last char)
+    try std.testing.expectEqual(@as(usize, 1), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 4), buffer.cursor.col);
+    // Goal column should still be 40 (preserved for future movements)
+    try std.testing.expectEqual(@as(usize, 40), buffer.cursor.goal_column.?);
+}
+
+test "Viewport: empty line handling with startofline=false" {
+    // Empty lines should put cursor at column 0
+    const allocator = std.testing.allocator;
+    var buffer = Buffer.init(allocator);
+    defer buffer.deinit();
+
+    const tmp_path = "/tmp/vimcraft_test_empty_viewport.txt";
+    {
+        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        defer file.close();
+        try file.writeAll(
+            \\first line with text
+            \\
+            \\
+        );
+    }
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try buffer.loadFile(tmp_path);
+
+    // Start at row 0, column 10
+    buffer.cursor.row = 0;
+    buffer.cursor.col = 10;
+    buffer.cursor.goal_column = 10;
+
+    // Press L with startofline=false (target is empty line at row 1)
+    moveToViewportBottom(&buffer, 0, 10, false);
+
+    // Should be on row 1 (empty line), column 0
+    try std.testing.expectEqual(@as(usize, 1), buffer.cursor.row);
+    try std.testing.expectEqual(@as(usize, 0), buffer.cursor.col);
 }

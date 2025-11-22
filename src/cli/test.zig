@@ -25,6 +25,9 @@ const event_loop = @import("../system/event_loop/libuv.zig");
 const timer_api = @import("../system/jsi/timer_api.zig");
 const e2e_api = @import("../system/jsi/e2e_api.zig");
 
+/// Global verbose flag for console.log output
+var g_verbose: bool = false;
+
 /// Test result structure for JSON output
 pub const TestResult = struct {
     name: []const u8,
@@ -40,6 +43,9 @@ pub const TestResult = struct {
     state_after: ?e2e_api.StateSnapshot,
     /// Checkpoints captured during test (LLM debugging)
     checkpoints: []const e2e_api.CheckpointEntry,
+    /// PTY (terminal ANSI) output captured during test execution
+    /// Use for validating terminal escape codes (cursor flickering, colors, etc.)
+    pty_output: ?[]const u8,
 };
 
 /// E2E test run summary
@@ -65,6 +71,69 @@ pub const TestSummary = struct {
 
     pub fn deinit(self: *TestSummary) void {
         self.results.deinit(self.allocator);
+    }
+
+    /// Output simple human-readable report to stdout
+    pub fn printSimple(self: *const TestSummary) void {
+        var buf: [8192]u8 = undefined;
+        const stdout_file = std.fs.File.stdout();
+        var stdout_writer = stdout_file.writer(&buf);
+        const stdout = &stdout_writer.interface;
+
+        // Check if stdout is a TTY for ANSI escape codes
+        const is_tty = std.posix.isatty(stdout_file.handle);
+
+        // Group tests by suite
+        var current_suite: ?[]const u8 = null;
+        for (self.results.items) |result| {
+            // Print suite header when suite changes
+            if (current_suite == null or !std.mem.eql(u8, current_suite.?, result.suite)) {
+                // Add blank line before suite (including first one for spacing from top)
+                stdout.print("\n", .{}) catch return;
+                stdout.print("  {s}\n", .{result.suite}) catch return;
+                current_suite = result.suite;
+            }
+
+            // Print test result (use color only on TTY)
+            if (is_tty) {
+                const status = if (result.passed) "\x1b[32m✓\x1b[0m" else "\x1b[31m✗\x1b[0m";
+                stdout.print("    {s} {s}\n", .{ status, result.name }) catch return;
+            } else {
+                const status = if (result.passed) "[PASS]" else "[FAIL]";
+                stdout.print("    {s} {s}\n", .{ status, result.name }) catch return;
+            }
+
+            // Print error message for failed tests (on separate line, only if non-empty)
+            if (!result.passed) {
+                if (result.error_message) |msg| {
+                    if (msg.len > 0) {
+                        if (is_tty) {
+                            stdout.print("      \x1b[31m{s}\x1b[0m\n", .{msg}) catch return;
+                        } else {
+                            stdout.print("      {s}\n", .{msg}) catch return;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Print summary line
+        stdout.print("\n", .{}) catch return;
+        if (self.failed == 0) {
+            if (is_tty) {
+                stdout.print("  \x1b[32m{d} passed\x1b[0m ({d}ms)\n\n", .{ self.passed, self.duration_ms }) catch return;
+            } else {
+                stdout.print("  {d} passed ({d}ms)\n\n", .{ self.passed, self.duration_ms }) catch return;
+            }
+        } else {
+            if (is_tty) {
+                stdout.print("  \x1b[32m{d} passed\x1b[0m, \x1b[31m{d} failed\x1b[0m ({d}ms)\n\n", .{ self.passed, self.failed, self.duration_ms }) catch return;
+            } else {
+                stdout.print("  {d} passed, {d} failed ({d}ms)\n\n", .{ self.passed, self.failed, self.duration_ms }) catch return;
+            }
+        }
+
+        stdout.flush() catch return;
     }
 
     /// Output JSON report to stdout
@@ -135,7 +204,35 @@ pub const TestSummary = struct {
                     stdout.print(", ", .{}) catch return;
                 }
             }
-            stdout.print("]\n", .{}) catch return;
+            stdout.print("],\n", .{}) catch return;
+
+            // PTY output (terminal ANSI escape codes) - for rendering bug detection
+            stdout.print("      \"pty_output\": ", .{}) catch return;
+            if (result.pty_output) |pty| {
+                stdout.print("\"", .{}) catch return;
+                // Escape JSON special characters and non-printable chars
+                for (pty) |ch| {
+                    switch (ch) {
+                        '"' => stdout.print("\\\"", .{}) catch return,
+                        '\\' => stdout.print("\\\\", .{}) catch return,
+                        '\n' => stdout.print("\\n", .{}) catch return,
+                        '\r' => stdout.print("\\r", .{}) catch return,
+                        '\t' => stdout.print("\\t", .{}) catch return,
+                        0x1b => stdout.print("\\u001b", .{}) catch return, // ESC (escape codes)
+                        else => |c_ch| {
+                            if (c_ch >= 0x20 and c_ch < 0x7f) {
+                                stdout.print("{c}", .{c_ch}) catch return;
+                            } else {
+                                stdout.print("\\u{x:0>4}", .{c_ch}) catch return;
+                            }
+                        },
+                    }
+                }
+                stdout.print("\"", .{}) catch return;
+            } else {
+                stdout.print("null", .{}) catch return;
+            }
+            stdout.print("\n", .{}) catch return;
 
             if (i < self.results.items.len - 1) {
                 stdout.print("    }},\n", .{}) catch return;
@@ -190,7 +287,14 @@ fn printStateSnapshot(stdout: anytype, state: ?e2e_api.StateSnapshot) void {
 
 /// Execute E2E tests in sandbox directory
 /// Returns exit code: 0 = all passed, 1 = some failed
-pub fn execute(allocator: std.mem.Allocator, sandbox_path: []const u8) !u8 {
+/// verbose: if true, outputs full JSON with logs, state snapshots, and PTY output
+///          if false, outputs simple human-readable summary
+pub fn execute(allocator: std.mem.Allocator, sandbox_path: []const u8, verbose: bool) !u8 {
+    // Set global verbose flag for console.log output
+    g_verbose = verbose;
+    // Also set verbose in e2e_api to control PASS/FAIL output
+    e2e_api.setVerbose(verbose);
+
     const start_time = std.time.milliTimestamp();
 
     // Verify sandbox path exists
@@ -383,11 +487,18 @@ pub fn execute(allocator: std.mem.Allocator, sandbox_path: []const u8) !u8 {
             .state_before = test_result.state_before,
             .state_after = test_result.state_after,
             .checkpoints = test_result.checkpoints.items,
+            .pty_output = test_result.pty_output,
         });
     }
 
-    // Output JSON report to stdout
-    summary.printJson();
+    // Output results
+    if (verbose) {
+        // Full JSON report for debugging/LLM analysis
+        summary.printJson();
+    } else {
+        // Simple human-readable output
+        summary.printSimple();
+    }
 
     // Return exit code
     return if (summary.failed > 0) 1 else 0;
@@ -439,10 +550,12 @@ export fn stderrConsoleLog(
 
     const log_msg = fbs.getWritten();
 
-    // Print to stderr
-    std.debug.print("{s}\n", .{log_msg});
+    // Print to stderr only in verbose mode
+    if (g_verbose) {
+        std.debug.print("{s}\n", .{log_msg});
+    }
 
-    // Capture for LLM debugging (per-test log buffer)
+    // Capture for LLM debugging (per-test log buffer) - always capture for JSON output
     e2e_api.captureLog(log_msg);
 
     return c.hermes_value_create_undefined(runtime);

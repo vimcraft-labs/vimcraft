@@ -370,6 +370,25 @@ pub const Editor = struct {
         try registry.set("operator", HighlightDef{ .link = "Keyword" });
         try registry.set("punctuation.bracket", HighlightDef{ .link = "Normal" });
         try registry.set("punctuation.delimiter", HighlightDef{ .link = "Normal" });
+        try registry.set("punctuation.special", HighlightDef{ .link = "Keyword" });
+
+        // Markdown and markup highlights
+        // Define Title highlight group (used by text.title)
+        try registry.set("Title", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 130, .g = 170, .b = 255 } }, // Blue
+            .bold = true,
+        });
+
+        // Define markup-specific highlight groups
+        try registry.set("text.title", HighlightDef{ .link = "Title" });
+        try registry.set("text.literal", HighlightDef{ .link = "String" }); // Code blocks
+        try registry.set("text.uri", HighlightDef{
+            .fg = .{ .rgb = .{ .r = 86, .g = 182, .b = 194 } }, // Cyan
+            .underline = true,
+        });
+        try registry.set("text.reference", HighlightDef{ .link = "Identifier" }); // Link labels
+        try registry.set("text.emphasis", HighlightDef{ .italic = true });
+        try registry.set("text.strong", HighlightDef{ .bold = true });
     }
 
     pub fn deinit(self: *Editor) void {
@@ -447,11 +466,11 @@ pub const Editor = struct {
         const filetype = self.ts_loader.detectFiletype(path, first_line);
 
         if (filetype) |ft| {
-            buf.filetype = ft;
+            buf.setFiletype(ft) catch {};
             self.logger.info("✅ Detected filetype: {s} for {s}", .{ ft, path }) catch {};
             // TODO: Parse with tree-sitter (need to handle multiple buffers)
         } else {
-            buf.filetype = null;
+            buf.setFiletype(null) catch {};
             self.logger.info("❌ No filetype detected for {s}", .{path}) catch {};
         }
 
@@ -682,13 +701,13 @@ pub const Editor = struct {
         const filetype = self.ts_loader.detectFiletype(path, first_line);
 
         if (filetype) |ft| {
-            buf.filetype = ft;
+            buf.setFiletype(ft) catch {};
             self.logger.info("✅ Detected filetype: {s} for {s}", .{ ft, path }) catch {};
 
             // Parse with tree-sitter
             try self.parseBufferWithTreeSitter(ft);
         } else {
-            buf.filetype = null;
+            buf.setFiletype(null) catch {};
             self.logger.info("❌ No filetype detected for {s}", .{path}) catch {};
         }
 
@@ -1886,10 +1905,17 @@ pub const Editor = struct {
         defer self.viewport_movement = null;
 
         const buf = self.getCurrentBuffer() orelse return;
+
+        // Get 'startofline' option - default is false (preserve sticky column)
+        const start_of_line = if (self.options_manager) |opts_mgr|
+            opts_mgr.getBoolean("startofline") orelse false
+        else
+            false;
+
         switch (command) {
-            'H' => movement.moveToViewportTop(buf, viewport_top),
-            'M' => movement.moveToViewportMiddle(buf, viewport_top, viewport_height),
-            'L' => movement.moveToViewportBottom(buf, viewport_top, viewport_height),
+            'H' => movement.moveToViewportTop(buf, viewport_top, start_of_line),
+            'M' => movement.moveToViewportMiddle(buf, viewport_top, viewport_height, start_of_line),
+            'L' => movement.moveToViewportBottom(buf, viewport_top, viewport_height, start_of_line),
             else => {},
         }
     }
@@ -1978,7 +2004,8 @@ pub const Editor = struct {
     }
 
     /// Parse buffer content with tree-sitter after filetype detection
-    fn parseBufferWithTreeSitter(self: *Editor, filetype: []const u8) !void {
+    /// This is public so it can be called from config_api when vim.bo.filetype is set
+    pub fn parseBufferWithTreeSitter(self: *Editor, filetype: []const u8) !void {
         // Normalize language name
         const lang_name = normalizeLangName(filetype);
         self.logger.info("🔍 Normalizing filetype '{s}' → '{s}'", .{ filetype, lang_name }) catch {};

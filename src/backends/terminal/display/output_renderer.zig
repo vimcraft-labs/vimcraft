@@ -495,7 +495,8 @@ pub fn renderUpdates(self: *Display, updates: []const Update) !void {
     self.cross_frame_underline = current_underline;
 
     // NEOVIM + HELIX PATTERN: Single flush (batched output)
-    try self.stdout.writeAll(buf.items);
+    // Use writeOutput to support PTY capture mode for E2E testing
+    try self.writeOutput(buf.items);
 }
 
 /// O5: Determine if relative cursor movement is shorter than absolute

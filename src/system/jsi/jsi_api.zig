@@ -97,14 +97,26 @@ pub fn initJSI(
         .buffer = blk: {
             const T = @TypeOf(editor_or_context);
             if (T == *Editor) {
-                // Editor uses multi-buffer architecture - can't store static pointer
-                // vim.bo won't work for Editor (needs refactoring to call getCurrentBuffer())
-                break :blk null;
+                // Editor uses multi-buffer architecture - get current buffer
+                // Note: This pointer becomes stale when user switches buffers,
+                // but vim.bo operations are typically done on current buffer
+                break :blk editor_or_context.getCurrentBuffer();
             } else if (T == *EditorContext) {
                 // EditorContext has buffer() accessor method
                 break :blk editor_or_context.buffer();
             } else {
                 // Fallback for other types (shouldn't happen in practice)
+                break :blk null;
+            }
+        },
+        .editor = blk: {
+            const T = @TypeOf(editor_or_context);
+            if (T == *Editor) {
+                break :blk editor_or_context;
+            } else if (T == *EditorContext) {
+                // EditorContext wraps an Editor - get pointer to it for tree-sitter parsing
+                break :blk &editor_or_context.editor;
+            } else {
                 break :blk null;
             }
         },
@@ -293,6 +305,7 @@ pub fn initJSI(
             .editor = @ptrCast(editor_or_context),
             .execute_keys_fn = &executeKeysWrapper,
             .js_state_dirty = &editor_or_context.js_state_dirty,
+            .display = display, // Wire display for PTY capture
         };
         global_e2e_ctx = e2e_ctx;
         e2e_api.register(runtime, e2e_ctx);
@@ -308,6 +321,7 @@ pub fn initJSI(
             .editor = @ptrCast(editor_or_context),
             .execute_keys_fn = &executeKeysWrapperContext,
             .js_state_dirty = null, // EditorContext doesn't need dirty tracking
+            .display = &editor_or_context.display, // Wire display for PTY capture
         };
         global_e2e_ctx = e2e_ctx;
         e2e_api.register(runtime, e2e_ctx);

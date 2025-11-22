@@ -90,6 +90,9 @@ pub const Buffer = struct {
         if (self.filepath) |path| {
             self.allocator.free(path);
         }
+        if (self.filetype) |ft| {
+            self.allocator.free(ft);
+        }
 
         // Clean up active transaction if any
         if (self.active_transaction) |*trans| {
@@ -623,6 +626,22 @@ pub const Buffer = struct {
             (c >= 'A' and c <= 'Z') or
             (c >= '0' and c <= '9') or
             c == '_';
+    }
+
+    /// Set filetype (allocates and copies string, frees previous if any)
+    /// Pass null to clear filetype
+    pub fn setFiletype(self: *Buffer, ft: ?[]const u8) !void {
+        // Free previous filetype if any
+        if (self.filetype) |old_ft| {
+            self.allocator.free(old_ft);
+        }
+
+        // Set new filetype (allocate and copy)
+        if (ft) |new_ft| {
+            self.filetype = try self.allocator.dupe(u8, new_ft);
+        } else {
+            self.filetype = null;
+        }
     }
 
     /// Save buffer to file

@@ -249,6 +249,8 @@ pub export fn moveToFileEnd(
 // ============================================================================
 
 /// Move to top of viewport (H)
+/// Note: Uses start_of_line=false (preserve sticky column) - modern preferred behavior
+/// TODO: Add options_manager to MotionContext for full 'startofline' option support
 pub export fn moveToViewportTop(
     runtime_nullable: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
@@ -260,12 +262,13 @@ pub export fn moveToViewportTop(
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
 
-    movement.moveToViewportTop(ctx.buffer, ctx.viewport_top.*);
+    movement.moveToViewportTop(ctx.buffer, ctx.viewport_top.*, false);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
 
 /// Move to middle of viewport (M)
+/// Note: Uses start_of_line=false (preserve sticky column) - modern preferred behavior
 pub export fn moveToViewportMiddle(
     runtime_nullable: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
@@ -277,12 +280,13 @@ pub export fn moveToViewportMiddle(
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
 
-    movement.moveToViewportMiddle(ctx.buffer, ctx.viewport_top.*, ctx.viewport_height);
+    movement.moveToViewportMiddle(ctx.buffer, ctx.viewport_top.*, ctx.viewport_height, false);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
 
 /// Move to bottom of viewport (L)
+/// Note: Uses start_of_line=false (preserve sticky column) - modern preferred behavior
 pub export fn moveToViewportBottom(
     runtime_nullable: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
@@ -294,7 +298,7 @@ pub export fn moveToViewportBottom(
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
 
-    movement.moveToViewportBottom(ctx.buffer, ctx.viewport_top.*, ctx.viewport_height);
+    movement.moveToViewportBottom(ctx.buffer, ctx.viewport_top.*, ctx.viewport_height, false);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }

@@ -453,6 +453,15 @@ pub const OPTIONS = [_]OptionMeta{
         .scope = .global,
     },
 
+    .{
+        .name = "startofline",
+        .short_name = "sol",
+        .js_name = "startOfLine",
+        .type = .boolean,
+        .default = .{ .boolean = false }, // Neovim default is off (preserves column)
+        .scope = .global,
+    },
+
     // ========== Search Options ==========
 
     .{

@@ -112,32 +112,25 @@ test "buffer insert at position" {
 ```
 tests/e2e/
 ├── motion/
-│   ├── config.ts        # TypeScript plugin for this test
-│   └── test.zig         # PTY test cases
-├── usercommand/
-│   ├── config.ts        # Plugin that creates :MyCommand
-│   └── test.zig
+│   ├── config.ts        # Optional TypeScript plugin for this test
+│   └── e2e.ts           # Test cases (TypeScript)
+├── rendering/
+│   ├── config.ts        # Plugin config
+│   └── e2e.ts           # PTY capture tests for terminal output
 └── ...
 ```
 
 **Example E2E test**:
-```zig
-// tests/e2e/motion/test.zig
-test "vim.motion.left moves cursor" {
-    var pty = try spawnWithConfig("tests/e2e/motion/config.ts");
-    defer pty.kill();
-
-    // Setup: cursor at col 5
-    try pty.sendKeys(":e /tmp/test.txt\n");
-    try pty.sendKeys("lllll");  // Move to col 5
-
-    // Execute: vim.motion.left() via plugin
-    try pty.sendKeys(":lua vim.motion.left()\n");
-
-    // Assert: cursor moved to col 4
-    const state = try pty.queryState();
-    try std.testing.expectEqual(@as(usize, 4), state.cursor.col);
-}
+```typescript
+// tests/e2e/motion/e2e.ts
+vim.e2e.describe("vim.motion API", function() {
+    vim.e2e.test("left moves cursor", function() {
+        vim.e2e.keys("lllll");  // Move to col 5
+        vim.motion.left();       // Execute motion
+        vim.e2e.assert.cursorAt(0, 4);  // Assert col 4
+    });
+});
+vim.e2e.runAll();
 ```
 
 ### Test Isolation: Fresh Process Per Test
@@ -217,13 +210,13 @@ for d in tests/e2e/*/; do vimc test "$d"; done  # Run all E2E tests
 | Visual mode + yank | E2E | User workflow |
 | ANSI escape codes | E2E | Terminal rendering |
 
-### Migration from Old Structure
+### Current Test Structure
 
-| Old Location | New Location |
-|--------------|--------------|
-| `src/**/*_test.zig` | `tests/unit/` |
-| `tests/hermes/*.ts` | `tests/e2e/*/config.ts` |
-| `src/backends/terminal/tests/core_tests.zig` | `tests/e2e/` |
+| Location | Purpose |
+|----------|---------|
+| `src/**/*_test.zig` | Pure Zig unit tests (run via `zig build test`) |
+| `tests/e2e/*/e2e.ts` | E2E tests with Hermes runtime |
+| `tests/e2e/rendering/e2e.ts` | Terminal output validation (ANSI escape codes) |
 
 ### Quick Reference
 
@@ -270,86 +263,84 @@ E2E tests:
 5. **Log Transformations** - Show before→after, not just final state
 6. **Targeted Tests** - Verify fix + edge cases + no side effects
 7. **Follow Breadcrumbs** - User reports contain critical clues
-8. **Use the Right Tool** - E2E tests for logic bugs, PTY for rendering bugs
+8. **Use the Right Tool** - E2E tests for logic bugs, `vim.e2e.pty.*` for rendering bugs
 
-### E2E vs PTY Testing: Real-World Case Study
+### E2E PTY Capture for Rendering Bugs
 
 **Cursor Flickering Bug** (January 2025) - Perfect example of tool selection:
 
 **Bug**: Cursor flickered between bright/faded states during rapid input (holding 'j')
 
-**What E2E Tests Show** (not helpful for this bug):
+**What basic E2E Tests Show** (not helpful for this bug):
 ```json
 {"mode":"NORMAL","cursor":{"line":10,"col":0}}  // Internal state correct ✅
 // But NO information about terminal escape codes being sent!
 ```
 
-**What PTY Testing Would Catch** (immediately reveals the problem):
-```zig
-test "cursor codes not redundant" {
-    var pty = try PTY.spawn("./zig-out/bin/vimcraft");
+**What `vim.e2e.pty.*` Catches** (immediately reveals the problem):
+```typescript
+// tests/e2e/rendering/e2e.ts
+vim.e2e.describe("Cursor Flickering", function() {
+    vim.e2e.test("rapid movements have minimal cursor toggles", function() {
+        vim.e2e.pty.startCapture();
+        vim.e2e.keys("jjjjjjjjjjjjjjjjjjjj"); // 20 rapid movements
+        vim.e2e.pty.render();
 
-    // Hold 'j' for rapid movement
-    for (0..20) |_| {
-        try pty.send("j");
-        std.time.sleep(10 * std.time.ns_per_ms);
-    }
+        const hideCount = vim.e2e.pty.countHideCursor();
+        const showCount = vim.e2e.pty.countShowCursor();
+        vim.e2e.pty.stopCapture();
 
-    const output = try pty.readAll();
-    // Count escape codes: \x1b[?25l (hide), \x1b[?25h (show)
-    const hide_count = std.mem.count(u8, output, "\x1b[?25l");
-    const show_count = std.mem.count(u8, output, "\x1b[?25h");
-
-    // FAIL: Expected 0, got 20! (cursor toggled on EVERY render)
-    try expectEqual(@as(usize, 0), hide_count);
-}
+        // Should be <10 toggles, not 40!
+        vim.e2e.assert.true(hideCount + showCount < 10, "Excessive flickering");
+    });
+});
 ```
 
-**Root Causes Found** (only discoverable via terminal output inspection):
+**Root Causes Found** (via `vim.e2e.pty.*` API):
 1. Redundant cursor shape codes (`\x1b[2 q`) sent 20× per second
 2. Redundant cursor visibility toggle (`\x1b[?25l`, `\x1b[?25h`) 40× per second
 
-**Key Insight**: E2E tests show state is correct, but PTY testing reveals rendering bugs. Neither tool alone is sufficient - you need BOTH!
+**Key Insight**: Basic E2E tests show state is correct, but `vim.e2e.pty.*` captures actual terminal output to reveal rendering bugs.
 
 ### Tool Selection Guide
 
-**Use E2E Tests (`vimc test`) When**:
+**Use `vim.e2e.*` (state inspection) When**:
 - ✅ Debugging crashes/panics (exact stack traces)
 - ✅ Verifying internal state (cursor position, mode, buffer content)
 - ✅ Tracing logic errors (wrong calculations, incorrect flow)
 - ✅ Inspecting layer composition (what's enabled/dirty)
 - ✅ Analyzing logs for state transitions
 
-**Use PTY Testing When**:
+**Use `vim.e2e.pty.*` (terminal capture) When**:
 - ✅ Validating terminal output (ANSI escape codes)
 - ✅ Catching visual artifacts (flickering, incorrect colors)
 - ✅ Testing timing-sensitive bugs (rapid input handling)
 - ✅ Verifying user experience (what user actually sees)
 - ✅ Counting redundant operations (escape code frequency)
 
-**Use BOTH When**:
+**Combine Both When**:
 - ✅ Complex bugs with state + rendering components
-- ✅ First reproducing with PTY, then diagnosing with E2E tests
+- ✅ First reproduce with `vim.e2e.pty.*`, then diagnose with state APIs
 - ✅ Verifying complete fix (state correct AND rendering smooth)
 
 ### Common Bug Patterns by Tool
 
-**Caught by E2E Tests**:
+**Caught by `vim.e2e.*` (state inspection)**:
 - Early return optimization → Skips validation (check opacity >= 1.0 returns)
 - Type conversion → Loses data (@intFromFloat with NaN/Infinity)
 - Null handling → Assumes non-null when optional (check .? usage)
 - State transitions → Mode not changing, cursor wrong position
 - Logic errors → Wrong calculations, incorrect conditions
 
-**Caught ONLY by PTY Testing**:
+**Caught by `vim.e2e.pty.*` (terminal capture)**:
 - Redundant escape codes → Terminal codes sent unnecessarily
 - Visual flickering → Cursor visibility toggled too often
 - Color bleeding → ANSI reset codes missing
 - Terminal-specific bugs → Works in one terminal, breaks in another
 - Performance issues → Too many escape codes overwhelming terminal
 
-**Requires Both Tools**:
-- Input handling bugs → Key processed (E2E) but display wrong (PTY)
+**Requires Both**:
+- Input handling bugs → Key processed (state OK) but display wrong (terminal output)
 - Rendering pipeline bugs → State correct but output corrupted
 - Timing bugs → State updates but render lags
 
@@ -388,19 +379,29 @@ vim.e2e.describe("Debug rendering bug", function() {
 vim.e2e.runAll();
 ```
 
-**Terminal Output Bug Workflow** (NEW):
-```bash
-# Step 1: Write PTY test to capture actual output
-zig test src/backends/terminal/tests/output_test.zig
+**Terminal Output Bug Workflow**:
+```typescript
+// tests/e2e/rendering/e2e.ts - Use vim.e2e.pty.* API
+vim.e2e.describe("Debug terminal output", function() {
+    vim.e2e.test("check escape codes", function() {
+        vim.e2e.pty.startCapture();
+        vim.e2e.pty.clear();
 
-# Step 2: Parse terminal output for escape codes
-# Look for patterns like:
-# - Redundant codes (same code sent multiple times)
-# - Missing codes (expected code not present)
-# - Wrong order (codes sent in incorrect sequence)
+        vim.e2e.keys("jjj");  // Trigger movements
+        vim.e2e.pty.render();
 
-# Step 3: Add state tracking to prevent redundancy
-# Example: track last_cursor_shape to avoid re-sending
+        // Count specific escape codes
+        const hideCount = vim.e2e.pty.countHideCursor();
+        const posCount = vim.e2e.pty.countCursorPositionCodes();
+        const sgrCount = vim.e2e.pty.countSGRCodes();
+
+        vim.e2e.pty.stopCapture();
+
+        console.log("Hide cursor codes:", hideCount);
+        console.log("Position codes:", posCount);
+        console.log("SGR codes:", sgrCount);
+    });
+});
 ```
 
 **Add Debug Logs When Investigating** (make data flow visible):
@@ -410,12 +411,12 @@ editor.logger.debug("TRANSFORM[{s}]: before={} after={}", .{component, before, a
 editor.logger.debug("LAYER[{s}]: enabled={} dirty={} cells={}", .{name, enabled, dirty, count});
 editor.logger.debug("BLEND: src={u} dst={u} result={u}", .{src.char, dst.char, result.char});
 
-// NEW: Log terminal escape codes for PTY debugging
+// Log terminal escape codes for debugging
 editor.logger.debug("ESCAPE: sending {s}", .{escape_code});
 editor.logger.debug("CURSOR: shape={s} visibility={}", .{shape, visible});
 ```
 
-**Success Metrics**: Fix in 1-2 iterations (not 5-10), root cause identified (not guessed), verified with BOTH E2E tests AND PTY tests.
+**Success Metrics**: Fix in 1-2 iterations (not 5-10), root cause identified (not guessed), verified with E2E tests (state + terminal output).
 
 **Reference**: See [docs/bugfixes/cursor-flickering-fix.md](docs/bugfixes/cursor-flickering-fix.md) for detailed case study.
 
@@ -1274,166 +1275,46 @@ updates_sorted: usize = 0,        // Updates batched
 
 **Result**: Vimcraft now has production-ready rendering performance suitable for aggressive plugin use (smear-cursor, virtual text, diagnostics, etc.).
 
-### Testing and Benchmarking Infrastructure
+### Testing Infrastructure
 
-**Status**: ✅ PTY tests complete, ⚠️ Benchmarks created (build issues pending)
+**Status**: ✅ E2E tests with `vim.e2e.pty.*` API for terminal output validation
 
-To validate and measure rendering optimizations, Vimcraft now includes comprehensive testing and benchmarking infrastructure.
+Rendering optimizations are validated using the E2E test framework with PTY capture capabilities.
 
-#### PTY Tests for Rendering Optimizations
+**Location**: `tests/e2e/rendering/e2e.ts`
+**Run**: `vimc test tests/e2e/rendering/`
 
-**Location**: `src/backends/terminal/tests/rendering_optimization_tests.zig`
-**Run**: `zig build pty_tests`
+**6 Test Categories**:
 
-**Purpose**: Validate rendering optimizations work correctly by inspecting actual terminal output (ANSI escape codes).
+1. **Synchronized Updates** - Cursor visibility toggle counts
+2. **Cursor Position Tracking** - Position code frequency
+3. **Color/Attribute Tracking** - SGR code optimization
+4. **Render Statistics** - Frame counts and timing
+5. **Escape Sequence Patterns** - Custom pattern counting
+6. **Flickering Detection** - Rapid input cursor stability
 
-**5 Comprehensive Tests**:
+**Example Test**:
+```typescript
+vim.e2e.describe("Synchronized Updates", function() {
+    vim.e2e.test("rapid movements have minimal cursor toggles", function() {
+        vim.e2e.pty.startCapture();
+        vim.e2e.keys("jjjjjjjjjjjjjjjjjjjj"); // 20 movements
+        vim.e2e.pty.render();
 
-1. **Synchronized Updates Test**:
-   - Sends 20 rapid movements (holding 'j')
-   - Counts cursor visibility toggles (`\x1b[?25l`, `\x1b[?25h`)
-   - **Expected**: <10 toggles (with sync updates)
-   - **Without optimization**: 40-80 toggles
-   - **Result**: ✅ **PASS** (3 toggles) - Synchronized updates working excellently!
+        const hideCount = vim.e2e.pty.countHideCursor();
+        const showCount = vim.e2e.pty.countShowCursor();
+        vim.e2e.pty.stopCapture();
 
-2. **Cursor Position Tracking Test**:
-   - Sends 10 cursor movements (10x 'l')
-   - Counts cursor position codes (`\x1b[{row};{col}H`)
-   - **Expected**: <20 position codes
-   - **Without optimization**: 20-40 codes
-   - **Result**: ❌ **FAIL** (42 codes) - Reveals cursor tracking needs improvement
-
-3. **Render Throttling Test**:
-   - Sends 50 rapid movements in 500ms
-   - Measures effective frame rate
-   - **Expected**: ~30 renders (60 FPS × 0.5s)
-   - **Without optimization**: 50+ renders
-   - **Result**: ⚠️ **CLOSE** (42 renders) - Throttling mostly working, slight variance
-
-4. **Color/Attribute Tracking Test**:
-   - Scrolls down/up to trigger re-rendering
-   - Counts SGR codes (color/attribute escape codes)
-   - **Result**: ✅ **INFO** (546 SGR codes) - High count expected for colorized output
-
-5. **Event Batching Test**:
-   - Sends 3 rapid commands (j + l + l)
-   - Counts cursor position updates
-   - **Expected**: <5 renders (batched)
-   - **Without optimization**: 3+ renders
-   - **Result**: ⚠️ **INFO** (43 renders) - Reveals batching optimization opportunity
-
-**Key Findings**:
-- ✅ Synchronized updates work perfectly (3 toggles vs theoretical 40)
-- ❌ Cursor position tracking has optimization opportunity (42 vs expected <20)
-- ✅ Render throttling prevents runaway renders (42 vs 50)
-- ℹ️ Tests correctly identify which optimizations are effective vs need work
-
-**Test Pattern** (example):
-```zig
-test "PTY: Synchronized updates prevent cursor flickering" {
-    var pty = try spawnVimcraft(allocator);
-    defer pty.kill();
-
-    // Send 20 rapid movements
-    try pty.write("jjjjjjjjjjjjjjjjjjjj");
-    std.Thread.sleep(300 * std.time.ns_per_ms);
-
-    // Capture and parse terminal output
-    const output = try pty.readAll();
-    const hide_count = std.mem.count(u8, output, "\x1b[?25l");
-    const show_count = std.mem.count(u8, output, "\x1b[?25h");
-
-    // Verify optimization is working
-    if (hide_count + show_count > 10) {
-        return error.ExcessiveFlickering;
-    }
-}
+        vim.e2e.assert.true(hideCount + showCount < 50,
+            "Should have <50 cursor toggles");
+    });
+});
 ```
-
-#### Performance Benchmarks
-
-**Location**: `src/tools/benchmark/rendering_bench.zig`
-**Run**: `zig build bench` (currently has build issues - see below)
-
-**Purpose**: Measure quantitative performance impact of rendering optimizations.
-
-**5 Comprehensive Benchmarks**:
-
-1. **Single Render Performance** (Synchronized Updates Impact):
-   - Measures: Single full-screen render with sync updates enabled
-   - Target: <16.67ms (60 FPS budget)
-   - Validates: DCS sequences overhead is negligible
-
-2. **Rapid Sequential Renders** (Render Throttling):
-   - Measures: 10 rapid renders in sequence
-   - Target: Effective FPS ≤ 60
-   - Validates: Throttling prevents excessive frame rates
-
-3. **Cursor Position Changes** (Cursor Tracking Optimization):
-   - Measures: 50 cursor movements with render after each
-   - Target: <5ms per movement
-   - Validates: Position tracking eliminates redundant codes
-
-4. **Scrolling Performance** (Scroll Region Optimization):
-   - Measures: 100 scroll steps through large file
-   - Target: <10ms per scroll
-   - Validates: Scroll region primitives are fast (when integrated)
-
-5. **Visual Mode Rendering** (Multi-Layer Composition):
-   - Measures: Render with visual selection (compositor active)
-   - Target: <25% overhead vs normal render
-   - Validates: Layer blending is efficient
-
-**Benchmark Output Format**:
-```
-=== Rendering Optimization Benchmarks ===
-
-1. Single Render Performance (Synchronized Updates)
-   Avg: 12.345ms | Target: <16.67ms (60 FPS)
-
-2. Rapid Sequential Renders (Throttling)
-   Avg: 15.678ms/render | Effective FPS: 63.8 | Target: 60 FPS
-
-...
-
-=== Optimization Analysis ===
-✓ Synchronized Updates: EXCELLENT (within 60 FPS budget)
-✓ Render Throttling: EXCELLENT (throttled to ~64 FPS)
-✓ Cursor Tracking: GOOD (<10ms per movement)
-✓ Scroll Regions: EXCELLENT (<10ms per scroll)
-✓ Layer Composition: EXCELLENT (<10% overhead)
-```
-
-**Known Issues**:
-- ⚠️ Benchmark build currently fails due to:
-  1. C import path issues (pre-existing FIXME in `build.zig:690-692`)
-  2. API signature change in `display.render()` (expects `bool` not `HighlightConfig` for `cursorline_enabled`)
-- 📝 Benchmarks are ready to run once build issues are resolved
-- 🔧 Build fixes needed before benchmarks can measure performance
-
-**Code Locations**:
-- PTY Tests: `src/backends/terminal/tests/rendering_optimization_tests.zig:1-356`
-- Benchmarks: `src/tools/benchmark/rendering_bench.zig:1-413`
-- Integration: `src/tools/benchmark/main.zig:4,25` (benchmarks added to suite)
-- Build Config: `build.zig:920-934` (PTY tests), `build.zig:697-698` (bench target)
 
 **Running Tests**:
 ```bash
-# Run PTY tests (works now)
-zig build pty_tests
-
-# Run just rendering optimization tests
-zig test src/backends/terminal/tests/rendering_optimization_tests.zig
-
-# Run benchmarks (needs build fixes first)
-zig build bench
+vimc test tests/e2e/rendering/   # Run rendering optimization tests
 ```
-
-**Future Work**:
-- Fix benchmark build issues (C import paths, API signature)
-- Add before/after benchmarks (measure actual optimization impact)
-- Add performance regression tests (fail if FPS drops below threshold)
-- Integrate benchmarks into CI/CD pipeline
 
 ## Build Commands
 

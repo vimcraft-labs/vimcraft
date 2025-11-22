@@ -194,14 +194,14 @@ pub fn scrollDown(self: *Display, lines: usize) !void {
     try print(self, "\x1b[{d}T", .{lines});
 }
 
-/// Helper to write bytes to stdout
+/// Helper to write bytes to stdout (with capture support)
+/// Uses Display.writeOutput to capture terminal output when capture_mode is enabled
 fn write(self: *Display, bytes: []const u8) !void {
-    return self.stdout.writeAll(bytes);
+    return self.writeOutput(bytes);
 }
 
-/// Helper to print formatted output to stdout
+/// Helper to print formatted output to stdout (with capture support)
+/// Uses Display.printOutput to capture terminal output when capture_mode is enabled
 fn print(self: *Display, comptime format: []const u8, args: anytype) !void {
-    // Format to a temporary buffer, then write it
-    const formatted = try std.fmt.bufPrint(&self.stdout_buf, format, args);
-    try self.stdout.writeAll(formatted);
+    return self.printOutput(format, args);
 }

@@ -135,6 +135,20 @@ pub const Query = struct {
         language_name: []const u8,
         language: *const c.TSLanguage,
     ) QueryError!Query {
+        // SPECIAL CASE: Markdown has nested directory structure
+        // tree-sitter-markdown/tree-sitter-markdown/queries/highlights.scm (block-level)
+        // tree-sitter-markdown/tree-sitter-markdown-inline/queries/highlights.scm (inline)
+        if (std.mem.eql(u8, language_name, "markdown")) {
+            const md_path = "vendor/tree-sitter-markdown/tree-sitter-markdown/queries/highlights.scm";
+            return try loadFromFile(allocator, language, md_path);
+        }
+
+        // SPECIAL CASE: Markdown inline parser (for inline elements: bold, italic, links)
+        if (std.mem.eql(u8, language_name, "markdown_inline")) {
+            const md_inline_path = "vendor/tree-sitter-markdown/tree-sitter-markdown-inline/queries/highlights.scm";
+            return try loadFromFile(allocator, language, md_inline_path);
+        }
+
         // SPECIAL CASE: TypeScript needs JavaScript base highlights
         // TypeScript-specific highlights.scm only has 35 lines (types, interfaces)
         // JavaScript highlights.scm has 204 lines (keywords, functions, strings, etc.)
@@ -286,6 +300,44 @@ test "Query: load for language (JavaScript)" {
     // Verify query loaded
     try std.testing.expect(query.getCaptureCount() > 0);
     try std.testing.expect(query.getPatternCount() > 0);
+}
+
+test "Query: load for language (Markdown)" {
+    const languages = @import("languages.zig");
+    const allocator = std.testing.allocator;
+
+    const md_lang = languages.getLanguage("markdown").?;
+
+    var query = try Query.loadForLanguage(allocator, "markdown", md_lang);
+    defer query.deinit();
+
+    // Verify query loaded from nested path
+    try std.testing.expect(query.getCaptureCount() > 0);
+    try std.testing.expect(query.getPatternCount() > 0);
+
+    // Verify we have markdown-specific captures (text.title, punctuation.special, etc.)
+    const names = try query.getCaptureNames(allocator);
+    defer allocator.free(names);
+    try std.testing.expect(names.len > 0);
+}
+
+test "Query: load for language (Markdown Inline)" {
+    const languages = @import("languages.zig");
+    const allocator = std.testing.allocator;
+
+    const md_inline_lang = languages.getLanguage("markdown_inline").?;
+
+    var query = try Query.loadForLanguage(allocator, "markdown_inline", md_inline_lang);
+    defer query.deinit();
+
+    // Verify query loaded from nested path
+    try std.testing.expect(query.getCaptureCount() > 0);
+    try std.testing.expect(query.getPatternCount() > 0);
+
+    // Verify we have inline-specific captures (text.emphasis, text.strong, etc.)
+    const names = try query.getCaptureNames(allocator);
+    defer allocator.free(names);
+    try std.testing.expect(names.len > 0);
 }
 
 test "Query: syntax error handling" {

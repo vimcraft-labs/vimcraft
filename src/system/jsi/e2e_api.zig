@@ -20,6 +20,7 @@ const Buffer = @import("../../editor/buffer/buffer.zig").Buffer;
 const ModeManager = @import("../../editor/mode/mode.zig").ModeManager;
 const VisualState = @import("../../editor/visual/visual.zig").VisualState;
 const RegisterManager = @import("../../editor/register/register.zig").RegisterManager;
+const Display = @import("../../backends/terminal/display/display.zig").Display;
 
 /// E2E Context - holds references to editor state
 pub const E2EContext = struct {
@@ -34,6 +35,8 @@ pub const E2EContext = struct {
     execute_keys_fn: *const fn (*anyopaque, []const u8) anyerror!void,
     /// js_state_dirty flag for triggering re-renders
     js_state_dirty: ?*bool,
+    /// Display reference for PTY capture (optional for backwards compatibility)
+    display: ?*Display = null,
 };
 
 /// Global context (set during registration)
@@ -393,10 +396,14 @@ fn runAllCmd(
     var failed: usize = 0;
     var result_entries: std.ArrayList(TestResultEntry) = .empty;
 
-    std.debug.print("\n=== E2E Test Results ===\n\n", .{});
+    if (g_verbose) {
+        std.debug.print("\n=== E2E Test Results ===\n\n", .{});
+    }
 
     for (test_suites.items) |suite| {
-        std.debug.print("Suite: {s}\n", .{suite.name});
+        if (g_verbose) {
+            std.debug.print("Suite: {s}\n", .{suite.name});
+        }
 
         for (suite.tests.items) |test_case| {
             // Clear and enable log capture for this test
@@ -405,6 +412,11 @@ fn runAllCmd(
                 current_test_logs.items.len = 0;
             }
             log_capture_enabled = true;
+
+            // Start PTY capture for this test (if display available)
+            if (ctx.display) |display| {
+                display.startCapture();
+            }
 
             // Capture state BEFORE test execution (LLM debugging)
             const state_before = captureStateSnapshot(ctx.allocator, ctx);
@@ -419,6 +431,16 @@ fn runAllCmd(
             // Capture state AFTER test execution (LLM debugging)
             const state_after = captureStateSnapshot(ctx.allocator, ctx);
 
+            // Stop PTY capture and get output
+            const pty_output: ?[]const u8 = if (ctx.display) |display| blk: {
+                const output = display.stopCapture();
+                // Duplicate the output since capture buffer may be reused
+                if (output.len > 0) {
+                    break :blk ctx.allocator.dupe(u8, output) catch null;
+                }
+                break :blk null;
+            } else null;
+
             // Disable log capture and get logs
             log_capture_enabled = false;
             const test_logs = getAndClearTestLogs();
@@ -427,8 +449,10 @@ fn runAllCmd(
             // Check for exception
             if (c.hermes_has_exception(runtime)) {
                 const err_msg = c.hermes_get_exception_message(runtime);
-                std.debug.print("  FAIL: {s}\n", .{test_case.name});
-                std.debug.print("        Error: {s}\n", .{err_msg});
+                if (g_verbose) {
+                    std.debug.print("  FAIL: {s}\n", .{test_case.name});
+                    std.debug.print("        Error: {s}\n", .{err_msg});
+                }
                 failed += 1;
 
                 // Clear exception for next test
@@ -445,9 +469,12 @@ fn runAllCmd(
                     .state_before = state_before,
                     .state_after = state_after,
                     .checkpoints = test_checkpoints,
+                    .pty_output = pty_output,
                 }) catch {};
             } else {
-                std.debug.print("  PASS: {s}\n", .{test_case.name});
+                if (g_verbose) {
+                    std.debug.print("  PASS: {s}\n", .{test_case.name});
+                }
                 passed += 1;
 
                 // Store result
@@ -461,6 +488,7 @@ fn runAllCmd(
                     .state_before = state_before,
                     .state_after = state_after,
                     .checkpoints = test_checkpoints,
+                    .pty_output = pty_output,
                 }) catch {};
             }
 
@@ -468,10 +496,14 @@ fn runAllCmd(
                 c.hermes_value_destroy(r);
             }
         }
-        std.debug.print("\n", .{});
+        if (g_verbose) {
+            std.debug.print("\n", .{});
+        }
     }
 
-    std.debug.print("Results: {d} passed, {d} failed\n\n", .{ passed, failed });
+    if (g_verbose) {
+        std.debug.print("Results: {d} passed, {d} failed\n\n", .{ passed, failed });
+    }
 
     // Mark tests as complete and store results for Zig runner
     markComplete(passed, failed, result_entries);
@@ -496,6 +528,443 @@ fn runAllCmd(
     }
 
     return results;
+}
+
+// ============================================================================
+// PTY Capture Functions (for terminal output validation)
+// ============================================================================
+
+/// vim.e2e.pty.startCapture() - Start capturing terminal ANSI output
+fn ptyStartCapture(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+    display.startCapture();
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.pty.stopCapture() - Stop capturing and return captured output
+fn ptyStopCapture(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+    const output = display.stopCapture();
+    return c.hermes_value_create_string(runtime, output.ptr, output.len);
+}
+
+/// vim.e2e.pty.getOutput() - Get current captured output without stopping
+fn ptyGetOutput(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+    const output = display.getCapturedOutput();
+    return c.hermes_value_create_string(runtime, output.ptr, output.len);
+}
+
+/// vim.e2e.pty.clear() - Clear captured output buffer
+fn ptyClear(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+    display.clearCapturedOutput();
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.pty.getLength() - Get length of captured output (useful for checking if empty)
+fn ptyGetLength(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+    const len = display.getCapturedLength();
+    return c.hermes_value_create_number(runtime, @floatFromInt(len));
+}
+
+/// vim.e2e.pty.countSequence(pattern) - Count occurrences of escape sequence
+/// Example: countSequence("\x1b[?25l") to count cursor hide sequences
+fn ptyCountSequence(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+
+    if (arg_count < 1) {
+        c.hermes_throw_error(runtime, "countSequence requires 1 argument (pattern)");
+        return null;
+    }
+
+    var pattern_len: usize = 0;
+    const pattern_ptr = c.hermes_value_get_string(runtime, args[0], &pattern_len);
+    if (pattern_ptr == null or pattern_len == 0) {
+        c.hermes_throw_error(runtime, "countSequence requires string pattern argument");
+        return null;
+    }
+
+    const pattern = pattern_ptr[0..pattern_len];
+    const output = display.getCapturedOutput();
+
+    // Count occurrences of pattern in output
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i + pattern.len <= output.len) {
+        if (std.mem.eql(u8, output[i..][0..pattern.len], pattern)) {
+            count += 1;
+            i += pattern.len; // Non-overlapping matches
+        } else {
+            i += 1;
+        }
+    }
+
+    return c.hermes_value_create_number(runtime, @floatFromInt(count));
+}
+
+/// vim.e2e.pty.isCapturing() - Check if capture mode is active
+fn ptyIsCapturing(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        return c.hermes_value_create_boolean(runtime, false);
+    };
+    return c.hermes_value_create_boolean(runtime, display.capture_mode);
+}
+
+/// vim.e2e.pty.countHideCursor() - Count cursor hide escape codes (ESC[?25l)
+/// Returns number of times cursor was hidden in captured output
+fn ptyCountHideCursor(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+    const output = display.getCapturedOutput();
+
+    // Count ESC[?25l (hide cursor)
+    const pattern = "\x1b[?25l";
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i + pattern.len <= output.len) {
+        if (std.mem.eql(u8, output[i..][0..pattern.len], pattern)) {
+            count += 1;
+            i += pattern.len;
+        } else {
+            i += 1;
+        }
+    }
+
+    return c.hermes_value_create_number(runtime, @floatFromInt(count));
+}
+
+/// vim.e2e.pty.countShowCursor() - Count cursor show escape codes (ESC[?25h)
+/// Returns number of times cursor was shown in captured output
+fn ptyCountShowCursor(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+    const output = display.getCapturedOutput();
+
+    // Count ESC[?25h (show cursor)
+    const pattern = "\x1b[?25h";
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i + pattern.len <= output.len) {
+        if (std.mem.eql(u8, output[i..][0..pattern.len], pattern)) {
+            count += 1;
+            i += pattern.len;
+        } else {
+            i += 1;
+        }
+    }
+
+    return c.hermes_value_create_number(runtime, @floatFromInt(count));
+}
+
+/// vim.e2e.pty.countCursorPositionCodes() - Count cursor position codes (ESC[row;colH)
+/// Returns number of cursor positioning commands in captured output
+fn ptyCountCursorPositionCodes(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+    const output = display.getCapturedOutput();
+
+    // Count ESC[...H or ESC[...f (cursor position codes)
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < output.len) : (i += 1) {
+        // Look for ESC[
+        if (output[i] == 0x1b and i + 1 < output.len and output[i + 1] == '[') {
+            var j = i + 2;
+            // Scan for H or f (cursor position terminators)
+            while (j < output.len and j < i + 20) : (j += 1) {
+                if (output[j] == 'H' or output[j] == 'f') {
+                    count += 1;
+                    break;
+                }
+                // Stop if we hit another letter (different escape code)
+                if ((output[j] >= 'A' and output[j] <= 'Z' and output[j] != 'H') or
+                    (output[j] >= 'a' and output[j] <= 'z' and output[j] != 'f'))
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    return c.hermes_value_create_number(runtime, @floatFromInt(count));
+}
+
+/// vim.e2e.pty.countSGRCodes() - Count SGR (color/attribute) escape codes (ESC[...m)
+/// Returns number of color/attribute codes in captured output
+fn ptyCountSGRCodes(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+    const output = display.getCapturedOutput();
+
+    // Count ESC[...m (SGR codes)
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < output.len) : (i += 1) {
+        if (output[i] == 0x1b and i + 1 < output.len and output[i + 1] == '[') {
+            var j = i + 2;
+            while (j < output.len and j < i + 30) : (j += 1) {
+                if (output[j] == 'm') {
+                    count += 1;
+                    break;
+                }
+                // Stop if we hit another letter (different escape code)
+                if ((output[j] >= 'A' and output[j] <= 'Z') or
+                    (output[j] >= 'a' and output[j] < 'm') or
+                    (output[j] > 'm' and output[j] <= 'z'))
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    return c.hermes_value_create_number(runtime, @floatFromInt(count));
+}
+
+/// vim.e2e.pty.resetCursorState() - Reset cursor visibility tracking
+/// This resets the internal cursor state so that the next render will
+/// re-send cursor hide/show codes. Useful for tests that need to verify
+/// cursor visibility behavior.
+fn ptyResetCursorState(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+
+    // Reset cursor visibility state to force re-sending cursor codes
+    // This is useful for E2E tests that need fresh cursor state
+    display.last_cursor_visible = true; // Assume visible (terminal default)
+    display.last_cursor_row = std.math.maxInt(usize); // Force cursor move on next render
+    display.last_cursor_col = std.math.maxInt(usize);
+
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.pty.render() - Trigger a full render cycle with PTY capture
+/// This generates actual ANSI escape codes that can be inspected
+/// Returns the number of bytes written to the capture buffer
+fn ptyRender(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+
+    // Get the EditorContext pointer - we need it for render
+    const EditorContext = @import("../../backends/headless/editor_context.zig").EditorContext;
+    const ListChars = @import("../../editor/config/listchars.zig").ListChars;
+
+    // Cast editor back to EditorContext
+    const editor_ctx: *EditorContext = @ptrCast(@alignCast(ctx.editor));
+
+    // Get default highlight config and listchars
+    var listchars = ListChars{};
+
+    // Trigger a render cycle
+    // When capture mode is active (for PTY testing), always use full render
+    // to generate ANSI escape codes. Otherwise, use headless for clean output.
+    if (g_verbose or display.capture_mode) {
+        display.render(
+            editor_ctx,
+            "-- NORMAL --", // Default status line
+            false, // cursorline disabled
+            ctx.visual_state,
+            &editor_ctx.editor.yank_highlight,
+            false, // list mode disabled
+            &listchars,
+            2, // laststatus = always show
+        ) catch |err| {
+            var msg_buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "render failed: {}", .{err}) catch "render failed";
+            if (msg.len < msg_buf.len) {
+                msg_buf[msg.len] = 0;
+            }
+            c.hermes_throw_error(runtime, msg.ptr);
+            return null;
+        };
+    } else {
+        // Headless render: Update compositor state WITHOUT writing to stdout
+        // This keeps stdout clean for JSON test results
+        display.renderHeadless(
+            editor_ctx,
+            "-- NORMAL --",
+            false,
+            ctx.visual_state,
+            &editor_ctx.editor.yank_highlight,
+            false,
+            &listchars,
+        ) catch |err| {
+            var msg_buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "render failed: {}", .{err}) catch "render failed";
+            if (msg.len < msg_buf.len) {
+                msg_buf[msg.len] = 0;
+            }
+            c.hermes_throw_error(runtime, msg.ptr);
+            return null;
+        };
+    }
+
+    // Return the number of bytes captured
+    const captured_len = display.getCapturedLength();
+    return c.hermes_value_create_number(runtime, @floatFromInt(captured_len));
+}
+
+/// vim.e2e.pty.getRenderStats() - Get render statistics from last render
+/// Returns { cursorHideCodes, cursorShowCodes, cursorPositionCodes, totalRenders }
+fn ptyGetRenderStats(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+
+    const result = c.hermes_value_create_object(runtime) orelse return helpers.returnUndefined(runtime);
+
+    // Add render stats from display
+    const stats = display.render_stats;
+
+    const hide_val = c.hermes_value_create_number(runtime, @floatFromInt(stats.cursor_hide_codes));
+    if (hide_val) |hv| {
+        c.hermes_value_set_property(runtime, result, "cursorHideCodes", hv);
+        c.hermes_value_destroy(hv);
+    }
+
+    const show_val = c.hermes_value_create_number(runtime, @floatFromInt(stats.cursor_show_codes));
+    if (show_val) |sv| {
+        c.hermes_value_set_property(runtime, result, "cursorShowCodes", sv);
+        c.hermes_value_destroy(sv);
+    }
+
+    const pos_val = c.hermes_value_create_number(runtime, @floatFromInt(stats.cursor_position_codes));
+    if (pos_val) |pv| {
+        c.hermes_value_set_property(runtime, result, "cursorPositionCodes", pv);
+        c.hermes_value_destroy(pv);
+    }
+
+    const total_val = c.hermes_value_create_number(runtime, @floatFromInt(stats.total_renders));
+    if (total_val) |tv| {
+        c.hermes_value_set_property(runtime, result, "totalRenders", tv);
+        c.hermes_value_destroy(tv);
+    }
+
+    const avg_ms = stats.getAverageRenderDurationMs();
+    const avg_val = c.hermes_value_create_number(runtime, avg_ms);
+    if (avg_val) |av| {
+        c.hermes_value_set_property(runtime, result, "avgRenderMs", av);
+        c.hermes_value_destroy(av);
+    }
+
+    return result;
 }
 
 // ============================================================================
@@ -662,6 +1131,60 @@ fn assertBufferContains(
     return helpers.returnUndefined(runtime);
 }
 
+/// vim.e2e.assert.true(condition, message?)
+/// Asserts that a condition is truthy
+fn assertTrue(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    if (arg_count < 1) {
+        c.hermes_throw_error(runtime, "assert.true requires 1 argument");
+        return null;
+    }
+
+    const condition = args[0];
+
+    // Check if condition is truthy
+    const is_truthy = blk: {
+        if (c.hermes_value_is_boolean(condition)) {
+            break :blk c.hermes_value_get_boolean(condition);
+        }
+        if (c.hermes_value_is_number(condition)) {
+            const num = c.hermes_value_get_number(condition);
+            break :blk num != 0;
+        }
+        if (c.hermes_value_is_null(condition) or c.hermes_value_is_undefined(condition)) {
+            break :blk false;
+        }
+        // Non-null objects, strings, etc. are truthy
+        break :blk true;
+    };
+
+    if (!is_truthy) {
+        // Get optional message
+        if (arg_count >= 2) {
+            var msg_len: usize = 0;
+            const msg_ptr = c.hermes_value_get_string(runtime, args[1], &msg_len);
+            if (msg_ptr != null and msg_len > 0) {
+                // Use user-provided message (it's already null-terminated from JS)
+                var msg_buf: [512]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "Assertion failed: {s}", .{msg_ptr[0..msg_len]}) catch "Assertion failed";
+                if (msg.len < msg_buf.len) {
+                    msg_buf[msg.len] = 0;
+                }
+                c.hermes_throw_error(runtime, msg.ptr);
+                return null;
+            }
+        }
+        c.hermes_throw_error(runtime, "assert.true failed");
+        return null;
+    }
+
+    return helpers.returnUndefined(runtime);
+}
+
 // ============================================================================
 // HostObject Registration
 // ============================================================================
@@ -698,6 +1221,11 @@ pub export fn vimE2EHostObjectGet(
         return createAssertObject(runtime);
     }
 
+    // Handle pty sub-object (for terminal output capture)
+    if (std.mem.eql(u8, name, "pty")) {
+        return createPtyObject(runtime);
+    }
+
     const func = PropertyMap.get(name) orelse return null;
     return c.hermes_create_function(runtime, prop_name, func, null);
 }
@@ -731,7 +1259,106 @@ fn createAssertObject(runtime: ?*c.OVHermesRuntime) ?*c.OVHermesValue {
         c.hermes_value_destroy(cf2);
     }
 
+    const true_fn = c.hermes_create_function(runtime, "true", assertTrue, null);
+    if (true_fn) |tf| {
+        c.hermes_value_set_property(runtime, assert_obj, "true", tf);
+        c.hermes_value_destroy(tf);
+    }
+
     return assert_obj;
+}
+
+/// Create the pty sub-object (for terminal output capture)
+fn createPtyObject(runtime: ?*c.OVHermesRuntime) ?*c.OVHermesValue {
+    const pty_obj = c.hermes_value_create_object(runtime) orelse return null;
+
+    // Add PTY capture methods
+    const start_fn = c.hermes_create_function(runtime, "startCapture", ptyStartCapture, null);
+    if (start_fn) |sf| {
+        c.hermes_value_set_property(runtime, pty_obj, "startCapture", sf);
+        c.hermes_value_destroy(sf);
+    }
+
+    const stop_fn = c.hermes_create_function(runtime, "stopCapture", ptyStopCapture, null);
+    if (stop_fn) |sf| {
+        c.hermes_value_set_property(runtime, pty_obj, "stopCapture", sf);
+        c.hermes_value_destroy(sf);
+    }
+
+    const get_fn = c.hermes_create_function(runtime, "getOutput", ptyGetOutput, null);
+    if (get_fn) |gf| {
+        c.hermes_value_set_property(runtime, pty_obj, "getOutput", gf);
+        c.hermes_value_destroy(gf);
+    }
+
+    const clear_fn = c.hermes_create_function(runtime, "clear", ptyClear, null);
+    if (clear_fn) |cf| {
+        c.hermes_value_set_property(runtime, pty_obj, "clear", cf);
+        c.hermes_value_destroy(cf);
+    }
+
+    const len_fn = c.hermes_create_function(runtime, "getLength", ptyGetLength, null);
+    if (len_fn) |lf| {
+        c.hermes_value_set_property(runtime, pty_obj, "getLength", lf);
+        c.hermes_value_destroy(lf);
+    }
+
+    const count_fn = c.hermes_create_function(runtime, "countSequence", ptyCountSequence, null);
+    if (count_fn) |cf| {
+        c.hermes_value_set_property(runtime, pty_obj, "countSequence", cf);
+        c.hermes_value_destroy(cf);
+    }
+
+    const is_capturing_fn = c.hermes_create_function(runtime, "isCapturing", ptyIsCapturing, null);
+    if (is_capturing_fn) |icf| {
+        c.hermes_value_set_property(runtime, pty_obj, "isCapturing", icf);
+        c.hermes_value_destroy(icf);
+    }
+
+    // Convenience counting functions (pre-built escape code patterns)
+    const count_hide_fn = c.hermes_create_function(runtime, "countHideCursor", ptyCountHideCursor, null);
+    if (count_hide_fn) |chf| {
+        c.hermes_value_set_property(runtime, pty_obj, "countHideCursor", chf);
+        c.hermes_value_destroy(chf);
+    }
+
+    const count_show_fn = c.hermes_create_function(runtime, "countShowCursor", ptyCountShowCursor, null);
+    if (count_show_fn) |csf| {
+        c.hermes_value_set_property(runtime, pty_obj, "countShowCursor", csf);
+        c.hermes_value_destroy(csf);
+    }
+
+    const count_pos_fn = c.hermes_create_function(runtime, "countCursorPositionCodes", ptyCountCursorPositionCodes, null);
+    if (count_pos_fn) |cpf| {
+        c.hermes_value_set_property(runtime, pty_obj, "countCursorPositionCodes", cpf);
+        c.hermes_value_destroy(cpf);
+    }
+
+    const count_sgr_fn = c.hermes_create_function(runtime, "countSGRCodes", ptyCountSGRCodes, null);
+    if (count_sgr_fn) |csgrf| {
+        c.hermes_value_set_property(runtime, pty_obj, "countSGRCodes", csgrf);
+        c.hermes_value_destroy(csgrf);
+    }
+
+    const render_stats_fn = c.hermes_create_function(runtime, "getRenderStats", ptyGetRenderStats, null);
+    if (render_stats_fn) |rsf| {
+        c.hermes_value_set_property(runtime, pty_obj, "getRenderStats", rsf);
+        c.hermes_value_destroy(rsf);
+    }
+
+    const render_fn = c.hermes_create_function(runtime, "render", ptyRender, null);
+    if (render_fn) |rf| {
+        c.hermes_value_set_property(runtime, pty_obj, "render", rf);
+        c.hermes_value_destroy(rf);
+    }
+
+    const reset_cursor_fn = c.hermes_create_function(runtime, "resetCursorState", ptyResetCursorState, null);
+    if (reset_cursor_fn) |rcf| {
+        c.hermes_value_set_property(runtime, pty_obj, "resetCursorState", rcf);
+        c.hermes_value_destroy(rcf);
+    }
+
+    return pty_obj;
 }
 
 /// Register vim.e2e API
@@ -811,6 +1438,9 @@ pub const TestResultEntry = struct {
     state_after: ?StateSnapshot,
     /// Checkpoints captured during test (via vim.e2e.checkpoint())
     checkpoints: std.ArrayListUnmanaged(CheckpointEntry),
+    /// PTY (terminal ANSI) output captured during test execution
+    /// Use for validating terminal escape codes (cursor flickering, colors, etc.)
+    pty_output: ?[]const u8,
 };
 
 // ============================================================================
@@ -920,6 +1550,14 @@ fn getAndClearTestCheckpoints() std.ArrayListUnmanaged(CheckpointEntry) {
 /// Per-test log buffer - captures console.log during test execution
 var current_test_logs: std.ArrayListUnmanaged([]const u8) = .empty;
 var log_capture_enabled: bool = false;
+
+/// Global verbose flag - controls debug output during test execution
+var g_verbose: bool = false;
+
+/// Set verbose mode (called by test runner before tests execute)
+pub fn setVerbose(verbose: bool) void {
+    g_verbose = verbose;
+}
 
 /// Enable log capture (called before each test)
 pub fn enableLogCapture() void {

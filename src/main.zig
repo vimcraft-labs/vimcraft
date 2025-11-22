@@ -421,11 +421,11 @@ pub fn main() !void {
             const cmd_test = @import("cli/test.zig");
             const sandbox_path = parsed.file_path orelse {
                 std.debug.print("Error: 'test' requires a sandbox path\n", .{});
-                std.debug.print("Usage: vimc test <sandbox_path>\n", .{});
+                std.debug.print("Usage: vimc test <sandbox_path> [--verbose]\n", .{});
                 std.debug.print("Example: vimc test tests/e2e/basic\n", .{});
                 return;
             };
-            const exit_code = cmd_test.execute(allocator, sandbox_path) catch |err| {
+            const exit_code = cmd_test.execute(allocator, sandbox_path, parsed.verbose) catch |err| {
                 std.debug.print("Test runner failed: {}\n", .{err});
                 std.process.exit(1);
             };

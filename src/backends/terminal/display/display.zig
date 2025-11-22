@@ -177,6 +177,16 @@ pub const Display = struct {
     // Track previous viewport to detect scroll operations
     last_viewport_top: usize = 0,
 
+    // ============================================================================
+    // PTY OUTPUT CAPTURE (for E2E testing)
+    // ============================================================================
+    // When capture_mode is true, all terminal output is also buffered for inspection.
+    // This enables TypeScript E2E tests to validate ANSI escape codes without needing
+    // a separate PTY process. The captured output includes all escape sequences,
+    // making it possible to detect rendering bugs like cursor flickering.
+    capture_mode: bool = false,
+    captured_output: std.ArrayList(u8) = .empty,
+
     pub fn init(allocator: std.mem.Allocator) !Display {
         const grid = try ScreenGrid.init(allocator, 80, 24);
         const gutter_mgr = gutter.GutterManager.init(allocator);
@@ -243,6 +253,9 @@ pub const Display = struct {
 
         // O3: Free pre-allocated render output buffer
         self.render_output_buf.deinit(self.allocator);
+
+        // PTY capture cleanup
+        self.captured_output.deinit(self.allocator);
 
         // PERFORMANCE: Cleanup displayColumnToByte cache
         char_width.deinitCache();
@@ -1116,44 +1129,106 @@ pub const Display = struct {
             if (style.fg) |fg| {
                 const rgb = fg.toRgb();
                 const fg_code = try std.fmt.bufPrint(&buf, "\x1b[38;2;{d};{d};{d}m", .{ rgb.r, rgb.g, rgb.b });
-                try self.stdout.writeAll(fg_code);
+                try self.writeOutput(fg_code);
             }
             if (style.bg) |bg| {
                 const rgb = bg.toRgb();
                 const bg_code = try std.fmt.bufPrint(&buf, "\x1b[48;2;{d};{d};{d}m", .{ rgb.r, rgb.g, rgb.b });
-                try self.stdout.writeAll(bg_code);
+                try self.writeOutput(bg_code);
             }
             if (style.modifiers.bold) {
-                try self.stdout.writeAll("\x1b[1m");
+                try self.writeOutput("\x1b[1m");
             }
             if (style.modifiers.italic) {
-                try self.stdout.writeAll("\x1b[3m");
+                try self.writeOutput("\x1b[3m");
             }
             if (style.modifiers.underline) {
-                try self.stdout.writeAll("\x1b[4m");
+                try self.writeOutput("\x1b[4m");
             }
         } else {
             // Fallback: use inverse video (common status line style)
-            try self.stdout.writeAll("\x1b[7m");
+            try self.writeOutput("\x1b[7m");
         }
 
         // Write status text
         var col: usize = 0;
         for (status) |char| {
             if (col >= self.terminal_cols) break;
-            try self.stdout.writeAll(&[_]u8{char});
+            try self.writeOutput(&[_]u8{char});
             col += 1;
         }
 
         // Fill rest of line with spaces (background extends to end)
         while (col < self.terminal_cols) : (col += 1) {
-            try self.stdout.writeAll(" ");
+            try self.writeOutput(" ");
         }
 
         // Reset attributes
-        try self.stdout.writeAll("\x1b[0m");
+        try self.writeOutput("\x1b[0m");
 
         // Reset cross-frame attribute tracking since we manually sent SGR codes
         self.resetAttributeState();
+    }
+
+    // ============================================================================
+    // PTY OUTPUT CAPTURE (for E2E testing)
+    // ============================================================================
+    // These methods enable TypeScript E2E tests to capture and inspect terminal
+    // escape codes without needing a separate PTY process.
+
+    /// Start capturing terminal output
+    /// All subsequent writes will be buffered in captured_output
+    pub fn startCapture(self: *Display) void {
+        self.capture_mode = true;
+        self.captured_output.clearRetainingCapacity();
+    }
+
+    /// Stop capturing and return the captured output as a slice
+    /// The returned slice is valid until the next startCapture() or deinit()
+    pub fn stopCapture(self: *Display) []const u8 {
+        self.capture_mode = false;
+        return self.captured_output.items;
+    }
+
+    /// Get captured output without stopping capture mode
+    /// Useful for inspecting output while capture continues
+    pub fn getCapturedOutput(self: *Display) []const u8 {
+        return self.captured_output.items;
+    }
+
+    /// Clear the capture buffer without changing capture mode
+    pub fn clearCapturedOutput(self: *Display) void {
+        self.captured_output.clearRetainingCapacity();
+    }
+
+    /// Get length of captured output
+    pub fn getCapturedLength(self: *Display) usize {
+        return self.captured_output.items.len;
+    }
+
+    /// Write to both stdout and capture buffer (if capture mode enabled)
+    /// This is the central write function that terminal_control.zig uses
+    pub fn writeOutput(self: *Display, bytes: []const u8) !void {
+        // Always write to stdout
+        try self.stdout.writeAll(bytes);
+
+        // Capture if in capture mode
+        if (self.capture_mode) {
+            try self.captured_output.appendSlice(self.allocator, bytes);
+        }
+    }
+
+    /// Print formatted output to both stdout and capture buffer (if capture mode enabled)
+    pub fn printOutput(self: *Display, comptime format: []const u8, args: anytype) !void {
+        // Format to buffer
+        const formatted = try std.fmt.bufPrint(&self.stdout_buf, format, args);
+
+        // Always write to stdout
+        try self.stdout.writeAll(formatted);
+
+        // Capture if in capture mode
+        if (self.capture_mode) {
+            try self.captured_output.appendSlice(self.allocator, formatted);
+        }
     }
 };

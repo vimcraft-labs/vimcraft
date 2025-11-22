@@ -11,6 +11,7 @@ pub const ParseResult = struct {
     no_cache: bool,
     metrics: bool,
     check: bool, // For 'types --check'
+    verbose: bool, // For 'test --verbose'
     help: bool,
     version: bool,
     allocator: std.mem.Allocator,
@@ -39,6 +40,7 @@ pub fn parse(allocator: std.mem.Allocator) !ParseResult {
         .no_cache = false,
         .metrics = false,
         .check = false,
+        .verbose = false,
         .help = false,
         .version = false,
         .allocator = allocator,
@@ -67,13 +69,23 @@ pub fn parse(allocator: std.mem.Allocator) !ParseResult {
             result.metrics = true;
         } else if (std.mem.eql(u8, arg, "--check") or std.mem.eql(u8, arg, "-c")) {
             result.check = true;
+        } else if (std.mem.eql(u8, arg, "--verbose") or std.mem.eql(u8, arg, "-V")) {
+            result.verbose = true;
         } else if (std.mem.eql(u8, arg, "test")) {
             // Test runner - PTY + Hermes + JSON report
             result.command = try allocator.dupe(u8, "test");
-            // Next argument is the sandbox path
-            if (i + 1 < args.len) {
-                i += 1;
-                result.file_path = try allocator.dupe(u8, args[i]);
+            // Parse remaining arguments for test command
+            i += 1;
+            while (i < args.len) : (i += 1) {
+                const test_arg = args[i];
+                if (std.mem.eql(u8, test_arg, "--verbose") or std.mem.eql(u8, test_arg, "-V")) {
+                    result.verbose = true;
+                } else if (!std.mem.startsWith(u8, test_arg, "-")) {
+                    // Sandbox path (positional)
+                    if (result.file_path == null) {
+                        result.file_path = try allocator.dupe(u8, test_arg);
+                    }
+                }
             }
             return result;
         } else if (std.mem.eql(u8, arg, "--test")) {
@@ -110,7 +122,7 @@ pub fn printHelp() void {
         \\COMMANDS:
         \\  init [--force]              Initialize TypeScript toolchain
         \\  run <file> [--debug] [--no-cache]  Execute TypeScript/JavaScript file
-        \\  test <sandbox_path>         Run tests (PTY + Hermes + JSON report)
+        \\  test <sandbox_path> [-V]    Run tests (--verbose for detailed output)
         \\  install <package>           Install plugin from Git URL (TODO)
         \\  list                        List installed plugins (TODO)
         \\  types [--check]             Sync vim.d.ts (--check to verify without updating)
@@ -121,6 +133,7 @@ pub fn printHelp() void {
         \\  -f, --force                 Force overwrite existing files (init command)
         \\  -d, --debug                 Enable debug mode
         \\  -c, --check                 Check mode (types command)
+        \\  -V, --verbose               Verbose output (test command)
         \\      --no-cache              Disable bytecode caching
         \\      --metrics               Enable performance metrics tracking
         \\

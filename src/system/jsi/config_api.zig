@@ -29,6 +29,7 @@ pub const ConfigContext = struct {
     display: ?*Display, // Optional - may be null in headless mode
     js_state_dirty: ?*bool = null, // Pointer to editor's dirty flag (null for EditorContext)
     buffer: ?*@import("../../editor/buffer/buffer.zig").Buffer = null, // Buffer for vim.bo access
+    editor: ?*@import("../../editor/editor.zig").Editor = null, // Editor for tree-sitter parsing
 
     // Module system (Phase 4 - CommonJS require())
     module_cache: std.StringHashMap(ModuleEntry), // Cached modules by absolute path
@@ -657,16 +658,14 @@ pub export fn setBufferOption(
         if (ctx.buffer) |buffer| {
             // Arg 1: value (string or null)
             if (c.hermes_value_is_null(args[1]) or c.hermes_value_is_undefined(args[1])) {
-                buffer.filetype = null;
+                // Clear filetype
+                buffer.setFiletype(null) catch {};
             } else if (c.hermes_value_is_string(args[1])) {
                 var value_len: usize = 0;
                 const value_ptr = c.hermes_value_get_string(runtime, args[1], &value_len);
                 if (value_ptr != null) {
-                    const value_str = value_ptr[0..value_len];
-                    // Note: This is a reference to Hermes' internal buffer
-                    // In a real implementation, we'd need to allocate and copy
-                    // For now, we assume the string stays valid (it does in practice)
-                    buffer.filetype = value_str;
+                    // Use setFiletype which properly allocates and copies the string
+                    buffer.setFiletype(value_ptr[0..value_len]) catch {};
                 }
             }
 
@@ -960,12 +959,20 @@ pub export fn vimBoHostObjectSet(
     if (std.mem.eql(u8, name, "filetype")) {
         if (ctx.buffer) |buffer| {
             if (c.hermes_value_is_null(val) or c.hermes_value_is_undefined(val)) {
-                buffer.filetype = null;
+                // Clear filetype
+                buffer.setFiletype(null) catch {};
             } else if (c.hermes_value_is_string(val)) {
                 var value_len: usize = 0;
                 const value_ptr = c.hermes_value_get_string(rt, val, &value_len);
                 if (value_ptr != null) {
-                    buffer.filetype = value_ptr[0..value_len];
+                    const ft_str = value_ptr[0..value_len];
+                    // Use setFiletype which properly allocates and copies the string
+                    buffer.setFiletype(ft_str) catch {};
+
+                    // Trigger tree-sitter parsing for the new filetype
+                    if (ctx.editor) |editor| {
+                        editor.parseBufferWithTreeSitter(ft_str) catch {};
+                    }
                 }
             }
 
