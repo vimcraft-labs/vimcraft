@@ -60,6 +60,10 @@ pub const HighlightConfig = struct {
     special_key: ?Highlight = null, // Special keys and characters (eol, trail) - Vim tradition
     non_text: ?Highlight = null, // Non-text characters (eol, extends, precedes) - fallback
 
+    // Status line highlighting
+    statusline: ?Highlight = null, // Active window status line (StatusLine)
+    statusline_nc: ?Highlight = null, // Inactive window status line (StatusLineNC)
+
     // Options
     cursorline_enabled: bool = true, // Enabled by default (standard Vim/Neovim behavior)
 
@@ -101,6 +105,10 @@ pub const HighlightConfig = struct {
             self.special_key = hl;
         } else if (std.mem.eql(u8, name, "NonText")) {
             self.non_text = hl;
+        } else if (std.mem.eql(u8, name, "StatusLine")) {
+            self.statusline = hl;
+        } else if (std.mem.eql(u8, name, "StatusLineNC")) {
+            self.statusline_nc = hl;
         }
         // Add more highlight groups as needed
     }
@@ -127,6 +135,10 @@ pub const HighlightConfig = struct {
             return self.special_key;
         } else if (std.mem.eql(u8, name, "NonText")) {
             return self.non_text;
+        } else if (std.mem.eql(u8, name, "StatusLine")) {
+            return self.statusline;
+        } else if (std.mem.eql(u8, name, "StatusLineNC")) {
+            return self.statusline_nc;
         }
         return null;
     }

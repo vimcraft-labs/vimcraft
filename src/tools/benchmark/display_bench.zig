@@ -40,7 +40,7 @@ fn benchRender(
     yank_highlight: *YankHighlight,
 ) !void {
     const listchars = ListChars{};
-    try display.render(editor, status, cursorline_enabled, visual_state, yank_highlight, false, &listchars);
+    try display.render(editor, status, cursorline_enabled, visual_state, yank_highlight, false, &listchars, 2);
 }
 
 /// Run display rendering benchmarks
@@ -199,7 +199,7 @@ pub fn runDisplayBenchmarks(allocator: std.mem.Allocator) !void {
             // Simulate scrolling by changing viewport
             display.viewport_top = scroll_test_count * 10;
             editor.buffer.cursor.row = display.viewport_top + 10;
-            try display.render(&editor, status, false, &visual_state, &yank_highlight, false, &listchars);
+            try display.render(&editor, status, false, &visual_state, &yank_highlight, false, &listchars, 2);
         }
 
         const end = std.time.nanoTimestamp();

@@ -26,6 +26,9 @@ const terminal_control = @import("terminal_control.zig");
 const layer_renderer = @import("layer_renderer.zig");
 const output_renderer = @import("output_renderer.zig");
 
+// Highlight registry (for StatusLine highlight support)
+const highlight_api = @import("../../../system/jsi/highlight_api.zig");
+
 /// Rendering performance statistics
 /// Tracks real-time metrics for debug protocol get_render_stats command
 pub const RenderStatistics = struct {
@@ -517,6 +520,12 @@ pub const Display = struct {
     /// Render buffer content to screen using grid-based rendering
     /// This is the main rendering function following Neovim's architecture
     /// Generic over Editor/EditorContext types (both have same fields)
+    ///
+    /// laststatus: Controls status line visibility (Vim/Neovim compatible)
+    ///   0 = never show status line
+    ///   1 = only if there are at least two windows (not yet implemented, behaves like 2)
+    ///   2 = always show status line (default)
+    ///   3 = always and ONLY the last window (global statusline, behaves like 2)
     pub fn render(
         self: *Display,
         editor: anytype,
@@ -526,6 +535,7 @@ pub const Display = struct {
         yank_highlight: *const YankHighlight,
         list_enabled: bool,
         listchars: *const ListChars,
+        laststatus: u8,
     ) !void {
         // Get buffer from editor (handles both Editor and EditorContext types)
         const T = @TypeOf(editor);
@@ -630,6 +640,14 @@ pub const Display = struct {
 
         // STEP 4: Render only changed cells (cursor invisible, so no flickering)
         try output_renderer.renderUpdates(self, updates);
+
+        // STEP 4.5: Render status line on the last row (terminal_rows - 1)
+        // Status line is outside the layer system because it doesn't need blending
+        // laststatus: 0=never, 1=only if multiple windows, 2=always, 3=global statusline
+        // NOTE: 1 and 3 behave like 2 until window splits are implemented
+        if (laststatus > 0) {
+            try self.renderStatusLine(status, highlight_registry);
+        }
 
         // STEP 5: Swap buffers (current becomes previous for next frame)
         output.swapBuffers();
@@ -1055,5 +1073,69 @@ pub const Display = struct {
         self.cross_frame_bold = false;
         self.cross_frame_italic = false;
         self.cross_frame_underline = false;
+    }
+
+    /// Render status line on the last row of the terminal
+    /// Status line shows current mode (NORMAL, INSERT, VISUAL, :command)
+    /// Uses StatusLine highlight group for styling (Neovim-compatible)
+    fn renderStatusLine(self: *Display, status: []const u8, highlight_registry: *const highlight_api.HighlightRegistry) !void {
+        if (self.terminal_rows == 0) return;
+
+        const status_row = self.terminal_rows - 1;
+
+        // Move cursor to status line row
+        try self.moveCursor(status_row, 0);
+
+        // Get StatusLine style from registry (returns Style with scope fallback)
+        const style = highlight_registry.get("StatusLine");
+
+        // Apply StatusLine highlight if fg or bg is set, otherwise fallback to inverse video
+        var buf: [32]u8 = undefined;
+        const has_custom_style = style.fg != null or style.bg != null;
+
+        if (has_custom_style) {
+            // Apply custom StatusLine highlight
+            if (style.fg) |fg| {
+                const rgb = fg.toRgb();
+                const fg_code = try std.fmt.bufPrint(&buf, "\x1b[38;2;{d};{d};{d}m", .{ rgb.r, rgb.g, rgb.b });
+                try self.stdout.writeAll(fg_code);
+            }
+            if (style.bg) |bg| {
+                const rgb = bg.toRgb();
+                const bg_code = try std.fmt.bufPrint(&buf, "\x1b[48;2;{d};{d};{d}m", .{ rgb.r, rgb.g, rgb.b });
+                try self.stdout.writeAll(bg_code);
+            }
+            if (style.modifiers.bold) {
+                try self.stdout.writeAll("\x1b[1m");
+            }
+            if (style.modifiers.italic) {
+                try self.stdout.writeAll("\x1b[3m");
+            }
+            if (style.modifiers.underline) {
+                try self.stdout.writeAll("\x1b[4m");
+            }
+        } else {
+            // Fallback: use inverse video (common status line style)
+            try self.stdout.writeAll("\x1b[7m");
+        }
+
+        // Write status text
+        var col: usize = 0;
+        for (status) |char| {
+            if (col >= self.terminal_cols) break;
+            try self.stdout.writeAll(&[_]u8{char});
+            col += 1;
+        }
+
+        // Fill rest of line with spaces (background extends to end)
+        while (col < self.terminal_cols) : (col += 1) {
+            try self.stdout.writeAll(" ");
+        }
+
+        // Reset attributes
+        try self.stdout.writeAll("\x1b[0m");
+
+        // Reset cross-frame attribute tracking since we manually sent SGR codes
+        self.resetAttributeState();
     }
 };

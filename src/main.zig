@@ -203,6 +203,8 @@ const ReloadState = struct {
     config_path: []const u8,
     // Compositor invalidation: safer and simpler than full renderHeadless()
     display: ?*Display = null,
+    // Editor pointer for triggering re-render after hot reload
+    editor: ?*@import("editor/editor.zig").Editor = null,
 
     fn markForReload(self: *ReloadState) void {
         self.needs_reload = true;
@@ -260,6 +262,12 @@ const ReloadState = struct {
             display.virtual_text_layer.markDirty();
             // Note: compositor.composite() will be called in next render()
             // This ensures gutter width changes are reflected for all layers
+        }
+
+        // CRITICAL: Mark editor state dirty to trigger immediate re-render
+        // Without this, hot reload changes won't be visible until cursor moves
+        if (self.editor) |ed| {
+            ed.js_state_dirty = true;
         }
 
         self.needs_reload = false;
@@ -583,6 +591,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         .allocator = allocator,
         .config_path = paths.index_ts_path,
         .display = &display,
+        .editor = &editor,
     };
 
     // Mark Hermes initialization start (if metrics enabled)
@@ -901,6 +910,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         .allocator = allocator,
         .config_path = paths.index_ts_path,
         .display = &display,
+        .editor = &editor,
     };
 
     // Mark Hermes initialization start (if metrics enabled)
@@ -1422,6 +1432,7 @@ comptime {
     _ = @import("system/jsi/jsi_tests.zig");
     _ = @import("editor/treesitter.zig"); // Tree-sitter tests
     _ = @import("backends/headless/editor_context.zig"); // Headless editor + viewport scroll tests
+    _ = @import("backends/terminal/backend.zig"); // Hot reload / render optimization tests
 }
 
 // ============================================================================

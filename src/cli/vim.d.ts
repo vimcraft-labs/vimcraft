@@ -127,6 +127,25 @@ export type HighlightGroup =
 // ============================================================================
 
 /**
+ * Status line display mode (vim.opt.lastStatus)
+ * Controls when the status line is shown
+ *
+ * @example
+ * vim.opt.lastStatus = LastStatus.Never;  // Hide status line
+ * vim.opt.lastStatus = LastStatus.Always; // Always show (default)
+ */
+export enum LastStatus {
+  /** Never show status line (laststatus=0) */
+  Never = 0,
+  /** Only if there are multiple windows (laststatus=1, currently behaves like Always) */
+  OnlyIfMultipleWindows = 1,
+  /** Always show status line (laststatus=2, default) */
+  Always = 2,
+  /** Global status line - always show only in last window (laststatus=3, currently behaves like Always) */
+  Global = 3,
+}
+
+/**
  * Editor options (vim.opt)
  * All option names use camelCase for JavaScript/TypeScript convention
  */
@@ -140,7 +159,7 @@ export interface VimOptions {
   colorColumn?: string;
   scrollOff?: number;
   sideScrollOff?: number;
-  lastStatus?: 0 | 1 | 2 | 3;
+  lastStatus?: LastStatus | 0 | 1 | 2 | 3;
   showCmd?: boolean;
   showMode?: boolean;
   ruler?: boolean;
@@ -1187,6 +1206,24 @@ declare global {
    * Neovim-compatible interface
    */
   var vim: Vim;
+
+  /**
+   * Status line display mode constants
+   * Use with vim.opt.laststatus
+   * @example
+   * vim.opt.laststatus = LastStatus.Never;  // Hide status line
+   * vim.opt.laststatus = LastStatus.Always; // Always show (default)
+   */
+  var LastStatus: {
+    /** Never show status line (laststatus=0) */
+    readonly Never: 0;
+    /** Only if there are multiple windows (laststatus=1) */
+    readonly OnlyIfMultipleWindows: 1;
+    /** Always show status line (laststatus=2, default) */
+    readonly Always: 2;
+    /** Global status line - always show only in last window (laststatus=3) */
+    readonly Global: 3;
+  };
 
   /**
    * Global console object - for debugging via Chrome DevTools

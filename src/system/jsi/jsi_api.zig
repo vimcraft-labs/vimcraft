@@ -502,12 +502,25 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
 
     // Bundle config with dependencies + wrap with runtime.js
     // This uses esbuild.build() to resolve imports, then wraps the bundle
-    const bytecode = try transpiler.loadConfigWithBundle(
+    const bytecode = transpiler.loadConfigWithBundle(
         allocator,
         loader_config,
         filepath,
         runtime_wrapper,
-    );
+    ) catch |err| {
+        // Log transpile error to stderr (safe, doesn't require JS runtime)
+        // Note: Can't use console.log here because runtime.js hasn't loaded yet
+        const err_msg = switch (err) {
+            error.TranspileFailed => "Config transpile failed. Check for invalid imports (use global LastStatus, not 'import from ./vim')",
+            error.CompileFailed => "Hermes compilation failed. Check JavaScript syntax.",
+            error.PathNotFound => "Config file not found",
+            error.PathTraversal => "Security: path traversal detected",
+            error.InvalidPath => "Invalid config path",
+            else => "Unknown config loading error",
+        };
+        std.log.err("[Vimcraft] {s}: {s}", .{ err_msg, filepath });
+        return err;
+    };
     defer allocator.free(bytecode);
 
     // Execute bytecode
@@ -515,7 +528,8 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
 
     if (result == null) {
         const err_msg = c.hermes_get_exception_message(runtime);
-        std.debug.print("[JSI] JavaScript error: {s}\n", .{err_msg});
+        // Log JavaScript error to stderr (safe fallback)
+        std.log.err("[Vimcraft] JS Error in {s}: {s}", .{ filepath, err_msg });
         return error.JSError;
     }
 

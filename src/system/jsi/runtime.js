@@ -849,6 +849,27 @@ if (typeof __fetch !== 'undefined') {
 }
 
 // ============================================================================
+// Vim Option Enums (Runtime Constants)
+// ============================================================================
+// These are available globally for TypeScript configs without imports
+// Usage: vim.opt.laststatus = LastStatus.Never;
+
+/**
+ * Status line display mode (vim.opt.laststatus)
+ * Controls when the status line is shown
+ */
+globalThis.LastStatus = Object.freeze({
+  /** Never show status line (laststatus=0) */
+  Never: 0,
+  /** Only if there are multiple windows (laststatus=1) */
+  OnlyIfMultipleWindows: 1,
+  /** Always show status line (laststatus=2, default) */
+  Always: 2,
+  /** Global status line - always show only in last window (laststatus=3) */
+  Global: 3,
+});
+
+// ============================================================================
 // vim.e2e API - E2E Testing and Plugin Development Debugging
 // ============================================================================
 //

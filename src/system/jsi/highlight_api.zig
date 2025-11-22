@@ -428,6 +428,167 @@ test "Color: parse ANSI" {
 }
 
 // ============================================================================
+// StatusLine Highlight Tests
+// ============================================================================
+
+test "StatusLine: set and get status line highlight" {
+    const allocator = std.testing.allocator;
+
+    var registry = HighlightRegistry.init(allocator);
+    defer registry.deinit();
+
+    // Set StatusLine highlight (like vim.highlight('StatusLine', {...}))
+    try registry.set("StatusLine", .{
+        .fg = .{ .rgb = .{ .r = 0xE0, .g = 0xE0, .b = 0xE0 } }, // Light gray text
+        .bg = .{ .rgb = .{ .r = 0x1E, .g = 0x1E, .b = 0x2E } }, // Dark background
+        .bold = true,
+    });
+
+    // Get style
+    const style = registry.get("StatusLine");
+    try std.testing.expect(style.fg != null);
+    try std.testing.expect(style.bg != null);
+    try std.testing.expect(style.modifiers.bold);
+    try std.testing.expect(!style.modifiers.italic);
+}
+
+test "StatusLine: returns empty style when not set" {
+    const allocator = std.testing.allocator;
+
+    var registry = HighlightRegistry.init(allocator);
+    defer registry.deinit();
+
+    // StatusLine not set - should return empty style (no fallback)
+    const style = registry.get("StatusLine");
+    try std.testing.expect(style.fg == null);
+    try std.testing.expect(style.bg == null);
+    try std.testing.expect(!style.modifiers.bold);
+}
+
+test "StatusLine: StatusLineNC (inactive window status line)" {
+    const allocator = std.testing.allocator;
+
+    var registry = HighlightRegistry.init(allocator);
+    defer registry.deinit();
+
+    // Set StatusLine (active)
+    try registry.set("StatusLine", .{
+        .fg = .{ .rgb = .{ .r = 0xFF, .g = 0xFF, .b = 0xFF } },
+        .bg = .{ .rgb = .{ .r = 0x33, .g = 0x33, .b = 0x33 } },
+    });
+
+    // Set StatusLineNC (inactive - dimmer)
+    try registry.set("StatusLineNC", .{
+        .fg = .{ .rgb = .{ .r = 0x80, .g = 0x80, .b = 0x80 } }, // Dimmer text
+        .bg = .{ .rgb = .{ .r = 0x22, .g = 0x22, .b = 0x22 } }, // Darker background
+    });
+
+    // Verify both are stored correctly
+    const active = registry.get("StatusLine");
+    const inactive = registry.get("StatusLineNC");
+
+    try std.testing.expect(active.fg != null);
+    try std.testing.expect(inactive.fg != null);
+
+    // Active should be brighter than inactive
+    const active_rgb = active.fg.?.toRgb();
+    const inactive_rgb = inactive.fg.?.toRgb();
+    try std.testing.expect(active_rgb.r > inactive_rgb.r); // White > Gray
+}
+
+test "StatusLine: can update existing highlight" {
+    const allocator = std.testing.allocator;
+
+    var registry = HighlightRegistry.init(allocator);
+    defer registry.deinit();
+
+    // Set initial StatusLine
+    try registry.set("StatusLine", .{
+        .fg = .{ .rgb = .{ .r = 0xFF, .g = 0x00, .b = 0x00 } }, // Red
+    });
+
+    // Update StatusLine
+    try registry.set("StatusLine", .{
+        .fg = .{ .rgb = .{ .r = 0x00, .g = 0xFF, .b = 0x00 } }, // Green
+        .bold = true,
+    });
+
+    // Verify update
+    const style = registry.get("StatusLine");
+    try std.testing.expect(style.fg != null);
+    const rgb = style.fg.?.toRgb();
+    try std.testing.expectEqual(@as(u8, 0x00), rgb.r); // Red component should be 0
+    try std.testing.expectEqual(@as(u8, 0xFF), rgb.g); // Green component should be 255
+    try std.testing.expect(style.modifiers.bold);
+}
+
+test "StatusLine: all modifiers (bold, italic, underline)" {
+    const allocator = std.testing.allocator;
+
+    var registry = HighlightRegistry.init(allocator);
+    defer registry.deinit();
+
+    // Set StatusLine with all modifiers
+    try registry.set("StatusLine", .{
+        .fg = .{ .rgb = .{ .r = 0xE0, .g = 0xE0, .b = 0xE0 } },
+        .bold = true,
+        .italic = true,
+        .underline = true,
+    });
+
+    const style = registry.get("StatusLine");
+    try std.testing.expect(style.modifiers.bold);
+    try std.testing.expect(style.modifiers.italic);
+    try std.testing.expect(style.modifiers.underline);
+    try std.testing.expect(!style.modifiers.undercurl);
+    try std.testing.expect(!style.modifiers.strikethrough);
+}
+
+test "StatusLine: Color toRgb conversion for ANSI indexed" {
+    // Test that ANSI indexed colors convert to RGB for terminal output
+    const indexed_color = Color{ .indexed = 196 }; // ANSI red
+    const rgb = indexed_color.toRgb();
+
+    // The current implementation uses a simple approximation (idx, idx, idx)
+    // This test documents the current behavior
+    try std.testing.expectEqual(@as(u8, 196), rgb.r);
+    try std.testing.expectEqual(@as(u8, 196), rgb.g);
+    try std.testing.expectEqual(@as(u8, 196), rgb.b);
+}
+
+test "StatusLine: fg-only style (no bg)" {
+    const allocator = std.testing.allocator;
+
+    var registry = HighlightRegistry.init(allocator);
+    defer registry.deinit();
+
+    // Set StatusLine with only foreground (no background)
+    try registry.set("StatusLine", .{
+        .fg = .{ .rgb = .{ .r = 0xAA, .g = 0xBB, .b = 0xCC } },
+    });
+
+    const style = registry.get("StatusLine");
+    try std.testing.expect(style.fg != null);
+    try std.testing.expect(style.bg == null);
+}
+
+test "StatusLine: bg-only style (no fg)" {
+    const allocator = std.testing.allocator;
+
+    var registry = HighlightRegistry.init(allocator);
+    defer registry.deinit();
+
+    // Set StatusLine with only background (no foreground)
+    try registry.set("StatusLine", .{
+        .bg = .{ .rgb = .{ .r = 0x1E, .g = 0x1E, .b = 0x2E } },
+    });
+
+    const style = registry.get("StatusLine");
+    try std.testing.expect(style.fg == null);
+    try std.testing.expect(style.bg != null);
+}
+
+// ============================================================================
 // JSI Exports (JavaScript Bridge)
 // ============================================================================
 
