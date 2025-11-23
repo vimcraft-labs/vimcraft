@@ -756,6 +756,123 @@ vim.api = {
     return 80; // Default terminal width
   },
 
+  // vim.api.setCurrentWin(window) -> void
+  //   window: number (window handle)
+  //   Switches to the specified window
+  setCurrentWin: function(window) {
+    if (typeof vimApiSetCurrentWin !== 'undefined') {
+      return vimApiSetCurrentWin(window);
+    }
+    // No-op in single-window mode
+  },
+
+  // vim.api.listWins() -> number[]
+  //   returns: array of window handles (all valid windows)
+  listWins: function() {
+    if (typeof vimApiListWins !== 'undefined') {
+      return vimApiListWins();
+    }
+    return [0]; // Single window mode
+  },
+
+  // vim.api.winSetBuf(window, buffer) -> void
+  //   window: number (window handle)
+  //   buffer: number (buffer handle)
+  //   Sets buffer displayed in window
+  winSetBuf: function(window, buffer) {
+    if (typeof vimApiWinSetBuf !== 'undefined') {
+      return vimApiWinSetBuf(window, buffer);
+    }
+    // No-op in single-window mode
+  },
+
+  // vim.api.winSetHeight(window, height) -> void
+  //   window: number (window handle)
+  //   height: number (new height in rows)
+  winSetHeight: function(window, height) {
+    if (typeof vimApiWinSetHeight !== 'undefined') {
+      return vimApiWinSetHeight(window, height);
+    }
+    // No-op in single-window mode
+  },
+
+  // vim.api.winSetWidth(window, width) -> void
+  //   window: number (window handle)
+  //   width: number (new width in columns)
+  winSetWidth: function(window, width) {
+    if (typeof vimApiWinSetWidth !== 'undefined') {
+      return vimApiWinSetWidth(window, width);
+    }
+    // No-op in single-window mode
+  },
+
+  // vim.api.winClose(window, force) -> void
+  //   window: number (window handle)
+  //   force: boolean (force close even if modified)
+  winClose: function(window, force) {
+    if (typeof vimApiWinClose !== 'undefined') {
+      return vimApiWinClose(window, force);
+    }
+    // No-op in single-window mode (cannot close only window)
+  },
+
+  // vim.api.winGetVar(window, name) -> any
+  //   Get window-local variable (w:)
+  winGetVar: function(window, name) {
+    if (typeof vimApiWinGetVar !== 'undefined') {
+      return vimApiWinGetVar(window, name);
+    }
+    return undefined;
+  },
+
+  // vim.api.winSetVar(window, name, value) -> void
+  //   Set window-local variable (w:)
+  winSetVar: function(window, name, value) {
+    if (typeof vimApiWinSetVar !== 'undefined') {
+      return vimApiWinSetVar(window, name, value);
+    }
+  },
+
+  // vim.api.winDelVar(window, name) -> void
+  //   Delete window-local variable
+  winDelVar: function(window, name) {
+    if (typeof vimApiWinDelVar !== 'undefined') {
+      return vimApiWinDelVar(window, name);
+    }
+  },
+
+  // vim.api.winCall(window, fun) -> any
+  //   Execute function with window as temporary current window
+  winCall: function(window, fun) {
+    if (typeof vimApiWinCall !== 'undefined') {
+      return vimApiWinCall(window, fun);
+    }
+    // Invalid window returns undefined
+    if (window !== 0) return undefined;
+    return fun();
+  },
+
+  // vim.api.winGetNumber(window) -> number
+  //   Get window number (1-indexed, for :wincmd)
+  winGetNumber: function(window) {
+    if (typeof vimApiWinGetNumber !== 'undefined') {
+      return vimApiWinGetNumber(window);
+    }
+    // Single window is number 1, invalid returns -1
+    return window === 0 ? 1 : -1;
+  },
+
+  // vim.api.winGetPosition(window) -> [row, col]
+  //   Get window position (0-indexed, relative to editor area)
+  winGetPosition: function(window) {
+    if (typeof vimApiWinGetPosition !== 'undefined') {
+      return vimApiWinGetPosition(window);
+    }
+    // Invalid window returns null
+    if (window !== 0) return null;
+    return [0, 0]; // Full-screen window at origin
+  },
+
   // === Highlight Functions ===
 
   // vim.api.setHighlight(ns_id, name, opts)

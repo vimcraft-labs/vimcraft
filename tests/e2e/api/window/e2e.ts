@@ -105,4 +105,274 @@ vim.e2e.describe("vim.api.winGetWidth", function() {
     });
 });
 
+// ============================================================================
+// NEW WINDOW API FUNCTIONS (TDD - tests written first)
+// ============================================================================
+
+vim.e2e.describe("vim.api.setCurrentWin", function() {
+    vim.e2e.test("does not throw for current window (0)", function() {
+        vim.api.setCurrentWin(0);
+        vim.e2e.assert.true(true, "setCurrentWin(0) should not throw");
+    });
+
+    vim.e2e.test("silently ignores invalid window handle", function() {
+        // Neovim behavior: silently fails for invalid handles
+        vim.api.setCurrentWin(9999);
+        vim.e2e.assert.true(true, "setCurrentWin(9999) should not throw");
+    });
+
+    vim.e2e.test("current window remains 0 after call", function() {
+        vim.api.setCurrentWin(0);
+        const win = vim.api.getCurrentWin();
+        vim.e2e.assert.equal(win, 0, "Current window should still be 0");
+    });
+});
+
+vim.e2e.describe("vim.api.listWins", function() {
+    vim.e2e.test("returns array of window handles", function() {
+        const wins = vim.api.listWins();
+        vim.e2e.assert.true(Array.isArray(wins), "Should return an array");
+    });
+
+    vim.e2e.test("includes current window (0) in list", function() {
+        const wins = vim.api.listWins();
+        vim.e2e.assert.true(wins.includes(0), "Should include window 0");
+    });
+
+    vim.e2e.test("returns at least one window", function() {
+        const wins = vim.api.listWins();
+        vim.e2e.assert.true(wins.length >= 1, "Should have at least one window");
+    });
+});
+
+vim.e2e.describe("vim.api.winSetBuf", function() {
+    vim.e2e.test("does not throw for valid window and buffer", function() {
+        vim.api.winSetBuf(0, 0);
+        vim.e2e.assert.true(true, "winSetBuf should not throw");
+    });
+
+    vim.e2e.test("current buffer remains accessible", function() {
+        vim.api.winSetBuf(0, 0);
+        const buf = vim.api.winGetBuf(0);
+        vim.e2e.assert.equal(buf, 0, "Buffer should still be accessible");
+    });
+
+    vim.e2e.test("silently ignores invalid window", function() {
+        vim.api.winSetBuf(9999, 0);
+        vim.e2e.assert.true(true, "Should not throw for invalid window");
+    });
+});
+
+vim.e2e.describe("vim.api.winSetHeight", function() {
+    vim.e2e.test("does not throw for valid window", function() {
+        vim.api.winSetHeight(0, 20);
+        vim.e2e.assert.true(true, "winSetHeight should not throw");
+    });
+
+    vim.e2e.test("silently ignores in single-window mode", function() {
+        // Single window cannot change height
+        const before = vim.api.winGetHeight(0);
+        vim.api.winSetHeight(0, 10);
+        const after = vim.api.winGetHeight(0);
+        // Height should remain unchanged in single-window mode
+        vim.e2e.assert.equal(before, after, "Height unchanged in single-window mode");
+    });
+});
+
+vim.e2e.describe("vim.api.winSetWidth", function() {
+    vim.e2e.test("does not throw for valid window", function() {
+        vim.api.winSetWidth(0, 80);
+        vim.e2e.assert.true(true, "winSetWidth should not throw");
+    });
+
+    vim.e2e.test("silently ignores in single-window mode", function() {
+        // Single window cannot change width
+        const before = vim.api.winGetWidth(0);
+        vim.api.winSetWidth(0, 40);
+        const after = vim.api.winGetWidth(0);
+        // Width should remain unchanged in single-window mode
+        vim.e2e.assert.equal(before, after, "Width unchanged in single-window mode");
+    });
+});
+
+vim.e2e.describe("vim.api.winClose", function() {
+    vim.e2e.test("does not throw for current window", function() {
+        // In single-window mode, cannot close the only window
+        vim.api.winClose(0, false);
+        vim.e2e.assert.true(true, "winClose should not throw");
+    });
+
+    vim.e2e.test("accepts force option", function() {
+        vim.api.winClose(0, true);
+        vim.e2e.assert.true(true, "winClose with force should not throw");
+    });
+
+    vim.e2e.test("window 0 still valid after close attempt", function() {
+        vim.api.winClose(0, false);
+        const valid = vim.api.winIsValid(0);
+        vim.e2e.assert.true(valid, "Window 0 should still be valid (single-window)");
+    });
+});
+
+vim.e2e.describe("vim.api.winGetVar", function() {
+    vim.e2e.test("returns undefined for non-existent variable", function() {
+        const value = vim.api.winGetVar(0, "nonexistent_win_var");
+        vim.e2e.assert.equal(value, undefined, "Non-existent var should be undefined");
+    });
+
+    vim.e2e.test("returns previously set variable", function() {
+        vim.api.winSetVar(0, "test_win_var", "win_value");
+        const value = vim.api.winGetVar(0, "test_win_var");
+        vim.e2e.assert.equal(value, "win_value", "Should return set value");
+    });
+});
+
+vim.e2e.describe("vim.api.winSetVar", function() {
+    vim.e2e.test("sets string variable", function() {
+        vim.api.winSetVar(0, "win_string", "hello");
+        const value = vim.api.winGetVar(0, "win_string");
+        vim.e2e.assert.equal(value, "hello", "String var should be set");
+    });
+
+    vim.e2e.test("sets number variable", function() {
+        vim.api.winSetVar(0, "win_number", 123);
+        const value = vim.api.winGetVar(0, "win_number");
+        vim.e2e.assert.equal(value, 123, "Number var should be set");
+    });
+
+    vim.e2e.test("sets object variable", function() {
+        vim.api.winSetVar(0, "win_obj", { foo: "bar" });
+        const value = vim.api.winGetVar(0, "win_obj");
+        vim.e2e.assert.equal(value.foo, "bar", "Object var should be set");
+    });
+
+    vim.e2e.test("overwrites existing variable", function() {
+        vim.api.winSetVar(0, "win_overwrite", "old");
+        vim.api.winSetVar(0, "win_overwrite", "new");
+        const value = vim.api.winGetVar(0, "win_overwrite");
+        vim.e2e.assert.equal(value, "new", "Should overwrite with new value");
+    });
+});
+
+vim.e2e.describe("vim.api.winDelVar", function() {
+    vim.e2e.test("deletes existing variable", function() {
+        vim.api.winSetVar(0, "win_to_delete", "value");
+        vim.api.winDelVar(0, "win_to_delete");
+        const value = vim.api.winGetVar(0, "win_to_delete");
+        vim.e2e.assert.equal(value, undefined, "Deleted var should be undefined");
+    });
+
+    vim.e2e.test("does not throw for non-existent variable", function() {
+        vim.api.winDelVar(0, "win_never_existed");
+        vim.e2e.assert.true(true, "Should not throw");
+    });
+});
+
+vim.e2e.describe("vim.api.winCall", function() {
+    vim.e2e.test("executes function with window as context", function() {
+        let called = false;
+        vim.api.winCall(0, function() {
+            called = true;
+        });
+        vim.e2e.assert.true(called, "Function should be called");
+    });
+
+    vim.e2e.test("returns function result", function() {
+        const result = vim.api.winCall(0, function() {
+            return 99;
+        });
+        vim.e2e.assert.equal(result, 99, "Should return function result");
+    });
+
+    vim.e2e.test("has access to window state", function() {
+        const result = vim.api.winCall(0, function() {
+            return vim.api.winGetCursor(0);
+        });
+        vim.e2e.assert.true(Array.isArray(result), "Should access cursor in context");
+    });
+
+    vim.e2e.test("returns undefined for invalid window", function() {
+        const result = vim.api.winCall(9999, function() { return 42; });
+        vim.e2e.assert.equal(result, undefined, "Invalid window should return undefined");
+    });
+});
+
+vim.e2e.describe("vim.api.winGetNumber", function() {
+    vim.e2e.test("returns window number as number", function() {
+        const num = vim.api.winGetNumber(0);
+        vim.e2e.assert.equal(typeof num, "number", "Should return number");
+    });
+
+    vim.e2e.test("returns 1 for only window (1-indexed)", function() {
+        const num = vim.api.winGetNumber(0);
+        vim.e2e.assert.equal(num, 1, "Single window should be number 1");
+    });
+
+    vim.e2e.test("returns -1 for invalid window", function() {
+        const num = vim.api.winGetNumber(9999);
+        vim.e2e.assert.equal(num, -1, "Invalid window should return -1");
+    });
+});
+
+vim.e2e.describe("vim.api.winGetPosition", function() {
+    vim.e2e.test("returns position as [row, col]", function() {
+        const pos = vim.api.winGetPosition(0);
+        vim.e2e.assert.true(Array.isArray(pos), "Should return array");
+        vim.e2e.assert.equal(pos.length, 2, "Should have 2 elements");
+    });
+
+    vim.e2e.test("returns [0, 0] for full-screen window", function() {
+        const pos = vim.api.winGetPosition(0);
+        vim.e2e.assert.equal(pos[0], 0, "Row should be 0 for full-screen");
+        vim.e2e.assert.equal(pos[1], 0, "Col should be 0 for full-screen");
+    });
+
+    vim.e2e.test("returns null for invalid window", function() {
+        const pos = vim.api.winGetPosition(9999);
+        vim.e2e.assert.equal(pos, null, "Invalid window should return null");
+    });
+});
+
+// ============================================================================
+// EDGE CASES
+// ============================================================================
+
+vim.e2e.describe("Edge Cases: Window API", function() {
+    vim.e2e.test("winGetCursor returns null for invalid window", function() {
+        const pos = vim.api.winGetCursor(9999);
+        vim.e2e.assert.equal(pos, null, "Invalid window should return null");
+    });
+
+    vim.e2e.test("winSetCursor ignores invalid window", function() {
+        vim.api.winSetCursor(9999, [1, 0]);
+        vim.e2e.assert.true(true, "Should not throw");
+    });
+
+    vim.e2e.test("winGetBuf returns null for invalid window", function() {
+        const buf = vim.api.winGetBuf(9999);
+        vim.e2e.assert.equal(buf, null, "Invalid window should return null");
+    });
+
+    vim.e2e.test("winGetHeight returns null for invalid window", function() {
+        const height = vim.api.winGetHeight(9999);
+        vim.e2e.assert.equal(height, null, "Invalid window should return null");
+    });
+
+    vim.e2e.test("winGetWidth returns null for invalid window", function() {
+        const width = vim.api.winGetWidth(9999);
+        vim.e2e.assert.equal(width, null, "Invalid window should return null");
+    });
+
+    vim.e2e.test("negative window handle treated as invalid", function() {
+        const valid = vim.api.winIsValid(-1);
+        vim.e2e.assert.false(valid, "Negative window handle should be invalid");
+    });
+
+    vim.e2e.test("window variables isolated per window", function() {
+        vim.api.winSetVar(0, "isolated_win_var", "win0");
+        const value = vim.api.winGetVar(9999, "isolated_win_var");
+        vim.e2e.assert.equal(value, undefined, "Invalid window should not have var");
+    });
+});
+
 vim.e2e.runAll();
