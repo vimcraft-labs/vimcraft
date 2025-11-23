@@ -1185,6 +1185,61 @@ fn assertTrue(
     return helpers.returnUndefined(runtime);
 }
 
+/// vim.e2e.assert.false(condition, message?)
+/// Asserts that a condition is falsy
+fn assertFalse(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    if (arg_count < 1) {
+        c.hermes_throw_error(runtime, "assert.false requires 1 argument");
+        return null;
+    }
+
+    const condition = args[0];
+
+    // Check if condition is truthy
+    const is_truthy = blk: {
+        if (c.hermes_value_is_boolean(condition)) {
+            break :blk c.hermes_value_get_boolean(condition);
+        }
+        if (c.hermes_value_is_number(condition)) {
+            const num = c.hermes_value_get_number(condition);
+            break :blk num != 0;
+        }
+        if (c.hermes_value_is_null(condition) or c.hermes_value_is_undefined(condition)) {
+            break :blk false;
+        }
+        // Non-null objects, strings, etc. are truthy
+        break :blk true;
+    };
+
+    // assert.false expects the condition to be falsy
+    if (is_truthy) {
+        // Get optional message
+        if (arg_count >= 2) {
+            var msg_len: usize = 0;
+            const msg_ptr = c.hermes_value_get_string(runtime, args[1], &msg_len);
+            if (msg_ptr != null and msg_len > 0) {
+                // Use user-provided message
+                var msg_buf: [512]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "Assertion failed: {s}", .{msg_ptr[0..msg_len]}) catch "Assertion failed";
+                if (msg.len < msg_buf.len) {
+                    msg_buf[msg.len] = 0;
+                }
+                c.hermes_throw_error(runtime, msg.ptr);
+                return null;
+            }
+        }
+        c.hermes_throw_error(runtime, "assert.false failed (value was truthy)");
+        return null;
+    }
+
+    return helpers.returnUndefined(runtime);
+}
+
 // ============================================================================
 // HostObject Registration
 // ============================================================================
@@ -1263,6 +1318,12 @@ fn createAssertObject(runtime: ?*c.OVHermesRuntime) ?*c.OVHermesValue {
     if (true_fn) |tf| {
         c.hermes_value_set_property(runtime, assert_obj, "true", tf);
         c.hermes_value_destroy(tf);
+    }
+
+    const false_fn = c.hermes_create_function(runtime, "false", assertFalse, null);
+    if (false_fn) |ff| {
+        c.hermes_value_set_property(runtime, assert_obj, "false", ff);
+        c.hermes_value_destroy(ff);
     }
 
     return assert_obj;

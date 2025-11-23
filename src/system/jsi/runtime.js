@@ -488,6 +488,75 @@ if (typeof vimBuffer !== 'undefined') {
 // vim.api - Neovim-compatible API functions
 // Provides compatibility layer for Neovim plugins
 vim.api = {
+  // === Buffer Functions ===
+
+  // vim.api.getCurrentBuf() -> Buffer
+  //   returns: number (buffer handle, 0 = current buffer)
+  getCurrentBuf: function() {
+    if (typeof vimApiGetCurrentBuf !== 'undefined') {
+      return vimApiGetCurrentBuf();
+    }
+    return 0; // Default to current buffer
+  },
+
+  // vim.api.bufLineCount(buffer) -> number
+  //   buffer: number (buffer handle, 0 = current)
+  //   returns: number (line count)
+  bufLineCount: function(buffer) {
+    if (typeof vimApiBufLineCount !== 'undefined') {
+      return vimApiBufLineCount(buffer);
+    }
+    throw new Error('bufLineCount not available');
+  },
+
+  // vim.api.bufGetLines(buffer, start, end, strict) -> string[]
+  //   buffer: number (buffer handle, 0 = current)
+  //   start: number (0-indexed start line)
+  //   end: number (0-indexed end line, exclusive, -1 = end of file)
+  //   strict: boolean (if true, error on out-of-bounds; if false, clamp)
+  //   returns: string[] (array of lines without trailing newlines)
+  bufGetLines: function(buffer, start, end, strict) {
+    if (typeof vimApiBufGetLines !== 'undefined') {
+      return vimApiBufGetLines(buffer, start, end, strict);
+    }
+    throw new Error('bufGetLines not available');
+  },
+
+  // vim.api.bufSetLines(buffer, start, end, strict, replacement) -> void
+  //   buffer: number (buffer handle, 0 = current)
+  //   start: number (0-indexed start line)
+  //   end: number (0-indexed end line, exclusive, -1 = end of file)
+  //   strict: boolean (if true, error on out-of-bounds; if false, clamp)
+  //   replacement: string[] (array of replacement lines)
+  bufSetLines: function(buffer, start, end, strict, replacement) {
+    if (typeof vimApiBufSetLines !== 'undefined') {
+      return vimApiBufSetLines(buffer, start, end, strict, replacement);
+    }
+    throw new Error('bufSetLines not available');
+  },
+
+  // vim.api.bufGetName(buffer) -> string
+  //   buffer: number (buffer handle, 0 = current)
+  //   returns: string (buffer filename, empty for unnamed)
+  bufGetName: function(buffer) {
+    if (typeof vimApiBufGetName !== 'undefined') {
+      return vimApiBufGetName(buffer);
+    }
+    return ''; // Default to empty string for unnamed buffer
+  },
+
+  // vim.api.bufIsValid(buffer) -> boolean
+  //   buffer: number (buffer handle)
+  //   returns: boolean (true if buffer exists and is valid)
+  bufIsValid: function(buffer) {
+    if (typeof vimApiBufIsValid !== 'undefined') {
+      return vimApiBufIsValid(buffer);
+    }
+    return buffer === 0; // Only buffer 0 is valid by default
+  },
+
+  // === Highlight Functions ===
+
   // vim.api.setHighlight(ns_id, name, opts)
   //   ns_id: number (namespace ID, 0 for global)
   //   name: string (highlight group name, e.g., "Function", "@function", "ui.text")
@@ -522,7 +591,7 @@ vim.api = {
     return vimApiGetHighlight(ns_id, name);
   },
 
-  // vim.api.createAutoCommand(event, opts)
+  // vim.api.createAutocmd(event, opts)
   //   event: string | string[] - Event name(s) to trigger on
   //   opts: object - Configuration options
   //     - callback: function (required) - Callback function called when event fires
@@ -537,69 +606,69 @@ vim.api = {
   //   FileType, InsertEnter, InsertLeave, ModeChanged, CursorMoved, etc.
   //
   // Examples:
-  //   vim.api.createAutoCommand('BufEnter', {
+  //   vim.api.createAutocmd('BufEnter', {
   //       pattern: '*.js',
   //       callback: (ev) => console.log('Entered JS file:', ev.file),
   //   });
   //
-  //   vim.api.createAutoCommand(['BufRead', 'BufNewFile'], {
+  //   vim.api.createAutocmd(['BufRead', 'BufNewFile'], {
   //       pattern: ['*.ts', '*.tsx'],
   //       group: 'typescript',
   //       callback: (ev) => { /* setup TypeScript */ },
   //   });
-  createAutoCommand: function(event, opts) {
+  createAutocmd: function(event, opts) {
     if (typeof vimApiCreateAutoCommand !== 'undefined') {
       return vimApiCreateAutoCommand(event, opts);
     }
-    throw new Error('createAutoCommand not available (headless mode)');
+    throw new Error('createAutocmd not available (headless mode)');
   },
 
-  // vim.api.deleteAutoCommand(id)
-  //   id: number - Autocommand ID (returned by createAutoCommand)
+  // vim.api.delAutocmd(id)
+  //   id: number - Autocommand ID (returned by createAutocmd)
   //
   // Example:
-  //   const id = vim.api.createAutoCommand('BufEnter', { callback: () => {} });
-  //   vim.api.deleteAutoCommand(id);
-  deleteAutoCommand: function(id) {
+  //   const id = vim.api.createAutocmd('BufEnter', { callback: () => {} });
+  //   vim.api.delAutocmd(id);
+  delAutocmd: function(id) {
     if (typeof vimApiDeleteAutoCommand !== 'undefined') {
       return vimApiDeleteAutoCommand(id);
     }
-    throw new Error('deleteAutoCommand not available (headless mode)');
+    throw new Error('delAutocmd not available (headless mode)');
   },
 
-  // vim.api.createAutoGroup(name, opts)
+  // vim.api.createAugroup(name, opts)
   //   name: string - Group name
   //   opts: object (optional)
   //     - clear: boolean - Clear all autocommands in group first
   //   returns: string (group name)
   //
   // Example:
-  //   vim.api.createAutoGroup('my_plugin', { clear: true });
-  //   vim.api.createAutoCommand('BufEnter', {
+  //   vim.api.createAugroup('my_plugin', { clear: true });
+  //   vim.api.createAutocmd('BufEnter', {
   //       group: 'my_plugin',
   //       callback: () => {},
   //   });
-  createAutoGroup: function(name, opts) {
+  createAugroup: function(name, opts) {
     if (typeof vimApiCreateAutoGroup !== 'undefined') {
       return vimApiCreateAutoGroup(name, opts || {});
     }
-    throw new Error('createAutoGroup not available (headless mode)');
+    throw new Error('createAugroup not available (headless mode)');
   },
 
-  // vim.api.clearAutoCommands(opts)
+  // vim.api.clearAutocmds(opts)
   //   opts: object
   //     - group: string - Clear all autocommands in group
   //
   // Example:
-  //   vim.api.clearAutoCommands({ group: 'my_plugin' });
-  clearAutoCommands: function(opts) {
+  //   vim.api.clearAutocmds({ group: 'my_plugin' });
+  clearAutocmds: function(opts) {
     if (typeof vimApiClearAutoCommands !== 'undefined') {
       return vimApiClearAutoCommands(opts || {});
     }
-    throw new Error('clearAutoCommands not available (headless mode)');
+    throw new Error('clearAutocmds not available (headless mode)');
   },
 
-  // vim.api.createUserCommand(name, callback, opts)
+  // vim.api.createUserCmd(name, callback, opts)
   //   name: string - Command name (must start with uppercase)
   //   callback: function(args) - Command callback
   //     args: object containing:
@@ -623,53 +692,53 @@ vim.api = {
   //     - complete: string | function
   //
   // Example:
-  //   vim.api.createUserCommand('Greet', (args) => {
+  //   vim.api.createUserCmd('Greet', (args) => {
   //     console.log(`Hello ${args.args}!`);
   //   }, { desc: 'Greet someone' });
-  createUserCommand: function(name, callback, opts) {
+  createUserCmd: function(name, callback, opts) {
     if (typeof createUserCommand !== 'undefined') {
       return createUserCommand(name, callback, opts || {});
     }
-    throw new Error('createUserCommand not available (headless mode)');
+    throw new Error('createUserCmd not available (headless mode)');
   },
 
-  // vim.api.deleteUserCommand(name)
+  // vim.api.delUserCmd(name)
   //   name: string - Command name to delete
   //
   // Example:
-  //   vim.api.deleteUserCommand('Greet');
-  deleteUserCommand: function(name) {
+  //   vim.api.delUserCmd('Greet');
+  delUserCmd: function(name) {
     if (typeof deleteUserCommand !== 'undefined') {
       return deleteUserCommand(name);
     }
-    throw new Error('deleteUserCommand not available (headless mode)');
+    throw new Error('delUserCmd not available (headless mode)');
   },
 
-  // vim.api.bufCreateUserCommand(buffer, name, callback, opts)
+  // vim.api.bufCreateUserCmd(buffer, name, callback, opts)
   //   buffer: number - Buffer number (0 for current)
   //   name: string - Command name
   //   callback: function(args) - Command callback
-  //   opts: object (same as createUserCommand)
+  //   opts: object (same as createUserCmd)
   //
   // Example:
-  //   vim.api.bufCreateUserCommand(0, 'LocalCmd', (args) => {
+  //   vim.api.bufCreateUserCmd(0, 'LocalCmd', (args) => {
   //     console.log('Buffer-local command');
   //   });
-  bufCreateUserCommand: function(buffer, name, callback, opts) {
+  bufCreateUserCmd: function(buffer, name, callback, opts) {
     if (typeof bufCreateUserCommand !== 'undefined') {
       return bufCreateUserCommand(buffer, name, callback, opts || {});
     }
-    throw new Error('bufCreateUserCommand not available (headless mode)');
+    throw new Error('bufCreateUserCmd not available (headless mode)');
   },
 
-  // vim.api.bufDeleteUserCommand(buffer, name)
+  // vim.api.bufDelUserCmd(buffer, name)
   //   buffer: number - Buffer number (0 for current)
   //   name: string - Command name to delete
-  bufDeleteUserCommand: function(buffer, name) {
+  bufDelUserCmd: function(buffer, name) {
     if (typeof bufDeleteUserCommand !== 'undefined') {
       return bufDeleteUserCommand(buffer, name);
     }
-    throw new Error('bufDeleteUserCommand not available (headless mode)');
+    throw new Error('bufDelUserCmd not available (headless mode)');
   },
 
   // vim.api.getUserCommands(opts)

@@ -36,6 +36,7 @@ pub const fs_api = @import("fs_api.zig");
 pub const process_api = @import("process_api.zig");
 pub const fetch_api = @import("fetch_api.zig");
 pub const e2e_api = @import("e2e_api.zig");
+pub const api_buffer = @import("api_buffer.zig");
 
 // Import new transpiler system
 const transpiler = @import("../transpiler/loader.zig");
@@ -347,6 +348,14 @@ pub fn initJSI(
         e2e_api.register(runtime, e2e_ctx);
     }
 
+    // Register vim.api buffer functions (getCurrentBuf, bufGetLines, etc.)
+    // Register for both Editor and EditorContext
+    if (T == *Editor) {
+        api_buffer.registerForEditor(runtime, editor_or_context, allocator);
+    } else if (T == *EditorContext) {
+        api_buffer.registerForEditorContext(runtime, editor_or_context, allocator);
+    }
+
     // JSI functions registered (silent mode)
 }
 
@@ -450,6 +459,8 @@ pub fn deinitJSI() void {
         }
         global_e2e_ctx = null;
     }
+    // Clean up api_buffer context
+    api_buffer.deinit();
     global_allocator = null;
 }
 

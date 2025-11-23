@@ -12,7 +12,9 @@
   },
   "include": [
     "src/cli/vim.d.ts",
-    "init.ts"
+    "init.ts",
+    "tests/e2e/**/*.ts",
+    "examples/**/*.ts"
   ],
   "exclude": ["node_modules", "dist", "vendor", "zig-out", "zig-cache"]
 }

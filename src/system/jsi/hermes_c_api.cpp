@@ -701,6 +701,45 @@ void hermes_array_set(
     }
 }
 
+size_t hermes_array_length(OVHermesRuntime* runtime, OVHermesValue* array) {
+    if (!runtime || !array) return 0;
+
+    try {
+        if (!array->value.isObject()) return 0;
+
+        Object obj = array->value.asObject(*runtime->runtime);
+        if (!obj.isArray(*runtime->runtime)) return 0;
+
+        Array arr = obj.getArray(*runtime->runtime);
+        return arr.size(*runtime->runtime);
+    } catch (...) {
+        return 0;
+    }
+}
+
+OVHermesValue* hermes_array_get(
+    OVHermesRuntime* runtime,
+    OVHermesValue* array,
+    size_t index
+) {
+    if (!runtime || !array) return nullptr;
+
+    try {
+        if (!array->value.isObject()) return nullptr;
+
+        Object obj = array->value.asObject(*runtime->runtime);
+        if (!obj.isArray(*runtime->runtime)) return nullptr;
+
+        Array arr = obj.getArray(*runtime->runtime);
+        if (index >= arr.size(*runtime->runtime)) return nullptr;
+
+        Value val = arr.getValueAtIndex(*runtime->runtime, index);
+        return new OVHermesValue(std::move(val));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 //
 // Value Operations
 //

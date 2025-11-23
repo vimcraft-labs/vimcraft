@@ -1,37 +1,112 @@
 // Vimcraft TypeScript Type Definitions
-// Version: 0.6.0 - Neovim-Compatible API with CommonJS Module System
-// Based on Neovim 0.12.0 API analysis
-// Updated: 65 vim.opt options with JavaScript camelCase naming
+// Version: 0.7.0 - Modern Editor API with CommonJS Module System
+// JavaScript-first API design with camelCase naming conventions
 // Phase 4: CommonJS require(), module.exports, Event Emitter
 
 // ============================================================================
 // Type Aliases & Utility Types
 // ============================================================================
 
-/** Buffer handle (0 = current buffer, positive integers for specific buffers) */
+/**
+ * Buffer handle representing a Vimcraft buffer.
+ *
+ * Special values:
+ * - `0` refers to the current buffer
+ * - Positive integers refer to specific buffer numbers
+ *
+ * @example
+ * // Get current buffer number
+ * const buf: Buffer = vim.api.getCurrentBuf();
+ *
+ * // Use 0 to refer to current buffer
+ * vim.api.bufGetLines(0, 0, -1, false);
+ */
 export type Buffer = number;
 
-/** Window handle (0 = current window, positive integers for specific windows) */
+/**
+ * Window handle representing a Vimcraft window.
+ *
+ * Special values:
+ * - `0` refers to the current window
+ * - Positive integers refer to specific window numbers
+ *
+ * @example
+ * // Get current window
+ * const win: Window = vim.api.getCurrentWin();
+ *
+ * // Get cursor position in current window
+ * const [row, col] = vim.api.winGetCursor(0);
+ */
 export type Window = number;
 
-/** Tabpage handle (0 = current tabpage, positive integers for specific tabpages) */
+/**
+ * Tabpage handle representing a Vimcraft tabpage.
+ *
+ * Special values:
+ * - `0` refers to the current tabpage
+ * - Positive integers refer to specific tabpage numbers
+ *
+ * @example
+ * // Get current tabpage
+ * const tab: Tabpage = vim.api.getCurrentTabpage();
+ */
 export type Tabpage = number;
 
-/** Namespace ID for highlights, extmarks, diagnostics */
+/**
+ * Namespace ID for organizing highlights, extmarks, and diagnostics.
+ *
+ * Namespaces allow plugins to group related decorations together
+ * and manage them independently. Create with `vim.api.createNamespace()`.
+ *
+ * @example
+ * // Create a namespace for your plugin
+ * const ns = vim.api.createNamespace('my-plugin');
+ *
+ * // Use namespace for highlights
+ * vim.api.bufAddHighlight(0, ns, 'Error', 0, 0, 5);
+ *
+ * // Clear all highlights in namespace
+ * vim.api.bufClearNamespace(0, ns, 0, -1);
+ */
 export type Namespace = number;
 
-/** Autocommand ID returned by nvim_create_autocmd */
+/**
+ * Autocommand ID returned by `vim.api.createAutocmd()`.
+ *
+ * Used to identify and delete specific autocommands.
+ *
+ * @example
+ * // Create an autocommand and save its ID
+ * const id: AutocmdID = vim.api.createAutocmd('BufEnter', {
+ *   callback: (args) => console.log('Entered buffer:', args.file)
+ * });
+ *
+ * // Delete the autocommand later
+ * vim.api.delAutocmd(id);
+ */
 export type AutocmdID = number;
 
-/** User command ID */
+/**
+ * User command ID for custom Ex commands.
+ *
+ * Used to identify user-defined commands created with
+ * `vim.api.createUserCmd()`.
+ */
 export type CommandID = number;
 
 /**
- * RGB color representation
+ * RGB color representation with integer values 0-255.
+ *
+ * @example
+ * const red: Color = { r: 255, g: 0, b: 0 };
+ * const blue: Color = { r: 0, g: 0, b: 255 };
  */
 export interface Color {
+  /** Red component (0-255) */
   r: number;
+  /** Green component (0-255) */
   g: number;
+  /** Blue component (0-255) */
   b: number;
 }
 
@@ -40,46 +115,169 @@ export interface Color {
 // ============================================================================
 
 /**
- * Highlight group styling options
+ * Highlight group styling options for defining syntax colors and text attributes.
+ *
+ * Used with `vim.highlight()` and `vim.api.setHighlight()` to customize
+ * the appearance of text, UI elements, and syntax highlighting.
+ *
+ * @example
+ * // Define a simple highlight with foreground color
+ * vim.highlight('Comment', { fg: '#6c6c6c', italic: true });
+ *
+ * @example
+ * // Define a highlight with background and multiple attributes
+ * vim.highlight('Visual', {
+ *   bg: '#264f78',
+ *   bold: true
+ * });
+ *
+ * @example
+ * // Link to an existing highlight group
+ * vim.highlight('MyCustomGroup', { link: 'Comment' });
+ *
+ * @see https://vimcraft.com/docs/editor-api/user/api#nvim_set_hl()
  */
 export interface HighlightOpts {
-  /** Background color (hex string like '#ff0000' or null) */
+  /**
+   * Background color as a hex string (e.g., '#1a1b26') or null to clear.
+   *
+   * @example
+   * vim.highlight('CursorLine', { bg: '#2e2e3e' });
+   */
   bg?: string | null;
-  /** Foreground color (hex string like '#00ff00' or null) */
+
+  /**
+   * Foreground (text) color as a hex string (e.g., '#abb2bf') or null to clear.
+   *
+   * @example
+   * vim.highlight('Comment', { fg: '#6c6c6c' });
+   */
   fg?: string | null;
-  /** Special color for undercurl/underline */
+
+  /**
+   * Special color for undercurl, underline, and other decorations.
+   * Typically used for spell checking and diagnostic underlines.
+   *
+   * @example
+   * vim.highlight('SpellBad', { sp: '#ff0000', undercurl: true });
+   */
   sp?: string | null;
-  /** Color blend value (0-100) */
+
+  /**
+   * Color blend value for floating windows (0-100).
+   * 0 = fully opaque, 100 = fully transparent.
+   *
+   * @example
+   * vim.highlight('NormalFloat', { bg: '#1a1b26', blend: 20 });
+   */
   blend?: number;
-  /** Bold text */
+
+  /**
+   * Render text in bold.
+   *
+   * @example
+   * vim.highlight('Keyword', { fg: '#c678dd', bold: true });
+   */
   bold?: boolean;
-  /** Italic text */
+
+  /**
+   * Render text in italic.
+   *
+   * @example
+   * vim.highlight('Comment', { fg: '#5c6370', italic: true });
+   */
   italic?: boolean;
-  /** Underlined text */
+
+  /**
+   * Render text with a straight underline.
+   */
   underline?: boolean;
-  /** Undercurl decoration */
+
+  /**
+   * Render text with a curly underline (squiggly line).
+   * Commonly used for spell checking and diagnostics.
+   *
+   * @example
+   * vim.highlight('DiagnosticUnderlineError', { sp: '#e06c75', undercurl: true });
+   */
   undercurl?: boolean;
-  /** Underdouble decoration */
+
+  /**
+   * Render text with a double underline.
+   */
   underdouble?: boolean;
-  /** Underdotted decoration */
+
+  /**
+   * Render text with a dotted underline.
+   */
   underdotted?: boolean;
-  /** Underdashed decoration */
+
+  /**
+   * Render text with a dashed underline.
+   */
   underdashed?: boolean;
-  /** Strikethrough text */
+
+  /**
+   * Render text with a horizontal line through the middle.
+   *
+   * @example
+   * vim.highlight('Deprecated', { fg: '#808080', strikethrough: true });
+   */
   strikethrough?: boolean;
-  /** Reverse/inverse colors */
+
+  /**
+   * Swap foreground and background colors.
+   *
+   * @example
+   * vim.highlight('Search', { fg: '#000000', bg: '#ffff00', reverse: true });
+   */
   reverse?: boolean;
-  /** Standout mode */
+
+  /**
+   * Make the text stand out (implementation varies by terminal).
+   */
   standout?: boolean;
-  /** Highlight priority (0-10000, default: varies by type) */
+
+  /**
+   * Highlight priority (0-10000).
+   * Higher values take precedence when multiple highlights overlap.
+   * Default priority varies by highlight type.
+   */
   priority?: number;
-  /** Link to another highlight group */
+
+  /**
+   * Link this highlight group to another group.
+   * The linked group inherits all styling from the target.
+   *
+   * @example
+   * // Make 'MyKeyword' look exactly like 'Keyword'
+   * vim.highlight('MyKeyword', { link: 'Keyword' });
+   */
   link?: string;
 }
 
 /**
- * Common highlight group names (not exhaustive)
- * These are standard Vim/Neovim highlight groups
+ * Standard Vim/Neovim highlight group names.
+ *
+ * These are the built-in highlight groups used for syntax highlighting,
+ * UI elements, and various editor features. Custom group names (strings)
+ * are also allowed.
+ *
+ * Categories:
+ * - **Editor UI**: Normal, CursorLine, LineNr, StatusLine, etc.
+ * - **Syntax**: Comment, String, Keyword, Function, Type, etc.
+ * - **Diagnostics**: DiagnosticError, DiagnosticWarn, etc.
+ * - **Diff**: DiffAdd, DiffChange, DiffDelete, etc.
+ *
+ * @example
+ * // Use a standard group name
+ * vim.highlight('Comment', { fg: '#6c6c6c', italic: true });
+ *
+ * @example
+ * // Use a custom group name
+ * vim.highlight('MyPluginHighlight', { bg: '#2e2e3e' });
+ *
+ * @see https://vimcraft.com/docs/editor-api/user/syntax#highlight-groups
  */
 export type HighlightGroup =
   // === Editor UI ===
@@ -127,102 +325,526 @@ export type HighlightGroup =
 // ============================================================================
 
 /**
- * Status line display mode (vim.opt.lastStatus)
- * Controls when the status line is shown
+ * Status line display mode controlling when the status line is shown.
+ *
+ * Used with `vim.opt.lastStatus` to control status line visibility.
  *
  * @example
- * vim.opt.lastStatus = LastStatus.Never;  // Hide status line
- * vim.opt.lastStatus = LastStatus.Always; // Always show (default)
+ * // Hide status line completely
+ * vim.opt.lastStatus = LastStatus.Never;
+ *
+ * @example
+ * // Always show status line (default behavior)
+ * vim.opt.lastStatus = LastStatus.Always;
+ *
+ * @example
+ * // Or use numeric values directly
+ * vim.opt.lastStatus = 2; // Same as LastStatus.Always
+ *
+ * @see https://vimcraft.com/docs/editor-api/user/options#'laststatus'
  */
 export enum LastStatus {
-  /** Never show status line (laststatus=0) */
+  /**
+   * Never show status line.
+   * Equivalent to Vim's `set laststatus=0`.
+   */
   Never = 0,
-  /** Only if there are multiple windows (laststatus=1, currently behaves like Always) */
+
+  /**
+   * Show status line only if there are multiple windows.
+   * Currently behaves like `Always` in Vimcraft.
+   * Equivalent to Vim's `set laststatus=1`.
+   */
   OnlyIfMultipleWindows = 1,
-  /** Always show status line (laststatus=2, default) */
+
+  /**
+   * Always show status line (default).
+   * Equivalent to Vim's `set laststatus=2`.
+   */
   Always = 2,
-  /** Global status line - always show only in last window (laststatus=3, currently behaves like Always) */
+
+  /**
+   * Global status line - show only in the last window.
+   * Currently behaves like `Always` in Vimcraft.
+   * Equivalent to Vim's `set laststatus=3`.
+   */
   Global = 3,
 }
 
 /**
- * Editor options (vim.opt)
- * All option names use camelCase for JavaScript/TypeScript convention
+ * Editor options accessible via `vim.opt`.
+ *
+ * All option names use camelCase for JavaScript/TypeScript convention,
+ * mapping to their Vim snake_case equivalents (e.g., `cursorLine` → `cursorline`).
+ *
+ * Options are reactive - changes take effect immediately.
+ *
+ * @example
+ * // Enable line numbers and cursor line highlighting
+ * vim.opt.number = true;
+ * vim.opt.cursorLine = true;
+ *
+ * @example
+ * // Configure tabs and indentation
+ * vim.opt.tabStop = 4;
+ * vim.opt.shiftWidth = 4;
+ * vim.opt.expandTab = true;
+ *
+ * @example
+ * // Configure search behavior
+ * vim.opt.ignoreCase = true;
+ * vim.opt.smartCase = true;
+ * vim.opt.hlSearch = true;
+ *
+ * @see https://vimcraft.com/docs/editor-api/user/options
  */
 export interface VimOptions {
-  // === Display Options ===
+  // =========================================================================
+  // Display Options
+  // =========================================================================
+
+  /**
+   * Show line numbers in the gutter.
+   * @default false
+   */
   number?: boolean;
+
+  /**
+   * Show relative line numbers (distance from cursor line).
+   * When combined with `number`, shows absolute number on cursor line.
+   * @default false
+   */
   relativeNumber?: boolean;
+
+  /**
+   * Highlight the current line the cursor is on.
+   * @default false
+   */
   cursorLine?: boolean;
+
+  /**
+   * Highlight the current column the cursor is on.
+   * @default false
+   */
   cursorColumn?: boolean;
+
+  /**
+   * When and how to display the sign column (gutter for diagnostics, git signs, etc.).
+   * - `'yes'`: Always show sign column
+   * - `'no'`: Never show sign column
+   * - `'auto'`: Show only when there are signs
+   * - `'number'`: Display signs in the number column
+   * @default 'auto'
+   */
   signColumn?: 'yes' | 'no' | 'auto' | 'number';
+
+  /**
+   * Columns to highlight with ColorColumn highlight group.
+   * Useful for marking text width limits (e.g., 80, 120 characters).
+   *
+   * @example
+   * vim.opt.colorColumn = '80,120';
+   */
   colorColumn?: string;
+
+  /**
+   * Minimum number of lines to keep visible above and below the cursor.
+   * Prevents cursor from reaching the very top or bottom of the viewport.
+   * @default 0
+   */
   scrollOff?: number;
+
+  /**
+   * Minimum number of columns to keep visible left and right of the cursor.
+   * Useful for horizontal scrolling contexts.
+   * @default 0
+   */
   sideScrollOff?: number;
+
+  /**
+   * When to show the status line.
+   * See `LastStatus` enum for available values.
+   * @default LastStatus.Always (2)
+   */
   lastStatus?: LastStatus | 0 | 1 | 2 | 3;
+
+  /**
+   * Show (partial) command in the last line of the screen.
+   * Displays keys as they are typed for multi-key commands.
+   * @default true
+   */
   showCmd?: boolean;
+
+  /**
+   * Show current mode (INSERT, VISUAL, etc.) in the command line.
+   * @default true
+   */
   showMode?: boolean;
+
+  /**
+   * Show cursor position (line and column) in the status line.
+   * @default true
+   */
   ruler?: boolean;
+
+  /**
+   * Wrap long lines at the edge of the screen.
+   * When disabled, lines extend beyond the visible area.
+   * @default true
+   */
   wrap?: boolean;
+
+  /**
+   * Wrap long lines at word boundaries instead of mid-word.
+   * Only effective when `wrap` is enabled.
+   * @default false
+   */
   lineBreak?: boolean;
+
+  /**
+   * Show invisible characters (tabs, trailing spaces, etc.).
+   * Configure which characters to show with `listChars`.
+   * @default false
+   */
   list?: boolean;
+
+  /**
+   * Characters to show for invisible characters when `list` is enabled.
+   * Format: key:chars pairs separated by commas.
+   *
+   * @example
+   * vim.opt.listChars = 'tab:»·,trail:·,nbsp:·,eol:¬';
+   */
   listChars?: string;
+
+  /**
+   * How text with "conceal" syntax attribute is shown.
+   * - `0`: Concealed text shown normally
+   * - `1`: Concealed text replaced with one character
+   * - `2`: Concealed text replaced or hidden unless cursor is on line
+   * - `3`: Concealed text completely hidden
+   * @default 0
+   */
   concealLevel?: 0 | 1 | 2 | 3;
+
+  /**
+   * Enable spell checking.
+   * @default false
+   */
   spell?: boolean;
+
+  /**
+   * Width of the fold column for displaying fold indicators.
+   * @default '0'
+   */
   foldColumn?: string;
+
+  /**
+   * Enable 24-bit RGB colors in the terminal.
+   * Required for most modern color schemes.
+   * @default true
+   */
   termGuiColors?: boolean;
+
+  /**
+   * Background color mode ('light' or 'dark').
+   * Affects default highlight group colors.
+   * @default 'dark'
+   */
   background?: 'light' | 'dark';
+
+  /**
+   * Briefly jump to matching bracket when inserting one.
+   * @default false
+   */
   showMatch?: boolean;
 
-  // === Editing Options ===
+  // =========================================================================
+  // Editing Options
+  // =========================================================================
+
+  /**
+   * Number of spaces that a <Tab> character represents visually.
+   * @default 8
+   */
   tabStop?: number;
+
+  /**
+   * Number of spaces for each step of (auto)indent.
+   * Used by `>>`, `<<`, and automatic indentation.
+   * @default 8
+   */
   shiftWidth?: number;
+
+  /**
+   * Use spaces instead of tabs when pressing <Tab>.
+   * @default false
+   */
   expandTab?: boolean;
+
+  /**
+   * Smart autoindenting when starting a new line.
+   * Adds extra indentation after `{`, removes it after `}`.
+   * @default false
+   */
   smartIndent?: boolean;
+
+  /**
+   * Copy indent from current line when starting a new line.
+   * @default true
+   */
   autoIndent?: boolean;
+
+  /**
+   * Maximum width of text being inserted. Longer lines are broken.
+   * Set to 0 to disable automatic line breaking.
+   * @default 0
+   */
   textWidth?: number;
+
+  /**
+   * Number of spaces that a <Tab> counts for while editing.
+   * Set to 0 to use `tabStop` value.
+   * @default 0
+   */
   softTabStop?: number;
+
+  /**
+   * <Tab> at start of line inserts blanks according to `shiftWidth`.
+   * @default true
+   */
   smartTab?: boolean;
+
+  /**
+   * What the backspace key can delete in Insert mode.
+   * Common values: 'indent', 'eol', 'start' (comma-separated).
+   * @default 'indent,eol,start'
+   */
   backspace?: string;
+
+  /**
+   * Controls automatic formatting behavior.
+   * Common flags: t (auto-wrap text), c (auto-wrap comments), q (allow gq).
+   */
   formatOptions?: string;
+
+  /**
+   * Options for Insert mode completion popup.
+   * Common values: 'menu', 'menuone', 'noselect', 'preview'.
+   */
   completeOpt?: string;
+
+  /**
+   * When to allow cursor to move beyond end of line.
+   * Common values: 'block' (Visual block mode), 'all' (always).
+   */
   virtualEdit?: string;
+
+  /**
+   * Whether the buffer can be modified.
+   * @default true
+   */
   modifiable?: boolean;
+
+  /**
+   * Whether the buffer is read-only.
+   * @default false
+   */
   readOnly?: boolean;
 
-  // === Search Options ===
+  // =========================================================================
+  // Search Options
+  // =========================================================================
+
+  /**
+   * Ignore case in search patterns.
+   * @default false
+   */
   ignoreCase?: boolean;
+
+  /**
+   * Override `ignoreCase` if search pattern contains uppercase letters.
+   * Requires `ignoreCase` to be enabled.
+   * @default false
+   */
   smartCase?: boolean;
+
+  /**
+   * Highlight all matches of the previous search pattern.
+   * Use `:nohlsearch` to clear highlighting.
+   * @default false
+   */
   hlSearch?: boolean;
+
+  /**
+   * Show matches incrementally while typing search pattern.
+   * @default true
+   */
   incSearch?: boolean;
+
+  /**
+   * Wrap around to the beginning when searching past the end of file.
+   * @default true
+   */
   wrapScan?: boolean;
 
-  // === Behavior Options ===
+  // =========================================================================
+  // Behavior Options
+  // =========================================================================
+
+  /**
+   * Enable mouse support.
+   * Set to 'a' to enable for all modes.
+   * @default ''
+   */
   mouse?: string;
+
+  /**
+   * Clipboard configuration.
+   * Set to 'unnamedplus' to use system clipboard for all yank/paste.
+   */
   clipboard?: string;
+
+  /**
+   * Maximum number of undo levels to remember.
+   * @default 1000
+   */
   undoLevels?: number;
+
+  /**
+   * Time out on mappings and key codes.
+   * @default true
+   */
   timeout?: boolean;
+
+  /**
+   * Time in milliseconds to wait for a mapped sequence to complete.
+   * @default 1000
+   */
   timeoutLen?: number;
+
+  /**
+   * Time in milliseconds for CursorHold event and swap file writes.
+   * Lower values trigger CursorHold more frequently.
+   * @default 4000
+   */
   updateTime?: number;
+
+  /**
+   * Allow switching buffers without saving changes first.
+   * @default false
+   */
   hidden?: boolean;
+
+  /**
+   * Create backup files before overwriting.
+   * @default false
+   */
   backup?: boolean;
+
+  /**
+   * Create backup before overwriting, delete after successful write.
+   * @default true
+   */
   writeBackup?: boolean;
+
+  /**
+   * Use swap files for crash recovery.
+   * @default true
+   */
   swapFile?: boolean;
+
+  /**
+   * Persist undo history to file for cross-session undo.
+   * @default false
+   */
   undoFile?: boolean;
+
+  /**
+   * Directory for storing undo files.
+   */
   undoDir?: string;
+
+  /**
+   * New vertical splits open to the right of current window.
+   * @default false
+   */
   splitRight?: boolean;
+
+  /**
+   * New horizontal splits open below current window.
+   * @default false
+   */
   splitBelow?: boolean;
+
+  /**
+   * Automatically read file when changed outside the editor.
+   * @default false
+   */
   autoRead?: boolean;
+
+  /**
+   * Automatically write file when switching buffers.
+   * @default false
+   */
   autoWrite?: boolean;
+
+  /**
+   * Ask for confirmation when abandoning unsaved buffer.
+   * @default false
+   */
   confirm?: boolean;
 
-  // === UI Options ===
+  // =========================================================================
+  // UI Options
+  // =========================================================================
+
+  /**
+   * Number of lines to use for the command-line area.
+   * @default 1
+   */
   cmdHeight?: number;
+
+  /**
+   * Maximum height of popup menu (completion menu).
+   * Set to 0 for unlimited height.
+   * @default 0
+   */
   pumHeight?: number;
+
+  /**
+   * Pseudo-transparency for floating windows (0-100).
+   * 0 = fully opaque, 100 = fully transparent.
+   * @default 0
+   */
   winBlend?: number;
+
+  /**
+   * Pseudo-transparency for popup menu (0-100).
+   * 0 = fully opaque, 100 = fully transparent.
+   * @default 0
+   */
   pumBlend?: number;
+
+  /**
+   * When to show the tabline.
+   * - `0`: Never
+   * - `1`: Only if there are multiple tabs
+   * - `2`: Always
+   * @default 1
+   */
   showTabLine?: 0 | 1 | 2;
+
+  /**
+   * Enable enhanced command-line completion menu.
+   * @default true
+   */
   wildMenu?: boolean;
+
+  /**
+   * Completion mode for command-line.
+   * Controls how matches are displayed and cycled.
+   */
   wildMode?: string;
 }
 
@@ -231,7 +853,28 @@ export interface VimOptions {
 // ============================================================================
 
 /**
- * Key mapping modes
+ * Key mapping mode identifiers.
+ *
+ * Each character represents a different Vim mode:
+ * - `'n'` - Normal mode (default navigation mode)
+ * - `'i'` - Insert mode (text input)
+ * - `'v'` - Visual mode (character-wise selection)
+ * - `'x'` - Visual block mode (block selection)
+ * - `'s'` - Select mode (like Visual but typing replaces)
+ * - `'o'` - Operator-pending mode (waiting for motion after operator)
+ * - `'c'` - Command-line mode (`:`, `/`, `?`)
+ * - `'t'` - Terminal mode (terminal emulator)
+ * - `''`  - All modes
+ *
+ * @example
+ * // Map only in Normal mode
+ * vim.keymap.set('n', '<leader>f', ':find<CR>');
+ *
+ * @example
+ * // Map in multiple modes
+ * vim.keymap.set(['n', 'v'], '<leader>y', '"+y');
+ *
+ * @see https://vimcraft.com/docs/editor-api/user/map#map-modes
  */
 export type MapMode =
   | 'n'   // Normal mode
@@ -246,58 +889,193 @@ export type MapMode =
   | string;
 
 /**
- * Key mapping options
+ * Options for key mappings.
+ *
+ * Controls mapping behavior like whether it's recursive, silent, or buffer-local.
+ *
+ * @example
+ * // Silent, non-recursive mapping
+ * vim.keymap.set('n', '<leader>w', ':w<CR>', {
+ *   silent: true,
+ *   noremap: true,
+ *   desc: 'Save file'
+ * });
+ *
+ * @example
+ * // Buffer-local mapping
+ * vim.keymap.set('n', 'gd', gotoDefinition, {
+ *   buffer: true,
+ *   desc: 'Go to definition'
+ * });
+ *
+ * @see https://vimcraft.com/docs/editor-api/user/map#:map-arguments
  */
 export interface KeymapOpts {
-  /** Don't use default mappings */
+  /**
+   * Non-recursive mapping (don't expand rhs mappings).
+   * Equivalent to `:nnoremap` instead of `:nmap`.
+   * @default true in vim.keymap.set()
+   */
   noremap?: boolean;
-  /** Silent mapping (don't echo) */
+
+  /**
+   * Don't echo the mapping in the command line.
+   * Equivalent to `:map <silent>`.
+   * @default false
+   */
   silent?: boolean;
-  /** Expression mapping (evaluated) */
+
+  /**
+   * Expression mapping - rhs is evaluated as an expression.
+   * The result is used as the mapping.
+   * Equivalent to `:map <expr>`.
+   *
+   * @example
+   * vim.keymap.set('i', '<Tab>', () => {
+   *   return vim.fn.pumvisible() ? '<C-n>' : '<Tab>';
+   * }, { expr: true });
+   */
   expr?: boolean;
-  /** Unique mapping (error if already exists) */
+
+  /**
+   * Error if the mapping already exists.
+   * Useful for plugins that don't want to override user mappings.
+   * @default false
+   */
   unique?: boolean;
-  /** Buffer number (0 = current, true = current) */
+
+  /**
+   * Create a buffer-local mapping.
+   * - `true` or `0`: Current buffer
+   * - `number > 0`: Specific buffer number
+   *
+   * @example
+   * // Map only for current buffer
+   * vim.keymap.set('n', 'K', showDocs, { buffer: true });
+   */
   buffer?: boolean | number;
-  /** Nowait for this mapping */
+
+  /**
+   * Don't wait for other longer mappings to be typed.
+   * Useful when you have mappings like 'a' and 'ab'.
+   * @default false
+   */
   nowait?: boolean;
-  /** Script-local remapping */
+
+  /**
+   * Allow script-local remapping.
+   * @default false
+   */
   script?: boolean;
-  /** Replace keycodes */
+
+  /**
+   * Replace keycodes in rhs (e.g., '<CR>' becomes actual carriage return).
+   * @default true when expr is true
+   */
   replace_keycodes?: boolean;
-  /** Description of the mapping (for which-key, etc.) */
+
+  /**
+   * Description of the mapping.
+   * Shown in `:map` output and which-key plugins.
+   *
+   * @example
+   * vim.keymap.set('n', '<leader>ff', findFiles, {
+   *   desc: 'Find files in project'
+   * });
+   */
   desc?: string;
-  /** Callback function instead of rhs string */
+
+  /**
+   * Callback function instead of rhs string.
+   * Alternative to passing function as rhs parameter.
+   */
   callback?: () => void;
 }
 
 /**
- * Keymap interface (vim.keymap)
+ * Key mapping interface for creating and managing key bindings.
+ *
+ * @example
+ * // Basic mapping with command string
+ * vim.keymap.set('n', '<leader>w', ':w<CR>', { desc: 'Save file' });
+ *
+ * @example
+ * // Mapping with callback function
+ * vim.keymap.set('n', '<leader>f', () => {
+ *   console.log('Finding files...');
+ *   // ... implementation
+ * });
+ *
+ * @example
+ * // Mapping in multiple modes
+ * vim.keymap.set(['n', 'v'], '<leader>y', '"+y', {
+ *   desc: 'Yank to system clipboard'
+ * });
+ *
+ * @see https://vimcraft.com/docs/editor-api/user/lua#vim.keymap
  */
 export interface Keymap {
   /**
-   * Set a key mapping
-   * @param mode - Mode(s) where mapping applies
-   * @param lhs - Left-hand side (key to map)
-   * @param rhs - Right-hand side (action, keys, or callback)
-   * @param opts - Mapping options
+   * Set a key mapping.
+   *
+   * Creates a mapping from {lhs} to {rhs} in the specified mode(s).
+   * Can map to a command string or a Lua/JavaScript function.
+   *
+   * @param mode - Mode(s) where mapping applies. Can be a single mode
+   *               character or an array of modes.
+   * @param lhs - Left-hand side (key sequence to map, e.g., '<leader>w', 'jk')
+   * @param rhs - Right-hand side (action). Can be:
+   *              - Command string (e.g., ':w<CR>')
+   *              - Key sequence (e.g., '<Esc>')
+   *              - Callback function
+   * @param opts - Optional mapping options
    *
    * @example
+   * // Map <leader>w to save file
    * vim.keymap.set('n', '<leader>w', ':w<CR>', { silent: true });
-   * vim.keymap.set('i', 'jk', '<Esc>', { noremap: true });
-   * vim.keymap.set('n', '<leader>d', () => { console.log('delete'); });
+   *
+   * @example
+   * // Map jk to escape in insert mode
+   * vim.keymap.set('i', 'jk', '<Esc>');
+   *
+   * @example
+   * // Map with callback function
+   * vim.keymap.set('n', '<leader>d', () => {
+   *   console.log('Custom delete action');
+   * }, { desc: 'Custom delete' });
+   *
+   * @example
+   * // Map in multiple modes
+   * vim.keymap.set(['n', 'v'], 'Y', '"+y', {
+   *   desc: 'Yank to clipboard'
+   * });
+   *
+   * @see https://vimcraft.com/docs/editor-api/user/lua#vim.keymap.set()
    */
   set(mode: MapMode | MapMode[], lhs: string, rhs: string | (() => void), opts?: KeymapOpts): void;
 
   /**
-   * Delete a key mapping
-   * @param mode - Mode(s) where mapping exists
-   * @param lhs - Left-hand side (key to delete)
-   * @param opts - Options (currently only buffer)
+   * Delete a key mapping.
+   *
+   * Removes an existing mapping for {lhs} in the specified mode(s).
+   *
+   * @param mode - Mode(s) where mapping should be deleted
+   * @param lhs - Left-hand side (key sequence to unmap)
+   * @param opts - Options. Currently only `buffer` is supported.
    *
    * @example
+   * // Delete a global mapping
    * vim.keymap.del('n', '<leader>w');
-   * vim.keymap.del('i', 'jk', { buffer: true });
+   *
+   * @example
+   * // Delete a buffer-local mapping
+   * vim.keymap.del('n', 'K', { buffer: true });
+   *
+   * @example
+   * // Delete from multiple modes
+   * vim.keymap.del(['n', 'v'], '<leader>y');
+   *
+   * @see https://vimcraft.com/docs/editor-api/user/lua#vim.keymap.del()
    */
   del(mode: MapMode | MapMode[], lhs: string, opts?: { buffer?: boolean | number }): void;
 }
@@ -346,8 +1124,7 @@ export type AutocmdEvent =
   | string;
 
 /**
- * Autocommand callback arguments
- * Matches Neovim's autocmd callback args structure exactly
+ * Autocommand callback arguments passed to autocmd callbacks.
  */
 export interface AutocmdCallbackArgs {
   /** Autocommand ID */
@@ -574,223 +1351,223 @@ export interface DiagnosticAPI {
 }
 
 // ============================================================================
-// Core API (vim.api.nvim_*)
+// Core API (vim.api)
 // ============================================================================
 
 /**
- * Core Neovim API interface (vim.api)
- * Contains all nvim_* functions
+ * Core API interface (vim.api)
+ * JavaScript-native functions with camelCase naming conventions.
  */
 export interface API {
   // === Buffer Functions ===
 
   /** Get current buffer */
-  nvim_get_current_buf(): Buffer;
+  getCurrentBuf(): Buffer;
 
   /** Set current buffer */
-  nvim_set_current_buf(buffer: Buffer): void;
+  setCurrentBuf(buffer: Buffer): void;
 
   /** Get buffer lines */
-  nvim_buf_get_lines(buffer: Buffer, start: number, end: number, strict_indexing: boolean): string[];
+  bufGetLines(buffer: Buffer, start: number, end: number, strict_indexing: boolean): string[];
 
   /** Set buffer lines */
-  nvim_buf_set_lines(buffer: Buffer, start: number, end: number, strict_indexing: boolean, replacement: string[]): void;
+  bufSetLines(buffer: Buffer, start: number, end: number, strict_indexing: boolean, replacement: string[]): void;
 
   /** Get buffer line count */
-  nvim_buf_line_count(buffer: Buffer): number;
+  bufLineCount(buffer: Buffer): number;
 
   /** Get buffer name */
-  nvim_buf_get_name(buffer: Buffer): string;
+  bufGetName(buffer: Buffer): string;
 
   /** Set buffer name */
-  nvim_buf_set_name(buffer: Buffer, name: string): void;
+  bufSetName(buffer: Buffer, name: string): void;
 
   /** Check if buffer is valid */
-  nvim_buf_is_valid(buffer: Buffer): boolean;
+  bufIsValid(buffer: Buffer): boolean;
 
   /** Delete buffer */
-  nvim_buf_delete(buffer: Buffer, opts: { force?: boolean; unload?: boolean }): void;
+  bufDelete(buffer: Buffer, opts: { force?: boolean; unload?: boolean }): void;
 
   // === Window Functions ===
 
   /** Get current window */
-  nvim_get_current_win(): Window;
+  getCurrentWin(): Window;
 
   /** Set current window */
-  nvim_set_current_win(window: Window): void;
+  setCurrentWin(window: Window): void;
 
   /** Get window buffer */
-  nvim_win_get_buf(window: Window): Buffer;
+  winGetBuf(window: Window): Buffer;
 
   /** Set window buffer */
-  nvim_win_set_buf(window: Window, buffer: Buffer): void;
+  winSetBuf(window: Window, buffer: Buffer): void;
 
   /** Get window cursor position [row, col] (1-indexed, 0-indexed) */
-  nvim_win_get_cursor(window: Window): [number, number];
+  winGetCursor(window: Window): [number, number];
 
   /** Set window cursor position [row, col] (1-indexed, 0-indexed) */
-  nvim_win_set_cursor(window: Window, pos: [number, number]): void;
+  winSetCursor(window: Window, pos: [number, number]): void;
 
   /** Get window height */
-  nvim_win_get_height(window: Window): number;
+  winGetHeight(window: Window): number;
 
   /** Set window height */
-  nvim_win_set_height(window: Window, height: number): void;
+  winSetHeight(window: Window, height: number): void;
 
   /** Get window width */
-  nvim_win_get_width(window: Window): number;
+  winGetWidth(window: Window): number;
 
   /** Set window width */
-  nvim_win_set_width(window: Window, width: number): void;
+  winSetWidth(window: Window, width: number): void;
 
   /** Check if window is valid */
-  nvim_win_is_valid(window: Window): boolean;
+  winIsValid(window: Window): boolean;
 
   /** Close window */
-  nvim_win_close(window: Window, force: boolean): void;
+  winClose(window: Window, force: boolean): void;
 
   // === Tabpage Functions ===
 
   /** Get current tabpage */
-  nvim_get_current_tabpage(): Tabpage;
+  getCurrentTabpage(): Tabpage;
 
   /** Set current tabpage */
-  nvim_set_current_tabpage(tabpage: Tabpage): void;
+  setCurrentTabpage(tabpage: Tabpage): void;
 
   /** List all tabpages */
-  nvim_list_tabpages(): Tabpage[];
+  listTabpages(): Tabpage[];
 
   // === Option Functions ===
 
   /** Get option value */
-  nvim_get_option(name: string): any;
+  getOption(name: string): any;
 
   /** Set option value */
-  nvim_set_option(name: string, value: any): void;
+  setOption(name: string, value: any): void;
 
   /** Get buffer option value */
-  nvim_buf_get_option(buffer: Buffer, name: string): any;
+  bufGetOption(buffer: Buffer, name: string): any;
 
   /** Set buffer option value */
-  nvim_buf_set_option(buffer: Buffer, name: string, value: any): void;
+  bufSetOption(buffer: Buffer, name: string, value: any): void;
 
   /** Get window option value */
-  nvim_win_get_option(window: Window, name: string): any;
+  winGetOption(window: Window, name: string): any;
 
   /** Set window option value */
-  nvim_win_set_option(window: Window, name: string, value: any): void;
+  winSetOption(window: Window, name: string, value: any): void;
 
   // === Variable Functions ===
 
   /** Get global variable */
-  nvim_get_var(name: string): any;
+  getVar(name: string): any;
 
   /** Set global variable */
-  nvim_set_var(name: string, value: any): void;
+  setVar(name: string, value: any): void;
 
   /** Delete global variable */
-  nvim_del_var(name: string): void;
+  delVar(name: string): void;
 
   /** Get buffer variable */
-  nvim_buf_get_var(buffer: Buffer, name: string): any;
+  bufGetVar(buffer: Buffer, name: string): any;
 
   /** Set buffer variable */
-  nvim_buf_set_var(buffer: Buffer, name: string, value: any): void;
+  bufSetVar(buffer: Buffer, name: string, value: any): void;
 
   // === Keymap Functions ===
 
   /** Set global keymap */
-  nvim_set_keymap(mode: string, lhs: string, rhs: string, opts: any): void;
+  setKeymap(mode: string, lhs: string, rhs: string, opts: any): void;
 
   /** Delete global keymap */
-  nvim_del_keymap(mode: string, lhs: string): void;
+  delKeymap(mode: string, lhs: string): void;
 
   /** Get keymaps */
-  nvim_get_keymap(mode: string): any[];
+  getKeymap(mode: string): any[];
 
   /** Set buffer keymap */
-  nvim_buf_set_keymap(buffer: Buffer, mode: string, lhs: string, rhs: string, opts: any): void;
+  bufSetKeymap(buffer: Buffer, mode: string, lhs: string, rhs: string, opts: any): void;
 
   /** Delete buffer keymap */
-  nvim_buf_del_keymap(buffer: Buffer, mode: string, lhs: string): void;
+  bufDelKeymap(buffer: Buffer, mode: string, lhs: string): void;
 
   // === Highlight Functions ===
 
   /** Set highlight group */
-  nvim_set_hl(namespace: Namespace, name: string, val: HighlightOpts): void;
+  setHighlight(namespace: Namespace, name: string, val: HighlightOpts): void;
 
   /** Get highlight group */
-  nvim_get_hl(namespace: Namespace, opts: { name?: string; id?: number; link?: boolean }): Record<string, any>;
+  getHighlight(namespace: Namespace, opts: { name?: string; id?: number; link?: boolean }): Record<string, any>;
 
   /** Set buffer highlight (extmark-based) */
-  nvim_buf_add_highlight(buffer: Buffer, ns_id: Namespace, hl_group: string, line: number, col_start: number, col_end: number): number;
+  bufAddHighlight(buffer: Buffer, ns_id: Namespace, hl_group: string, line: number, col_start: number, col_end: number): number;
 
   /** Clear namespace highlights */
-  nvim_buf_clear_namespace(buffer: Buffer, ns_id: Namespace, line_start: number, line_end: number): void;
+  bufClearNamespace(buffer: Buffer, ns_id: Namespace, line_start: number, line_end: number): void;
 
   // === Autocommand Functions ===
 
   /** Create autocommand */
-  nvim_create_autocmd(event: AutocmdEvent | AutocmdEvent[], opts: AutocmdOpts): AutocmdID;
+  createAutocmd(event: AutocmdEvent | AutocmdEvent[], opts: AutocmdOpts): AutocmdID;
 
   /** Delete autocommand by ID */
-  nvim_del_autocmd(id: AutocmdID): void;
+  delAutocmd(id: AutocmdID): void;
 
   /** Create augroup */
-  nvim_create_augroup(name: string, opts: AugroupOpts): number;
+  createAugroup(name: string, opts: AugroupOpts): number;
 
   /** Clear autocmds in augroup */
-  nvim_clear_autocmds(opts: { group?: string | number; event?: string | string[]; buffer?: number }): void;
+  clearAutocmds(opts: { group?: string | number; event?: string | string[]; buffer?: number }): void;
 
   // === User Command Functions ===
 
   /** Create user command */
-  nvim_create_user_command(name: string, command: string | ((args: UserCommandCallbackArgs) => void), opts: UserCommandOpts): void;
+  createUserCmd(name: string, command: string | ((args: UserCommandCallbackArgs) => void), opts: UserCommandOpts): void;
 
   /** Delete user command */
-  nvim_del_user_command(name: string): void;
+  delUserCmd(name: string): void;
 
   /** Create buffer-local user command */
-  nvim_buf_create_user_command(buffer: Buffer, name: string, command: string | ((args: UserCommandCallbackArgs) => void), opts: UserCommandOpts): void;
+  bufCreateUserCmd(buffer: Buffer, name: string, command: string | ((args: UserCommandCallbackArgs) => void), opts: UserCommandOpts): void;
 
   /** Delete buffer-local user command */
-  nvim_buf_del_user_command(buffer: Buffer, name: string): void;
+  bufDelUserCmd(buffer: Buffer, name: string): void;
 
   // === Command Execution ===
 
   /** Execute Ex command */
-  nvim_command(command: string): void;
+  command(command: string): void;
 
-  /** Execute Lua code */
-  nvim_exec_lua(code: string, args: any[]): any;
+  /** Execute Lua code (or JS code in Vimcraft context) */
+  execLua(code: string, args: any[]): any;
 
   // === Namespace Functions ===
 
   /** Create namespace */
-  nvim_create_namespace(name: string): Namespace;
+  createNamespace(name: string): Namespace;
 
   /** Get namespaces */
-  nvim_get_namespaces(): Record<string, Namespace>;
+  getNamespaces(): Record<string, Namespace>;
 
   // === Misc Functions ===
 
   /** Call Vimscript function */
-  nvim_call_function(fname: string, args: any[]): any;
+  callFunction(fname: string, args: any[]): any;
 
   /** Evaluate Vimscript expression */
-  nvim_eval(expr: string): any;
+  eval(expr: string): any;
 
   /** Get mode */
-  nvim_get_mode(): { mode: string; blocking: boolean };
+  getMode(): { mode: string; blocking: boolean };
 
   /** Notify user */
-  nvim_notify(msg: string, log_level: number, opts: any): void;
+  notify(msg: string, log_level: number, opts: any): void;
 
   /** Echo message */
-  nvim_echo(chunks: Array<[string, string?]>, history: boolean, opts: any): void;
+  echo(chunks: Array<[string, string?]>, history: boolean, opts: any): void;
 
   /** Get runtime files */
-  nvim_get_runtime_file(name: string, all: boolean): string[];
+  getRuntimeFile(name: string, all: boolean): string[];
 }
 
 // ============================================================================
@@ -915,206 +1692,1457 @@ export interface TreeSitter {
 }
 
 // ============================================================================
+// E2E Testing API
+// ============================================================================
+
+/**
+ * Assertion methods for E2E tests.
+ *
+ * Provides Jest-style assertions for validating editor state, cursor position,
+ * mode, and buffer contents during testing.
+ *
+ * @example
+ * vim.e2e.test('cursor moves down', function() {
+ *   vim.e2e.keys('j');
+ *   vim.e2e.assert.cursorAt(1, 0);
+ *   vim.e2e.assert.mode('NORMAL');
+ * });
+ */
+export interface E2EAssert {
+  /**
+   * Assert two values are strictly equal (===).
+   *
+   * @param actual - The actual value from the test
+   * @param expected - The expected value
+   * @param message - Optional failure message
+   *
+   * @example
+   * vim.e2e.assert.equal(vim.e2e.getMode(), 'NORMAL', 'Should be in normal mode');
+   */
+  equal(actual: any, expected: any, message?: string): void;
+
+  /**
+   * Assert two values are deeply equal (recursive object comparison).
+   *
+   * @param actual - The actual object/array
+   * @param expected - The expected object/array
+   * @param message - Optional failure message
+   *
+   * @example
+   * vim.e2e.assert.deepEqual(vim.e2e.getCursor(), { line: 0, col: 0 });
+   */
+  deepEqual(actual: any, expected: any, message?: string): void;
+
+  /**
+   * Assert a condition is truthy.
+   *
+   * @param condition - Condition to check
+   * @param message - Optional failure message
+   *
+   * @example
+   * vim.e2e.assert.true(lineCount > 0, 'Buffer should have lines');
+   */
+  true(condition: boolean, message?: string): void;
+
+  /**
+   * Assert a condition is falsy.
+   *
+   * @param condition - Condition to check
+   * @param message - Optional failure message
+   *
+   * @example
+   * vim.e2e.assert.false(isModified, 'Buffer should not be modified');
+   */
+  false(condition: boolean, message?: string): void;
+
+  /**
+   * Assert value is null or undefined.
+   *
+   * @param value - Value to check
+   * @param message - Optional failure message
+   */
+  null(value: any, message?: string): void;
+
+  /**
+   * Assert value is NOT null or undefined.
+   *
+   * @param value - Value to check
+   * @param message - Optional failure message
+   */
+  notNull(value: any, message?: string): void;
+
+  /**
+   * Assert editor is in the specified mode.
+   *
+   * @param expected - Expected mode string ('NORMAL', 'INSERT', 'VISUAL', etc.)
+   * @param message - Optional failure message
+   *
+   * @example
+   * vim.e2e.keys('i');
+   * vim.e2e.assert.mode('INSERT');
+   */
+  mode(expected: string, message?: string): void;
+
+  /**
+   * Assert cursor is at the specified position.
+   *
+   * @param line - Expected line number (0-indexed)
+   * @param col - Expected column number (0-indexed)
+   * @param message - Optional failure message
+   *
+   * @example
+   * vim.e2e.keys('jjj');
+   * vim.e2e.assert.cursorAt(3, 0, 'Cursor should move down 3 lines');
+   */
+  cursorAt(line: number, col: number, message?: string): void;
+
+  /**
+   * Assert buffer contains the specified text.
+   *
+   * @param text - Text to search for in buffer
+   * @param message - Optional failure message
+   *
+   * @example
+   * vim.e2e.keys('iHello<Esc>');
+   * vim.e2e.assert.bufferContains('Hello');
+   */
+  bufferContains(text: string, message?: string): void;
+}
+
+/**
+ * Cursor position returned by E2E API.
+ *
+ * Note: Uses `line` (not `row`) for consistency with the E2E API.
+ *
+ * @example
+ * const cursor = vim.e2e.getCursor();
+ * console.log(`Line: ${cursor.line}, Col: ${cursor.col}`);
+ */
+export interface E2ECursor {
+  /** Line number (0-indexed) */
+  line: number;
+  /** Column number (0-indexed) */
+  col: number;
+}
+
+/**
+ * Complete editor state snapshot for E2E testing.
+ *
+ * Provides cursor position, mode, and buffer information.
+ *
+ * @example
+ * const state = vim.e2e.getState();
+ * console.log(`Mode: ${state.mode}`);
+ * console.log(`Line count: ${state.buffer.lineCount}`);
+ */
+export interface E2EState {
+  /** Current cursor position */
+  cursor: E2ECursor;
+  /** Current editor mode ('NORMAL', 'INSERT', 'VISUAL', etc.) */
+  mode: string;
+  /** Buffer information */
+  buffer: {
+    /** Number of lines in the buffer */
+    lineCount: number;
+    /** Buffer change counter (increments on each edit) */
+    changedTick: number;
+    /** Buffer content as array of lines (when requested) */
+    lines?: string[];
+  };
+}
+
+/**
+ * Compositor layer information for debugging rendering.
+ *
+ * Layers are used for virtual text, cursor overlays, and plugin rendering.
+ *
+ * @example
+ * const layers = vim.e2e.getLayers();
+ * for (const layer of layers) {
+ *   console.log(`${layer.name}: ${layer.enabled ? 'enabled' : 'disabled'}`);
+ * }
+ */
+export interface E2ELayer {
+  /** Layer name (e.g., 'cursor', 'virtual_text', 'diagnostic') */
+  name: string;
+  /** Whether the layer is currently enabled */
+  enabled: boolean;
+  /** Whether the layer needs re-rendering */
+  dirty: boolean;
+  /** Number of cells in the layer */
+  cells: number;
+}
+
+/**
+ * Rendering statistics from PTY capture.
+ *
+ * Used to analyze terminal output efficiency and detect rendering issues.
+ *
+ * @example
+ * vim.e2e.pty.startCapture();
+ * vim.e2e.keys('jjjjj');
+ * vim.e2e.pty.render();
+ * const stats = vim.e2e.pty.getRenderStats();
+ * console.log(`Renders: ${stats.totalRenders}, Avg: ${stats.avgRenderMs}ms`);
+ */
+export interface E2ERenderStats {
+  /** Total number of render operations */
+  totalRenders: number;
+  /** Number of cursor hide escape codes sent */
+  cursorHideCodes: number;
+  /** Number of cursor show escape codes sent */
+  cursorShowCodes: number;
+  /** Number of cursor position escape codes sent */
+  cursorPositionCodes: number;
+  /** Average render time in milliseconds */
+  avgRenderMs: number;
+}
+
+/**
+ * PTY (Pseudo-Terminal) API for inspecting terminal output.
+ *
+ * Used for testing terminal rendering, escape code generation, and
+ * debugging visual issues. Captures raw ANSI escape codes sent to the terminal.
+ *
+ * @example
+ * // Test that cursor doesn't flicker during movement
+ * vim.e2e.pty.startCapture();
+ * vim.e2e.keys('jjjjj');
+ * vim.e2e.pty.render();
+ * vim.e2e.pty.stopCapture();
+ *
+ * const hideCodes = vim.e2e.pty.countHideCursor();
+ * vim.e2e.assert.true(hideCodes < 5, 'Too many cursor hide codes');
+ */
+export interface E2EPTY {
+  /**
+   * Start capturing terminal output to internal buffer.
+   * Call before executing commands you want to inspect.
+   */
+  startCapture(): void;
+
+  /**
+   * Stop capturing terminal output.
+   * Call after executing commands, before analyzing output.
+   */
+  stopCapture(): void;
+
+  /**
+   * Check if PTY is currently capturing output.
+   * @returns true if capture is active
+   */
+  isCapturing(): boolean;
+
+  /**
+   * Clear the captured output buffer.
+   * Use between tests to get fresh capture.
+   */
+  clear(): void;
+
+  /**
+   * Trigger a render operation.
+   * Forces the editor to generate terminal output.
+   */
+  render(): void;
+
+  /**
+   * Get the raw captured terminal output.
+   * Contains ANSI escape codes and text.
+   * @returns Raw terminal output string
+   */
+  getOutput(): string;
+
+  /**
+   * Get length of captured output in bytes.
+   * @returns Number of bytes captured
+   */
+  getLength(): number;
+
+  /**
+   * Clear the captured output buffer (alias for clear()).
+   */
+  clearOutput(): void;
+
+  /**
+   * Count SGR (Select Graphic Rendition) codes in captured output.
+   * SGR codes control colors and text attributes (ESC[...m).
+   * @returns Number of SGR escape sequences
+   */
+  countSGRCodes(): number;
+
+  /**
+   * Count cursor hide escape codes (ESC[?25l).
+   * @returns Number of cursor hide codes
+   */
+  countHideCursor(): number;
+
+  /**
+   * Count cursor show escape codes (ESC[?25h).
+   * @returns Number of cursor show codes
+   */
+  countShowCursor(): number;
+
+  /**
+   * Count cursor position escape codes (ESC[row;colH).
+   * @returns Number of cursor position codes
+   */
+  countCursorPositionCodes(): number;
+
+  /**
+   * Count occurrences of a specific escape sequence.
+   *
+   * @param seq - Escape sequence to count (e.g., '\x1b[2J' for clear screen)
+   * @returns Number of occurrences
+   *
+   * @example
+   * const clearCount = vim.e2e.pty.countSequence('\x1b[2J');
+   */
+  countSequence(seq: string): number;
+
+  /**
+   * Reset internal cursor state tracking.
+   * Use when starting fresh cursor position tests.
+   */
+  resetCursorState(): void;
+
+  /**
+   * Get comprehensive render statistics.
+   * @returns Statistics about rendering operations
+   */
+  getRenderStats(): E2ERenderStats;
+}
+
+/**
+ * Result from running E2E tests.
+ *
+ * @example
+ * const result = vim.e2e.runAll();
+ * console.log(`Passed: ${result.passed}, Failed: ${result.failed}`);
+ */
+export interface E2ETestResult {
+  /** Number of tests that passed */
+  passed: number;
+  /** Number of tests that failed */
+  failed: number;
+}
+
+/**
+ * E2E Testing API for plugin testing and interactive debugging.
+ *
+ * Provides Jest/Mocha-style test structure (`describe`, `test`, `assert`)
+ * for writing end-to-end tests that interact with the real editor.
+ *
+ * Only available when running `vimc test` command.
+ *
+ * @example
+ * // Basic E2E test structure
+ * vim.e2e.describe('Motion Commands', function() {
+ *   vim.e2e.test('j moves cursor down', function() {
+ *     vim.e2e.keys('j');
+ *     vim.e2e.assert.cursorAt(1, 0);
+ *   });
+ *
+ *   vim.e2e.test('w moves to next word', function() {
+ *     vim.e2e.keys('w');
+ *     const cursor = vim.e2e.getCursor();
+ *     vim.e2e.assert.true(cursor.col > 0, 'Cursor should move forward');
+ *   });
+ * });
+ *
+ * vim.e2e.runAll();
+ *
+ * @example
+ * // Testing rendering with PTY capture
+ * vim.e2e.describe('Rendering Optimization', function() {
+ *   vim.e2e.test('no excessive cursor codes', function() {
+ *     vim.e2e.pty.startCapture();
+ *     vim.e2e.keys('jjjjj');
+ *     vim.e2e.pty.render();
+ *     vim.e2e.pty.stopCapture();
+ *
+ *     const stats = vim.e2e.pty.getRenderStats();
+ *     vim.e2e.assert.true(stats.cursorPositionCodes < 10);
+ *   });
+ * });
+ *
+ * vim.e2e.runAll();
+ *
+ * @see https://vimcraft.dev/docs/testing
+ */
+export interface E2EAPI {
+  /**
+   * Group related tests under a description.
+   *
+   * @param description - Name/description for this test group
+   * @param fn - Function containing test definitions
+   *
+   * @example
+   * vim.e2e.describe('Visual Mode', function() {
+   *   vim.e2e.test('v enters visual mode', function() { ... });
+   *   vim.e2e.test('V enters line visual mode', function() { ... });
+   * });
+   */
+  describe(description: string, fn: () => void): void;
+
+  /**
+   * Define a single test case.
+   *
+   * @param name - Name of the test
+   * @param fn - Test function containing assertions
+   *
+   * @example
+   * vim.e2e.test('cursor moves right with l', function() {
+   *   vim.e2e.keys('l');
+   *   vim.e2e.assert.cursorAt(0, 1);
+   * });
+   */
+  test(name: string, fn: () => void): void;
+
+  /**
+   * Run all defined tests and return results.
+   *
+   * @returns Object containing pass/fail counts
+   *
+   * @example
+   * const result = vim.e2e.runAll();
+   * if (result.failed > 0) {
+   *   console.error(`${result.failed} tests failed!`);
+   * }
+   */
+  runAll(): E2ETestResult;
+
+  /**
+   * Send a key sequence to the editor.
+   *
+   * Simulates user input. Supports special keys in angle brackets.
+   *
+   * @param keys - Key sequence to send (e.g., 'jjj', '<Esc>', 'iHello<Esc>')
+   *
+   * @example
+   * vim.e2e.keys('i');        // Enter insert mode
+   * vim.e2e.keys('Hello');    // Type "Hello"
+   * vim.e2e.keys('<Esc>');    // Exit insert mode
+   * vim.e2e.keys('dd');       // Delete line
+   */
+  keys(keys: string): void;
+
+  /**
+   * Get current cursor position.
+   *
+   * @returns Cursor position with line and col (both 0-indexed)
+   *
+   * @example
+   * const cursor = vim.e2e.getCursor();
+   * console.log(`Cursor at line ${cursor.line}, col ${cursor.col}`);
+   */
+  getCursor(): E2ECursor;
+
+  /**
+   * Get complete editor state snapshot.
+   *
+   * @returns State object with cursor, mode, and buffer info
+   *
+   * @example
+   * const state = vim.e2e.getState();
+   * console.log(`Mode: ${state.mode}, Lines: ${state.buffer.lineCount}`);
+   */
+  getState(): E2EState;
+
+  /**
+   * Get current editor mode as a string.
+   *
+   * @returns Mode string: 'NORMAL', 'INSERT', 'VISUAL', 'VISUAL_LINE', etc.
+   *
+   * @example
+   * vim.e2e.keys('i');
+   * console.log(vim.e2e.getMode()); // 'INSERT'
+   */
+  getMode(): string;
+
+  /**
+   * Get information about compositor layers.
+   *
+   * Useful for debugging rendering and virtual text.
+   *
+   * @returns Array of layer information objects
+   *
+   * @example
+   * const layers = vim.e2e.getLayers();
+   * const cursorLayer = layers.find(l => l.name === 'cursor');
+   */
+  getLayers(): E2ELayer[];
+
+  /**
+   * Get recent log entries from the editor.
+   *
+   * @param opts - Optional filter options
+   * @param opts.level - Minimum log level ('debug', 'info', 'warn', 'error')
+   * @param opts.maxBytes - Maximum bytes to return
+   * @returns Log entries as a string
+   *
+   * @example
+   * const logs = vim.e2e.getLogs({ level: 'debug', maxBytes: 4096 });
+   * console.log(logs);
+   */
+  getLogs(opts?: { level?: string; maxBytes?: number }): string;
+
+  /**
+   * Log a checkpoint for debugging.
+   *
+   * Creates a marker in logs to help identify test phases.
+   *
+   * @param label - Label for the checkpoint
+   *
+   * @example
+   * vim.e2e.checkpoint('Before motion');
+   * vim.e2e.keys('jjj');
+   * vim.e2e.checkpoint('After motion');
+   */
+  checkpoint(label: string): void;
+
+  /**
+   * Assertion library for validating test expectations.
+   *
+   * @example
+   * vim.e2e.assert.equal(actual, expected);
+   * vim.e2e.assert.mode('NORMAL');
+   * vim.e2e.assert.cursorAt(0, 0);
+   */
+  assert: E2EAssert;
+
+  /**
+   * PTY (Pseudo-Terminal) API for inspecting terminal output.
+   *
+   * @example
+   * vim.e2e.pty.startCapture();
+   * vim.e2e.keys('jjj');
+   * vim.e2e.pty.render();
+   * const output = vim.e2e.pty.getOutput();
+   */
+  pty: E2EPTY;
+}
+
+// ============================================================================
+// Buffer API
+// ============================================================================
+
+/**
+ * Buffer content access API for zero-copy buffer operations.
+ *
+ * Provides efficient access to buffer content without copying data.
+ * Uses ArrayBuffer for binary-safe content access.
+ *
+ * @example
+ * // Get total buffer content
+ * const content = vim.buffer.getContent();
+ * const text = new TextDecoder().decode(content);
+ * console.log(`Buffer has ${text.length} characters`);
+ *
+ * @example
+ * // Get specific line content
+ * const line = vim.buffer.getLineContent(0);
+ * const lineText = new TextDecoder().decode(line);
+ *
+ * @example
+ * // Check buffer info
+ * console.log(`Lines: ${vim.buffer.getLineCount()}`);
+ * console.log(`Bytes: ${vim.buffer.getLength()}`);
+ * console.log(`Changes: ${vim.buffer.getChangedTick()}`);
+ */
+export interface BufferAPI {
+  /**
+   * Get entire buffer content as ArrayBuffer.
+   *
+   * Returns a zero-copy snapshot of the buffer.
+   * Note: Buffer modifications after this call may not be reflected.
+   *
+   * @returns ArrayBuffer containing buffer content
+   *
+   * @example
+   * const content = vim.buffer.getContent();
+   * const text = new TextDecoder().decode(content);
+   */
+  getContent(): ArrayBuffer;
+
+  /**
+   * Get content of a specific line as ArrayBuffer.
+   *
+   * @param lineNumber - Line number (0-indexed)
+   * @returns ArrayBuffer containing line content (without newline)
+   *
+   * @example
+   * const firstLine = vim.buffer.getLineContent(0);
+   * const text = new TextDecoder().decode(firstLine);
+   */
+  getLineContent(lineNumber: number): ArrayBuffer;
+
+  /**
+   * Get total buffer length in bytes.
+   *
+   * @returns Number of bytes in buffer
+   */
+  getLength(): number;
+
+  /**
+   * Get number of lines in buffer.
+   *
+   * @returns Number of lines (including empty lines)
+   */
+  getLineCount(): number;
+
+  /**
+   * Get buffer change counter.
+   *
+   * Increments on each modification. Useful for caching.
+   *
+   * @returns Change counter value
+   *
+   * @example
+   * const before = vim.buffer.getChangedTick();
+   * vim.e2e.keys('iHello<Esc>');
+   * const after = vim.buffer.getChangedTick();
+   * console.log(`Changes: ${after - before}`);
+   */
+  getChangedTick(): number;
+}
+
+// ============================================================================
+// Motion API
+// ============================================================================
+
+/**
+ * Cursor motion primitives for programmatic cursor movement.
+ *
+ * Used by plugins like smear-cursor for smooth cursor animations.
+ * All motions trigger `js_state_dirty` to ensure rendering updates.
+ *
+ * @example
+ * // Move cursor like pressing 'jjjll'
+ * vim.motion.down();
+ * vim.motion.down();
+ * vim.motion.down();
+ * vim.motion.right();
+ * vim.motion.right();
+ *
+ * @example
+ * // Navigate to beginning of file
+ * vim.motion.fileStart();
+ *
+ * @example
+ * // Word-wise navigation
+ * vim.motion.wordForward();  // Like 'w'
+ * vim.motion.wordBackward(); // Like 'b'
+ * vim.motion.wordEnd();      // Like 'e'
+ */
+export interface MotionAPI {
+  /**
+   * Move cursor left one character (like 'h').
+   * Respects line boundaries.
+   */
+  left(): void;
+
+  /**
+   * Move cursor right one character (like 'l').
+   * Respects line boundaries.
+   */
+  right(): void;
+
+  /**
+   * Move cursor up one line (like 'k').
+   * Maintains preferred column when possible.
+   */
+  up(): void;
+
+  /**
+   * Move cursor down one line (like 'j').
+   * Maintains preferred column when possible.
+   */
+  down(): void;
+
+  /**
+   * Move cursor to start of line (like '0').
+   * Moves to column 0.
+   */
+  lineStart(): void;
+
+  /**
+   * Move cursor to end of line (like '$').
+   * Moves to last character of line.
+   */
+  lineEnd(): void;
+
+  /**
+   * Move cursor to first non-blank character (like '^').
+   * Skips leading whitespace.
+   */
+  firstNonBlank(): void;
+
+  /**
+   * Move cursor to start of next word (like 'w').
+   */
+  wordForward(): void;
+
+  /**
+   * Move cursor to start of previous word (like 'b').
+   */
+  wordBackward(): void;
+
+  /**
+   * Move cursor to end of current/next word (like 'e').
+   */
+  wordEnd(): void;
+
+  /**
+   * Move cursor to start of file (like 'gg').
+   * Moves to line 0, column 0.
+   */
+  fileStart(): void;
+
+  /**
+   * Move cursor to end of file (like 'G').
+   * Moves to last line, first non-blank column.
+   */
+  fileEnd(): void;
+
+  /**
+   * Move cursor to specific line (like ':123' or '123G').
+   *
+   * @param line - Line number (0-indexed)
+   *
+   * @example
+   * vim.motion.gotoLine(99); // Go to line 100 (0-indexed)
+   */
+  gotoLine(line: number): void;
+}
+
+// ============================================================================
+// Cursor API
+// ============================================================================
+
+/**
+ * Cursor rendering API for animated cursor plugins.
+ *
+ * Allows plugins to override the visual cursor position for smooth
+ * animations (like smear-cursor.nvim) while keeping the logical
+ * cursor position unchanged.
+ *
+ * @example
+ * // Animate cursor from current position to target
+ * const start = vim.cursor.getPosition();
+ * const target = { row: 10, col: 0 };
+ *
+ * // Render intermediate positions
+ * for (let t = 0; t <= 1; t += 0.1) {
+ *   const row = start.row + (target.row - start.row) * t;
+ *   const col = start.col + (target.col - start.col) * t;
+ *   vim.cursor.setRenderPosition(Math.round(row), Math.round(col));
+ *   // ... wait for animation frame ...
+ * }
+ *
+ * // Clear override when done
+ * vim.cursor.clearRenderPosition();
+ */
+export interface CursorAPI {
+  /**
+   * Get current logical cursor position.
+   *
+   * Returns the actual cursor position, not the render override.
+   *
+   * @returns Object with row and col (both 0-indexed)
+   *
+   * @example
+   * const { row, col } = vim.cursor.getPosition();
+   * console.log(`Cursor at row ${row}, col ${col}`);
+   */
+  getPosition(): { row: number; col: number };
+
+  /**
+   * Set visual cursor render position (for animations).
+   *
+   * The logical cursor position is unchanged; only the visual
+   * representation is moved. Use for smooth cursor animations.
+   *
+   * @param row - Visual row position (0-indexed)
+   * @param col - Visual column position (0-indexed)
+   *
+   * @example
+   * // Show cursor at row 5, col 10 (visual only)
+   * vim.cursor.setRenderPosition(5, 10);
+   */
+  setRenderPosition(row: number, col: number): void;
+
+  /**
+   * Clear render position override.
+   *
+   * Restores cursor to render at its logical position.
+   * Call when animation completes.
+   *
+   * @example
+   * // Animation complete, show cursor at actual position
+   * vim.cursor.clearRenderPosition();
+   */
+  clearRenderPosition(): void;
+}
+
+// ============================================================================
+// Layer API
+// ============================================================================
+
+/**
+ * Virtual text layer API for rendering overlays.
+ *
+ * Layers are used for Neovim-style features like:
+ * - Diagnostic virtual text
+ * - LSP inline hints
+ * - Git blame annotations
+ * - Plugin-specific decorations
+ *
+ * Layers are composited on top of the buffer content using alpha blending.
+ *
+ * @example
+ * // Create a diagnostic layer
+ * const layerId = vim.layer.create('my-diagnostics');
+ *
+ * // Add error indicator at line 5, col 0
+ * vim.layer.setCell(layerId, 5, 0, 'E', '#ff0000', null);
+ *
+ * // Cleanup when done
+ * vim.layer.destroy(layerId);
+ *
+ * @example
+ * // Fade layer in/out
+ * vim.layer.setOpacity(layerId, 0.5); // 50% visible
+ * vim.layer.setEnabled(layerId, false); // Hide completely
+ */
+export interface LayerAPI {
+  /**
+   * Create a new rendering layer.
+   *
+   * @param name - Unique name for the layer (for debugging)
+   * @returns Layer ID for subsequent operations
+   *
+   * @example
+   * const id = vim.layer.create('git-blame');
+   */
+  create(name: string): number;
+
+  /**
+   * Destroy a layer and free its resources.
+   *
+   * @param id - Layer ID from create()
+   *
+   * @example
+   * vim.layer.destroy(layerId);
+   */
+  destroy(id: number): void;
+
+  /**
+   * Set a cell's content and colors in the layer.
+   *
+   * @param id - Layer ID
+   * @param row - Row position (0-indexed)
+   * @param col - Column position (0-indexed)
+   * @param char - Character to display (single char)
+   * @param fg - Foreground color as hex string (e.g., '#ff0000') or null
+   * @param bg - Background color as hex string or null
+   *
+   * @example
+   * // Red 'E' for error indicator
+   * vim.layer.setCell(layerId, 5, 0, 'E', '#ff0000', null);
+   *
+   * // Yellow background highlight
+   * vim.layer.setCell(layerId, 10, 0, ' ', null, '#ffff00');
+   */
+  setCell(id: number, row: number, col: number, char: string, fg?: string, bg?: string): void;
+
+  /**
+   * Clear all cells in a layer.
+   *
+   * @param id - Layer ID
+   *
+   * @example
+   * vim.layer.clear(layerId);
+   */
+  clear(id: number): void;
+
+  /**
+   * Enable or disable a layer.
+   *
+   * Disabled layers are not rendered but retain their content.
+   *
+   * @param id - Layer ID
+   * @param enabled - Whether to show the layer
+   *
+   * @example
+   * vim.layer.setEnabled(layerId, false); // Hide
+   * vim.layer.setEnabled(layerId, true);  // Show
+   */
+  setEnabled(id: number, enabled: boolean): void;
+
+  /**
+   * Set layer opacity for alpha blending.
+   *
+   * @param id - Layer ID
+   * @param opacity - Opacity value (0.0 = transparent, 1.0 = opaque)
+   *
+   * @example
+   * vim.layer.setOpacity(layerId, 0.7); // 70% visible
+   */
+  setOpacity(id: number, opacity: number): void;
+
+  /**
+   * Get information about a layer.
+   *
+   * @param id - Layer ID
+   * @returns Object with layer name, enabled state, and opacity
+   *
+   * @example
+   * const info = vim.layer.getInfo(layerId);
+   * console.log(`Layer: ${info.name}, visible: ${info.enabled}`);
+   */
+  getInfo(id: number): { name: string; enabled: boolean; opacity: number };
+}
+
+// ============================================================================
+// Filetype API
+// ============================================================================
+
+/**
+ * Filetype detection API using go-enry (GitHub Linguist).
+ *
+ * Detects programming language from filename and/or content.
+ * Supports 697 languages with high accuracy.
+ *
+ * Detection strategies (in order):
+ * 1. File extension (`.rs` → Rust)
+ * 2. Filename (`Makefile` → Makefile)
+ * 3. Shebang (`#!/usr/bin/env python` → Python)
+ * 4. Modeline (`# vim: set ft=python:` → Python)
+ * 5. Content heuristics (disambiguates `.h` files)
+ * 6. Bayesian classifier (fallback)
+ *
+ * @example
+ * // Detect by filename
+ * const lang = vim.filetype.match({ filename: 'main.rs' });
+ * console.log(lang); // 'Rust'
+ *
+ * @example
+ * // Detect by content (shebang)
+ * const lang = vim.filetype.match({
+ *   filename: 'script',
+ *   content: '#!/usr/bin/env node\nconsole.log("hello");'
+ * });
+ * console.log(lang); // 'JavaScript'
+ *
+ * @example
+ * // Detect ambiguous .h file
+ * const lang = vim.filetype.match({
+ *   filename: 'header.h',
+ *   content: '#include <iostream>\nclass Foo {};'
+ * });
+ * console.log(lang); // 'C++' (not 'C')
+ */
+export interface FiletypeAPI {
+  /**
+   * Detect language from filename and/or content.
+   *
+   * At least one of `filename` or `content` should be provided.
+   * Both can be provided for better accuracy (especially for `.h` files).
+   *
+   * @param opts - Detection options
+   * @param opts.filename - Filename (e.g., 'main.rs', 'Makefile')
+   * @param opts.content - File content (for content-based detection)
+   * @returns Language name (e.g., 'Rust', 'JavaScript') or null if unknown
+   *
+   * @example
+   * vim.filetype.match({ filename: 'config.yaml' }); // 'YAML'
+   * vim.filetype.match({ filename: 'README.md' });   // 'Markdown'
+   * vim.filetype.match({ filename: 'unknown.xyz' }); // null
+   */
+  match(opts: { filename?: string; content?: string }): string | null;
+}
+
+// ============================================================================
 // Main Vim Interface
 // ============================================================================
 
 /**
- * Main vim global interface
- * Entry point for all Vimcraft configuration and API access
+ * Main Vimcraft API interface.
+ *
+ * The global `vim` object is the entry point for all Vimcraft configuration
+ * and plugin development. Uses JavaScript naming conventions (camelCase).
+ *
+ * Key features:
+ * - **vim.opt**: Editor options (number, cursorLine, tabStop, etc.)
+ * - **vim.keymap**: Key mapping creation and deletion
+ * - **vim.api**: Low-level API functions (buffers, windows, highlights)
+ * - **vim.highlight()**: Syntax highlighting configuration
+ * - **vim.motion**: Cursor movement primitives
+ * - **vim.e2e**: E2E testing API (test mode only)
+ *
+ * @example
+ * // Basic configuration
+ * vim.opt.number = true;
+ * vim.opt.cursorLine = true;
+ * vim.opt.tabStop = 4;
+ *
+ * @example
+ * // Define key mappings
+ * vim.keymap.set('n', '<leader>w', ':w<CR>', { silent: true });
+ * vim.keymap.set('n', '<leader>q', ':q<CR>', { desc: 'Quit' });
+ *
+ * @example
+ * // Define highlight groups
+ * vim.highlight('Comment', { fg: '#6c6c6c', italic: true });
+ * vim.highlight('CursorLine', { bg: '#2e2e3e' });
+ *
+ * @example
+ * // Listen to autocommand events
+ * vim.on('BufEnter', (args) => {
+ *   console.log('Entered buffer:', args.file);
+ * });
+ *
+ * @see https://vimcraft.com/docs/editor-api/user/lua
  */
 export interface Vim {
   /**
-   * Core API (nvim_* functions)
-   * Full Neovim-compatible API
+   * Core API functions for buffer, window, and editor operations.
+   *
+   * Use this for low-level operations not exposed through other interfaces.
+   *
+   * @example
+   * // Buffer operations
+   * const buf = vim.api.getCurrentBuf();
+   * const lines = vim.api.bufGetLines(buf, 0, 10, false);
+   *
+   * @example
+   * // Window operations
+   * const [row, col] = vim.api.winGetCursor(0);
+   *
+   * @example
+   * // Create autocommands
+   * vim.api.createAutocmd('BufWritePre', {
+   *   pattern: '*.ts',
+   *   callback: () => console.log('Saving TypeScript file')
+   * });
    */
   api: API;
 
   /**
-   * Editor options
+   * Editor options with automatic scope detection.
+   *
+   * Settings applied here are automatically scoped to the appropriate
+   * level (global or buffer-local) based on the option type.
+   *
+   * All option names use camelCase (e.g., `cursorLine` not `cursorline`).
+   *
    * @example
-   * vim.opt.cursorLine = true;
+   * // Display options
    * vim.opt.number = true;
+   * vim.opt.cursorLine = true;
+   * vim.opt.signColumn = 'yes';
+   *
+   * @example
+   * // Editing options
+   * vim.opt.tabStop = 4;
+   * vim.opt.shiftWidth = 4;
+   * vim.opt.expandTab = true;
+   *
+   * @example
+   * // Search options
+   * vim.opt.ignoreCase = true;
+   * vim.opt.smartCase = true;
+   *
+   * @see https://vimcraft.com/docs/editor-api/user/options
    */
   opt: VimOptions;
 
   /**
-   * Buffer-local options (Neovim equivalent: vim.opt_local)
+   * Buffer-local options only.
+   *
+   * Settings applied here only affect the current buffer.
+   *
    * @example
-   * vim.optLocal.number = true;
+   * // Set tabstop only for current buffer
+   * vim.optLocal.tabStop = 2;
    */
   optLocal?: VimOptions;
 
   /**
-   * Global options (Neovim equivalent: vim.opt_global)
+   * Global options only.
+   *
+   * Settings applied here affect all buffers.
+   *
    * @example
-   * vim.optGlobal.cursorLine = true;
+   * // Set global default tabstop
+   * vim.optGlobal.tabStop = 4;
    */
   optGlobal?: VimOptions;
 
   /**
-   * Key mapping interface
+   * Key mapping interface for creating and deleting keybindings.
+   *
+   * Provides `set()` and `del()` methods for managing mappings.
+   *
    * @example
+   * // Save file with <leader>w
    * vim.keymap.set('n', '<leader>w', ':w<CR>', { silent: true });
+   *
+   * @example
+   * // Map with callback function
+   * vim.keymap.set('n', '<leader>f', () => {
+   *   console.log('Finding files...');
+   * });
+   *
+   * @see https://vimcraft.com/docs/editor-api/user/lua#vim.keymap
    */
   keymap: Keymap;
 
   /**
-   * Register event listener for autocommand events
-   * Callback receives Neovim-compatible args object
-   * @param event - Event name (e.g., 'BufRead', 'InsertEnter')
-   * @param callback - Callback function that receives event args
+   * Register event listener for autocommand events.
+   *
+   * Provides Node.js EventEmitter-style API for editor events.
+   *
+   * @param event - Event name (e.g., 'BufRead', 'InsertEnter', 'FileType')
+   * @param callback - Function called when event fires
+   *
    * @example
-   * vim.on('BufWritePre', (args) => {
-   *   console.log('Saving file:', args.file);
-   *   console.log('Buffer:', args.buf, 'Event:', args.event);
+   * // Log when entering a buffer
+   * vim.on('BufEnter', (args) => {
+   *   console.log('Entered buffer:', args.file);
+   *   console.log('Buffer number:', args.buf);
    * });
+   *
+   * @example
+   * // Format on save
+   * vim.on('BufWritePre', (args) => {
+   *   // Run formatter before saving
+   *   formatBuffer(args.buf);
+   * });
+   *
+   * @see https://vimcraft.com/docs/editor-api/user/autocmd
    */
   on(event: AutocmdEvent, callback: (args: AutocmdCallbackArgs) => void): void;
 
   /**
-   * Remove event listener for autocommand events
-   * Currently removes ALL listeners for the event
+   * Remove event listener for autocommand events.
+   *
+   * Note: Currently removes ALL listeners for the event.
+   * The callback parameter is for API compatibility.
+   *
    * @param event - Event name
-   * @param callback - Callback to remove (currently unused, removes all)
+   * @param callback - Callback to remove (currently unused)
+   *
    * @example
-   * vim.off('BufWritePre', callback);
+   * vim.off('BufWritePre', myCallback);
    */
   off(event: AutocmdEvent, callback: (args: AutocmdCallbackArgs) => void): void;
 
   /**
-   * Remove all listeners for an event
+   * Remove all listeners for an event.
+   *
    * @param event - Event name
+   *
    * @example
+   * // Clean up all BufWritePre handlers
    * vim.removeAllListeners('BufWritePre');
    */
   removeAllListeners(event: AutocmdEvent): void;
 
   /**
-   * Get listener count for an event
+   * Get number of listeners registered for an event.
+   *
    * @param event - Event name
-   * @returns Number of listeners
+   * @returns Number of registered listeners
+   *
    * @example
    * const count = vim.listenerCount('BufWritePre');
+   * console.log(`${count} handlers for BufWritePre`);
    */
   listenerCount(event: AutocmdEvent): number;
 
   /**
-   * Emit an event (for testing/advanced use)
+   * Emit an event programmatically.
+   *
+   * Used for testing or triggering custom User events.
+   *
    * @param event - Event name
-   * @param args - Event arguments
+   * @param args - Event arguments to pass to callbacks
+   *
    * @example
-   * vim.emit('User', { event: 'MyCustomEvent', data: {...} });
+   * // Trigger custom event
+   * vim.emit('User', {
+   *   id: 0,
+   *   event: 'MyPluginEvent',
+   *   group: null,
+   *   match: '',
+   *   buf: 0,
+   *   file: '',
+   *   data: { custom: 'data' }
+   * });
    */
   emit(event: AutocmdEvent, args: AutocmdCallbackArgs): void;
 
   /**
-   * Vimscript function bridge
+   * Vimscript function bridge for calling built-in Vim functions.
+   *
+   * Allows calling Vim's built-in functions from JavaScript.
+   *
    * @example
+   * // Get full path of current file
    * const path = vim.fn.expand('%:p');
+   *
+   * @example
+   * // Check if file exists
+   * if (vim.fn.filereadable('/path/to/file')) {
+   *   console.log('File exists');
+   * }
    */
   fn: VimFunctions;
 
   /**
-   * Diagnostic system
+   * Diagnostic system for LSP-style error/warning display.
+   *
+   * Configure and manage diagnostics (errors, warnings, hints).
+   *
+   * @example
+   * // Configure diagnostic display
+   * vim.diagnostic.config({
+   *   virtual_text: true,
+   *   signs: true,
+   *   underline: true
+   * });
    */
   diagnostic: DiagnosticAPI;
+
+  /**
+   * E2E Testing API for plugin testing and interactive debugging.
+   *
+   * Only available when running `vimc test` command.
+   * Provides Jest/Mocha-style test structure.
+   *
+   * @example
+   * vim.e2e.describe('My Plugin', function() {
+   *   vim.e2e.test('does something', function() {
+   *     vim.e2e.keys('i');
+   *     vim.e2e.assert.mode('INSERT');
+   *   });
+   * });
+   * vim.e2e.runAll();
+   */
+  e2e: E2EAPI;
+
+  /**
+   * Zero-copy buffer content access.
+   *
+   * Provides efficient access to buffer content using ArrayBuffer.
+   *
+   * @example
+   * const content = vim.buffer.getContent();
+   * const text = new TextDecoder().decode(content);
+   */
+  buffer: BufferAPI;
+
+  /**
+   * Cursor motion primitives for programmatic movement.
+   *
+   * Used by animation plugins like smear-cursor.
+   *
+   * @example
+   * vim.motion.down();  // Move cursor down (like 'j')
+   * vim.motion.right(); // Move cursor right (like 'l')
+   */
+  motion: MotionAPI;
+
+  /**
+   * Cursor rendering API for animated cursor plugins.
+   *
+   * Override visual cursor position for smooth animations.
+   *
+   * @example
+   * const pos = vim.cursor.getPosition();
+   * vim.cursor.setRenderPosition(pos.row + 0.5, pos.col);
+   */
+  cursor: CursorAPI;
+
+  /**
+   * Virtual text layer API for rendering overlays.
+   *
+   * Create layers for diagnostics, git blame, inline hints, etc.
+   *
+   * @example
+   * const layer = vim.layer.create('my-plugin');
+   * vim.layer.setCell(layer, 0, 0, 'X', '#ff0000');
+   */
+  layer: LayerAPI;
+
+  /**
+   * Filetype detection using go-enry (GitHub Linguist).
+   *
+   * Detects programming language from filename/content.
+   *
+   * @example
+   * const lang = vim.filetype.match({ filename: 'main.rs' });
+   * console.log(lang); // 'Rust'
+   */
+  filetype: FiletypeAPI;
 
   // Note: vim.loop is not needed - use global fs, fetch, process instead
 
   /**
-   * LSP client
-   * FUTURE: Phase 5+
+   * LSP client interface.
+   *
+   * @future Phase 5+ - Not yet implemented
    */
   lsp?: LSP;
 
   /**
-   * Tree-sitter integration
-   * FUTURE: Phase 5+
+   * Tree-sitter integration for syntax parsing.
+   *
+   * @future Phase 5+ - Not yet implemented
    */
   treesitter?: TreeSitter;
 
   /**
-   * Execute Ex command
-   * @param cmd - Command to execute
+   * Execute an Ex command.
+   *
+   * Runs Vim command-line commands (what you'd type after `:` in Vim).
+   *
+   * @param cmd - Command to execute (without leading `:`)
+   *
    * @example
-   * vim.cmd('set number');
+   * vim.cmd('set number');        // Enable line numbers
+   * vim.cmd('write');             // Save file
+   * vim.cmd('edit /path/to/file'); // Open file
    */
   cmd(cmd: string): void;
 
   /**
-   * Define syntax highlighting for a group
-   * Ergonomic wrapper for vim.api.nvim_set_hl
-   * @param name - Highlight group name
-   * @param opts - Styling options
+   * Define syntax highlighting for a highlight group.
+   *
+   * Ergonomic wrapper for `vim.api.setHighlight()`.
+   *
+   * @param name - Highlight group name (e.g., 'Comment', 'Keyword')
+   * @param opts - Styling options (fg, bg, bold, italic, etc.)
+   *
    * @example
+   * // Style comments as gray and italic
    * vim.highlight('Comment', { fg: '#6c6c6c', italic: true });
+   *
+   * @example
+   * // Define cursor line background
+   * vim.highlight('CursorLine', { bg: '#2e2e3e' });
+   *
+   * @example
+   * // Bold keywords
+   * vim.highlight('Keyword', { fg: '#c678dd', bold: true });
    */
   highlight(name: HighlightGroup, opts: HighlightOpts): void;
 
   /**
-   * Create namespace
+   * Create a namespace for organizing highlights and extmarks.
+   *
    * @param name - Namespace name
    * @returns Namespace ID
+   *
+   * @example
+   * const ns = vim.create_namespace('my-plugin');
    */
   create_namespace?(name: string): Namespace;
 
   /**
-   * Schedule function to run later
+   * Schedule a function to run on the next event loop iteration.
+   *
    * @param fn - Function to schedule
    */
   schedule?(fn: () => void): void;
 
   // Note: vim.defer_fn is not needed - use standard setTimeout() instead
 
-  // === Variable Scopes ===
+  // =========================================================================
+  // Variable Scopes
+  // =========================================================================
 
   /**
-   * Global variables (g:)
+   * Global variables (Vim's `g:` scope).
+   *
+   * Persist across buffers and sessions.
+   *
    * @example
-   * vim.g.mapleader = ' ';
+   * vim.g.mapleader = ' ';          // Set leader key
+   * vim.g.loaded_netrw = 1;         // Disable netrw
+   * vim.g.my_plugin_option = true;  // Custom variable
    */
   g: Record<string, any>;
 
   /**
-   * Buffer-local variables (b:)
+   * Buffer-local variables (Vim's `b:` scope).
+   *
+   * Variables specific to the current buffer.
+   *
    * @example
    * vim.b.my_var = 42;
+   * console.log(vim.b.my_var); // 42
    */
   b: Record<string, any>;
 
   /**
-   * Buffer-local options (bo:)
-   * Neovim equivalent: vim.bo
+   * Buffer-local options (Vim's `bo:` scope).
+   *
+   * Read/write buffer-specific options like filetype.
+   *
    * @example
-   * vim.bo.filetype = 'rust';
-   * const ft = vim.bo.filetype; // Get filetype
+   * // Get filetype
+   * const ft = vim.bo.filetype;
+   * console.log(ft); // 'rust'
+   *
+   * @example
+   * // Set filetype
+   * vim.bo.filetype = 'markdown';
    */
   bo: {
-    /** Detected filetype (e.g., 'rust', 'javascript', 'python') */
+    /**
+     * Detected filetype (e.g., 'rust', 'javascript', 'python').
+     * Set automatically based on file extension or content.
+     */
     filetype?: string;
-    // More buffer options can be added here in the future
+    /** Allow other buffer options */
     [key: string]: any;
   };
 
   /**
-   * Window-local variables (w:)
+   * Window-local variables (Vim's `w:` scope).
+   *
+   * Variables specific to the current window.
    */
   w: Record<string, any>;
 
   /**
-   * Tabpage-local variables (t:)
+   * Tabpage-local variables (Vim's `t:` scope).
+   *
+   * Variables specific to the current tabpage.
    */
   t: Record<string, any>;
 
   /**
-   * Vim variables (v:) - mostly read-only
+   * Vim variables (Vim's `v:` scope).
+   *
+   * Special Vim variables, mostly read-only.
+   *
+   * @example
+   * console.log(vim.v.count);    // Count prefix for commands
+   * console.log(vim.v.register); // Current register
    */
   v: Record<string, any>;
 
   /**
-   * Environment variables
+   * Environment variables.
+   *
+   * Access system environment variables.
+   *
    * @example
    * const home = vim.env.HOME;
+   * const path = vim.env.PATH;
    */
   env: Record<string, string>;
 }
@@ -1203,7 +3231,6 @@ export interface Module {
 declare global {
   /**
    * Global vim object - main API for configuring Vimcraft
-   * Neovim-compatible interface
    */
   var vim: Vim;
 

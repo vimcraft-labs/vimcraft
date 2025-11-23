@@ -3,7 +3,7 @@
 This document describes Vimcraft's testing architecture in detail.
 
 **Last Updated**: November 2025
-**Status**: Active Development
+**Status**: Production
 
 ---
 
@@ -917,7 +917,7 @@ vim.e2e.runAll();
 - [docs/api/vim-e2e.md](../api/vim-e2e.md) - **vim.e2e API reference** (full documentation)
 - [tests/README.md](../../tests/README.md) - Quick reference guide
 - [CLAUDE.md](../../CLAUDE.md) - Project overview
-- [docs/development/pty-testing.md](pty-testing.md) - PTY test details
+- [docs/development/e2e-terminal-capture.md](e2e-terminal-capture.md) - Terminal capture via vim.e2e.pty
 
 ---
 
@@ -929,3 +929,4 @@ vim.e2e.runAll();
 | November 2025 | Simplified to two-level structure |
 | November 2025 | Added migration guide for tests/hermes/ |
 | November 2025 | Added vim.e2e module for E2E testing + plugin development |
+| November 2025 | Migrated PTY tests to E2E with vim.e2e.pty API |

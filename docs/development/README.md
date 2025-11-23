@@ -66,21 +66,21 @@ Welcome to Vimcraft development! This guide will help you set up your developmen
 **Key topics**:
 - Two-level design (Unit vs E2E)
 - Unit tests (Pure Zig only)
-- E2E tests (PTY + Hermes + TypeScript)
-- PTY + JSON protocol
+- E2E tests (Hermes + TypeScript via `vimc test`)
+- JSON protocol for state inspection
 - Test isolation (fresh process per test)
 - TypeScript plugin compilation flow
-- Migration from tests/hermes/ to tests/e2e/
+- vim.e2e API for testing
 
-### [PTY Testing Guide](./pty-testing.md)
-**Purpose**: Testing with pseudoterminals
-**Read if**: You're testing terminal I/O, ANSI output, or user-facing bugs
+### [E2E Terminal Capture](./e2e-terminal-capture.md)
+**Purpose**: Terminal output validation via vim.e2e.pty API
+**Read if**: You're testing rendering optimizations, ANSI output, or visual bugs
 **Key topics**:
-- PTY test architecture
-- Writing PTY tests
-- Hybrid testing approach (PTY + Debug Protocol)
-- Terminal rendering verification
-- Regression test workflow
+- vim.e2e.pty API for terminal capture
+- Escape code analysis
+- Rendering optimization verification
+- Flickering detection
+- Migration from old Zig PTY tests
 
 ### [Terminal Backend Debugging](./terminal-backend-debugging.md)
 **Purpose**: Debugging terminal rendering issues

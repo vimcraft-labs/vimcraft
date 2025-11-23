@@ -264,6 +264,27 @@ void hermes_array_set(
     OVHermesValue* value
 );
 
+/**
+ * Get array length
+ * @param runtime The Hermes runtime
+ * @param array The array value
+ * @return Array length, or 0 if not an array
+ */
+size_t hermes_array_length(OVHermesRuntime* runtime, OVHermesValue* array);
+
+/**
+ * Get array element at index
+ * @param runtime The Hermes runtime
+ * @param array The array value
+ * @param index Element index
+ * @return Element value, or NULL if out of bounds or not an array
+ */
+OVHermesValue* hermes_array_get(
+    OVHermesRuntime* runtime,
+    OVHermesValue* array,
+    size_t index
+);
+
 //
 // Value Operations
 //
