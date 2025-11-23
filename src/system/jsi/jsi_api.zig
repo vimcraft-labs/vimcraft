@@ -37,6 +37,7 @@ pub const process_api = @import("process_api.zig");
 pub const fetch_api = @import("fetch_api.zig");
 pub const e2e_api = @import("e2e_api.zig");
 pub const api_buffer = @import("api_buffer.zig");
+pub const api_window = @import("api_window.zig");
 
 // Import new transpiler system
 const transpiler = @import("../transpiler/loader.zig");
@@ -356,6 +357,14 @@ pub fn initJSI(
         api_buffer.registerForEditorContext(runtime, editor_or_context, allocator);
     }
 
+    // Register vim.api window functions (getCurrentWin, winGetCursor, etc.)
+    // Register for both Editor and EditorContext
+    if (T == *Editor) {
+        api_window.registerForEditor(runtime, editor_or_context, allocator);
+    } else if (T == *EditorContext) {
+        api_window.registerForEditorContext(runtime, editor_or_context, allocator);
+    }
+
     // JSI functions registered (silent mode)
 }
 
@@ -461,6 +470,8 @@ pub fn deinitJSI() void {
     }
     // Clean up api_buffer context
     api_buffer.deinit();
+    // Clean up api_window context
+    api_window.deinit();
     global_allocator = null;
 }
 

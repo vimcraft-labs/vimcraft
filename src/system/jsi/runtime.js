@@ -555,6 +555,207 @@ vim.api = {
     return buffer === 0; // Only buffer 0 is valid by default
   },
 
+  // vim.api.setCurrentBuf(buffer) -> void
+  //   buffer: number (buffer handle)
+  //   Switches to the specified buffer
+  setCurrentBuf: function(buffer) {
+    if (typeof vimApiSetCurrentBuf !== 'undefined') {
+      return vimApiSetCurrentBuf(buffer);
+    }
+    throw new Error('setCurrentBuf not available');
+  },
+
+  // vim.api.listBufs() -> number[]
+  //   returns: array of buffer handles (all valid buffers)
+  listBufs: function() {
+    if (typeof vimApiListBufs !== 'undefined') {
+      return vimApiListBufs();
+    }
+    return [0]; // Default to single buffer
+  },
+
+  // vim.api.bufSetName(buffer, name) -> void
+  //   buffer: number (buffer handle, 0 = current)
+  //   name: string (new buffer filename/path)
+  bufSetName: function(buffer, name) {
+    if (typeof vimApiBufSetName !== 'undefined') {
+      return vimApiBufSetName(buffer, name);
+    }
+    throw new Error('bufSetName not available');
+  },
+
+  // vim.api.bufDelete(buffer, opts) -> void
+  //   buffer: number (buffer handle)
+  //   opts: object (optional)
+  //     - force: boolean (force delete even if modified)
+  bufDelete: function(buffer, opts) {
+    if (typeof vimApiBufDelete !== 'undefined') {
+      return vimApiBufDelete(buffer, opts || {});
+    }
+    throw new Error('bufDelete not available');
+  },
+
+  // vim.api.createBuf(listed, scratch) -> Buffer
+  //   listed: boolean (whether buffer appears in buffer list)
+  //   scratch: boolean (whether buffer is a scratch buffer)
+  //   returns: number (new buffer handle)
+  createBuf: function(listed, scratch) {
+    if (typeof vimApiCreateBuf !== 'undefined') {
+      return vimApiCreateBuf(listed, scratch);
+    }
+    return 0; // Fallback for headless mode
+  },
+
+  // vim.api.bufGetText(buf, start_row, start_col, end_row, end_col) -> string[]
+  //   Character-level text retrieval
+  bufGetText: function(buffer, start_row, start_col, end_row, end_col) {
+    if (typeof vimApiBufGetText !== 'undefined') {
+      return vimApiBufGetText(buffer, start_row, start_col, end_row, end_col);
+    }
+    return [];
+  },
+
+  // vim.api.bufSetText(buf, start_row, start_col, end_row, end_col, replacement) -> void
+  //   Character-level text replacement
+  bufSetText: function(buffer, start_row, start_col, end_row, end_col, replacement) {
+    if (typeof vimApiBufSetText !== 'undefined') {
+      return vimApiBufSetText(buffer, start_row, start_col, end_row, end_col, replacement);
+    }
+  },
+
+  // vim.api.bufIsLoaded(buffer) -> boolean
+  //   Check if buffer content is loaded in memory
+  bufIsLoaded: function(buffer) {
+    if (typeof vimApiBufIsLoaded !== 'undefined') {
+      return vimApiBufIsLoaded(buffer);
+    }
+    return buffer === 0;
+  },
+
+  // vim.api.bufGetVar(buffer, name) -> any
+  //   Get buffer-local variable (b:)
+  bufGetVar: function(buffer, name) {
+    if (typeof vimApiBufGetVar !== 'undefined') {
+      return vimApiBufGetVar(buffer, name);
+    }
+    return undefined;
+  },
+
+  // vim.api.bufSetVar(buffer, name, value) -> void
+  //   Set buffer-local variable (b:)
+  bufSetVar: function(buffer, name, value) {
+    if (typeof vimApiBufSetVar !== 'undefined') {
+      return vimApiBufSetVar(buffer, name, value);
+    }
+  },
+
+  // vim.api.bufDelVar(buffer, name) -> void
+  //   Delete buffer-local variable
+  bufDelVar: function(buffer, name) {
+    if (typeof vimApiBufDelVar !== 'undefined') {
+      return vimApiBufDelVar(buffer, name);
+    }
+  },
+
+  // vim.api.bufGetChangedtick(buffer) -> number
+  //   Get buffer change counter (increments on each modification)
+  bufGetChangedtick: function(buffer) {
+    if (typeof vimApiBufGetChangedtick !== 'undefined') {
+      return vimApiBufGetChangedtick(buffer);
+    }
+    return 0;
+  },
+
+  // vim.api.bufGetOffset(buffer, line) -> number
+  //   Get byte offset of line start (-1 if invalid)
+  bufGetOffset: function(buffer, line) {
+    if (typeof vimApiBufGetOffset !== 'undefined') {
+      return vimApiBufGetOffset(buffer, line);
+    }
+    return -1;
+  },
+
+  // vim.api.bufCall(buffer, fun) -> any
+  //   Execute function with buffer as temporary current buffer
+  bufCall: function(buffer, fun) {
+    if (typeof vimApiBufCall !== 'undefined') {
+      return vimApiBufCall(buffer, fun);
+    }
+    // Fallback: just call the function
+    return fun();
+  },
+
+  // === Window Functions ===
+
+  // vim.api.getCurrentWin() -> Window
+  //   returns: number (window handle, 0 = current window)
+  getCurrentWin: function() {
+    if (typeof vimApiGetCurrentWin !== 'undefined') {
+      return vimApiGetCurrentWin();
+    }
+    return 0; // Default to current window
+  },
+
+  // vim.api.winGetCursor(window) -> [row, col]
+  //   window: number (window handle, 0 = current)
+  //   returns: [number, number] (row is 1-indexed, col is 0-indexed per Neovim)
+  winGetCursor: function(window) {
+    if (typeof vimApiWinGetCursor !== 'undefined') {
+      return vimApiWinGetCursor(window);
+    }
+    throw new Error('winGetCursor not available');
+  },
+
+  // vim.api.winSetCursor(window, pos) -> void
+  //   window: number (window handle, 0 = current)
+  //   pos: [number, number] (row is 1-indexed, col is 0-indexed per Neovim)
+  winSetCursor: function(window, pos) {
+    if (typeof vimApiWinSetCursor !== 'undefined') {
+      return vimApiWinSetCursor(window, pos);
+    }
+    throw new Error('winSetCursor not available');
+  },
+
+  // vim.api.winIsValid(window) -> boolean
+  //   window: number (window handle)
+  //   returns: boolean (true if window exists and is valid)
+  winIsValid: function(window) {
+    if (typeof vimApiWinIsValid !== 'undefined') {
+      return vimApiWinIsValid(window);
+    }
+    return window === 0; // Only window 0 is valid by default
+  },
+
+  // vim.api.winGetBuf(window) -> Buffer
+  //   window: number (window handle, 0 = current)
+  //   returns: number (buffer handle in window)
+  winGetBuf: function(window) {
+    if (typeof vimApiWinGetBuf !== 'undefined') {
+      return vimApiWinGetBuf(window);
+    }
+    return 0; // Default to current buffer
+  },
+
+  // vim.api.winGetHeight(window) -> number
+  //   window: number (window handle, 0 = current)
+  //   returns: number (window height in rows)
+  winGetHeight: function(window) {
+    if (typeof vimApiWinGetHeight !== 'undefined') {
+      return vimApiWinGetHeight(window);
+    }
+    return 24; // Default terminal height
+  },
+
+  // vim.api.winGetWidth(window) -> number
+  //   window: number (window handle, 0 = current)
+  //   returns: number (window width in columns)
+  winGetWidth: function(window) {
+    if (typeof vimApiWinGetWidth !== 'undefined') {
+      return vimApiWinGetWidth(window);
+    }
+    return 80; // Default terminal width
+  },
+
   // === Highlight Functions ===
 
   // vim.api.setHighlight(ns_id, name, opts)
