@@ -889,6 +889,7 @@ fn ptyRender(
             // Multi-window mode: Use renderAllWindows for separator rendering
             display.renderAllWindows(
                 &editor_ctx.editor,
+                "-- NORMAL --", // Default status line
                 ctx.visual_state,
                 &editor_ctx.editor.yank_highlight,
                 false, // cursorline disabled

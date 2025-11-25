@@ -742,6 +742,7 @@ pub const Display = struct {
     pub fn renderAllWindows(
         self: *Display,
         editor: *Editor,
+        status: []const u8,
         visual_state: *const VisualState,
         yank_highlight: *const YankHighlight,
         cursorline_enabled: bool,
@@ -753,6 +754,8 @@ pub const Display = struct {
         try self.getTerminalSize();
 
         // Recalculate layout for current terminal size
+        // Reserve 1 row at bottom for global command line
+        // Window statuslines are rendered at (screen_row + height), which is within text_rows
         if (editor.window_layout) |*layout| {
             const text_rows = if (self.terminal_rows > 1) self.terminal_rows - 1 else 1;
             layout.calculateLayout(&editor.windows, text_rows, self.terminal_cols);
@@ -768,8 +771,10 @@ pub const Display = struct {
             self.flush() catch {};
         }
 
-        // Hide cursor during rendering
-        try self.hideCursor();
+        // NOTE: Don't hide cursor here! We'll hide it only if there are cells to render.
+        // This prevents flickering during rapid cursor movement when no cells change.
+        // If updates.len == 0, cursor stays visible, backend's showCursor() is a no-op.
+        // If updates.len > 0, we hide before renderUpdates(), show after.
 
         // Clear all layers before rendering
         self.base_layer.grid.clear();
@@ -781,6 +786,19 @@ pub const Display = struct {
         // Get active window for cursor positioning
         const active_win_id = editor.current_window_id;
         const active_window = if (active_win_id) |id| editor.windows.get(id) else null;
+
+        // CRITICAL FIX: Sync current window's cursor from buffer cursor before rendering
+        // When keys execute (via vim.e2e.keys() or keyboard input), they update buffer.cursor.
+        // But renderAllWindows uses window.cursor for positioning. Without this sync,
+        // vertical movement (j/k) appears broken - state updates but cursor doesn't move visually.
+        // Only sync the CURRENT window; other windows keep their own independent cursor.
+        if (active_window) |win| {
+            if (editor.buffers.get(win.buffer_id)) |buffer| {
+                win.cursor.row = buffer.cursor.row;
+                win.cursor.col = buffer.cursor.col;
+                win.ensureCursorVisible(); // Update viewport if cursor moved offscreen
+            }
+        }
 
         // Render each window
         var window_iter = editor.windows.valueIterator();
@@ -851,6 +869,15 @@ pub const Display = struct {
         const updates = try output.diff(self.allocator);
         defer self.allocator.free(updates);
 
+        // CURSOR FLICKER FIX: Only hide cursor when there are cells to render
+        // renderUpdates() moves cursor to each cell position as it renders, which would
+        // cause cursor to visibly jump around. But if updates.len == 0, there's no cell
+        // rendering, so cursor doesn't jump, and we don't need to hide/show at all.
+        // This eliminates rapid hide/show codes during cursor-only movement (hjkl).
+        if (updates.len > 0) {
+            try self.hideCursor();
+        }
+
         // Render changed cells
         try output_renderer.renderUpdates(self, updates);
 
@@ -862,6 +889,14 @@ pub const Display = struct {
         // Swap buffers
         output.swapBuffers();
 
+        // Render global status line (command line) on the last row
+        // This shows ":vs" when typing commands, mode names in normal mode, etc.
+        // Per-window statuslines are rendered above (in the window loop).
+        // This is the GLOBAL status line at the very bottom of the terminal.
+        if (laststatus > 0) {
+            try self.renderStatusLine(status, &editor.highlight_registry);
+        }
+
         // Position cursor at active window's cursor location
         if (active_window) |win| {
             // HashMap stores *Buffer, so get returns *Buffer directly
@@ -871,7 +906,11 @@ pub const Display = struct {
             };
 
             // Get gutter width for this window
-            const gutter_width = self.gutter_manager.getTotalWidth();
+            // CRITICAL FIX: Use window-specific gutter width calculation, NOT global gutter_manager.
+            // window_renderer.calculateWindowGutterWidth() uses window.options and ensures minimum 4 digits.
+            // Using gutter_manager.getTotalWidth() causes cursor to render in the gap between
+            // gutter and content when the window-specific width differs from global width.
+            const gutter_width = window_renderer.calculateWindowGutterWidth(win, buffer);
 
             // Calculate cursor display position using WINDOW cursor (not buffer.cursor!)
             // Each window has its own cursor position for the same buffer

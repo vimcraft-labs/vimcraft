@@ -667,7 +667,6 @@ pub const TerminalBackend = struct {
                     const buf = self.editor.buffers.get(win.buffer_id) orelse return true;
 
                     // Move BUFFER cursor to clicked position (clamped to buffer bounds)
-                    // The buffer cursor is the source of truth - rendering uses buffer.cursor
                     if (buffer_row < buf.lineCount()) {
                         const line = buf.getLine(buffer_row) orelse return true;
                         defer buf.allocator.free(line);
@@ -678,6 +677,14 @@ pub const TerminalBackend = struct {
 
                         buf.cursor.row = buffer_row;
                         buf.cursor.col = @min(buffer_col, line_len);
+
+                        // CRITICAL FIX: Also update WINDOW cursor!
+                        // In multi-window mode, each window has its own cursor position.
+                        // Without this sync, renderAllWindows would use stale window.cursor
+                        // until the next key press triggers a re-sync.
+                        win.cursor.row = buf.cursor.row;
+                        win.cursor.col = buf.cursor.col;
+                        win.ensureCursorVisible(); // Update viewport if cursor moved offscreen
                     }
                 }
             } else {
@@ -857,6 +864,12 @@ pub const TerminalBackend = struct {
         // Without this check, cursor-only optimization skips status line rendering after hot reload
         const js_state_changed = self.editor.js_state_dirty;
 
+        // Check for multiple windows BEFORE optimization paths
+        // renderCursorOnly() and renderVisualCursorMovement() calculate cursor position
+        // relative to screen origin (0,0), not the active window's position.
+        // In multi-window mode, this causes cursor to appear on wrong window!
+        const has_multiple_windows = self.editor.windows.count() > 1;
+
         // CURSOR-ONLY RENDER PATH: Skip compositor if only cursor moved AND no viewport scroll needed
         // This reduces 457 cursor position codes to 1!
         // CRITICAL: Also check viewport_top_changed for zz/zt/zb commands (scroll without cursor moving out of viewport)
@@ -864,7 +877,8 @@ pub const TerminalBackend = struct {
         // CRITICAL FIX: Also check mode_changed for status line updates (i/ESC changes mode display)
         // CRITICAL FIX: Also check js_state_changed for hot reload (highlight changes require full render)
         // CRITICAL FIX: Also check current_mode_is_command - command mode needs full render to show command buffer
-        if (!buffer_changed and !yank_active and !visual_active and !viewport_scroll_needed and !viewport_top_changed and !needs_layer_update and !mode_changed and !js_state_changed and !current_mode_is_command) {
+        // CRITICAL FIX: Also check has_multiple_windows - renderCursorOnly doesn't handle window offsets!
+        if (!has_multiple_windows and !buffer_changed and !yank_active and !visual_active and !viewport_scroll_needed and !viewport_top_changed and !needs_layer_update and !mode_changed and !js_state_changed and !current_mode_is_command) {
             // Only cursor moved (Normal mode) - use lightweight path
             try self.display.renderCursorOnly(self.editor);
 
@@ -898,7 +912,8 @@ pub const TerminalBackend = struct {
 
         // VISUAL MODE CURSOR MOVEMENT: Update cursor + selection layer ONLY
         // Don't rebuild base/gutter layers (they haven't changed)
-        if (visual_active and !buffer_changed and !yank_active and visual_selection_changed) {
+        // CRITICAL FIX: Also check has_multiple_windows - renderVisualCursorMovement doesn't handle window offsets!
+        if (!has_multiple_windows and visual_active and !buffer_changed and !yank_active and visual_selection_changed) {
             // Visual mode: cursor moved, selection changed
             // Use lightweight rendering: cursor position + selection layer update
             try self.display.renderVisualCursorMovement(self.editor, &self.editor.visual_state);
@@ -909,13 +924,25 @@ pub const TerminalBackend = struct {
         // Update last_buffer_length for next render
         self.last_buffer_length = current_buffer_length;
 
-        // Build status string based on mode
+        // Build command line string (matches Neovim's showmode behavior)
+        // Controlled by vim.opt.showMode (default: true)
+        // - Normal mode: blank
+        // - Insert mode: "-- INSERT --" (if showmode)
+        // - Visual mode: "-- VISUAL --" (if showmode)
+        // - Command mode: ":command_text"
+        const showmode_enabled = if (self.editor.options_manager) |opts|
+            opts.getBoolean("showmode") orelse true
+        else
+            true;
+
         const status = if (self.editor.mode_manager.isCommand())
             try std.fmt.allocPrint(self.allocator, ":{s}", .{self.editor.getCommandString()})
-        else if (self.editor.mode_manager.isVisual() and self.editor.visual_state.active)
-            try self.allocator.dupe(u8, self.editor.visual_state.mode.toString())
+        else if (showmode_enabled and self.editor.mode_manager.isInsert())
+            try self.allocator.dupe(u8, "-- INSERT --")
+        else if (showmode_enabled and self.editor.mode_manager.isVisual())
+            try self.allocator.dupe(u8, "-- VISUAL --")
         else
-            try self.allocator.dupe(u8, self.editor.mode_manager.getModeString());
+            try self.allocator.dupe(u8, ""); // Normal mode or showmode disabled: blank
         defer self.allocator.free(status);
 
         // Get list/listchars options (for invisible character display)
@@ -941,12 +968,13 @@ pub const TerminalBackend = struct {
 
         // Choose render path: single-window vs multi-window
         // Use renderAllWindows when there are multiple windows (splits active)
-        const has_multiple_windows = self.editor.windows.count() > 1;
+        // NOTE: has_multiple_windows already declared above (line 871) for cursor-only optimization check
 
         if (has_multiple_windows) {
             // MULTI-WINDOW RENDER PATH: Use the window renderer
             try self.display.renderAllWindows(
                 self.editor,
+                status,
                 &self.editor.visual_state,
                 &self.editor.yank_highlight,
                 cursorline_enabled,

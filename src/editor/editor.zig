@@ -846,6 +846,13 @@ pub const Editor = struct {
         const current_win = self.getCurrentWindow() orelse return error.NoCurrentWindow;
         const layout = &(self.window_layout orelse return error.NoLayout);
 
+        // CRITICAL: Sync buffer cursor to current window BEFORE creating new window
+        // This ensures the new window gets the correct cursor position from recent hjkl movements
+        if (self.buffers.get(current_win.buffer_id)) |buf| {
+            current_win.cursor.row = buf.cursor.row;
+            current_win.cursor.col = buf.cursor.col;
+        }
+
         // Create new window ID
         const new_win_id = WindowId{ .id = self.next_window_id };
         self.next_window_id += 1;
@@ -854,7 +861,7 @@ pub const Editor = struct {
         const new_window = try self.allocator.create(Window);
         errdefer self.allocator.destroy(new_window);
         new_window.* = Window.init(self.allocator, new_win_id, current_win.buffer_id);
-        new_window.cursor = current_win.cursor;
+        new_window.cursor = current_win.cursor; // Copy synced cursor
         new_window.viewport = current_win.viewport;
 
         try self.windows.put(new_win_id, new_window);
@@ -863,7 +870,7 @@ pub const Editor = struct {
         // Update layout
         try layout.split(current_win.id, new_win_id, direction, before);
 
-        // Focus new window (sets both current_window_id AND current_buffer_id)
+        // Focus new window (buffer cursor already has correct position from current_win)
         self.current_window_id = new_win_id;
         self.current_buffer_id = new_window.buffer_id;
 
@@ -924,19 +931,43 @@ pub const Editor = struct {
             self.current_buffer_id = new_win.buffer_id;
         }
 
+        // Recalculate window dimensions after close
+        self.relayout(self.terminal_rows, self.terminal_cols);
+
         self.logger.info("Closed window {}, new active: {}", .{ win_id.id, new_active.id }) catch {};
     }
 
     /// Focus a different window
+    /// CRITICAL: Syncs cursor between buffer and windows to maintain per-window cursor state
     pub fn focusWindow(self: *Editor, win_id: WindowId) !void {
         if (!self.windows.contains(win_id)) {
             return error.InvalidWindow;
         }
+
+        // Step 1: Save current buffer's cursor to old window (before switching)
+        if (self.current_window_id) |old_win_id| {
+            if (self.windows.get(old_win_id)) |old_window| {
+                if (self.buffers.get(old_window.buffer_id)) |old_buf| {
+                    // Save buffer cursor to window
+                    old_window.cursor.row = old_buf.cursor.row;
+                    old_window.cursor.col = old_buf.cursor.col;
+                }
+            }
+        }
+
+        // Step 2: Switch to new window
         self.current_window_id = win_id;
 
-        // Update current buffer to match window's buffer
+        // Step 3: Restore new window's cursor to buffer
         if (self.windows.get(win_id)) |window| {
             self.current_buffer_id = window.buffer_id;
+
+            // Restore window's cursor to buffer
+            if (self.buffers.get(window.buffer_id)) |buf| {
+                buf.cursor.row = window.cursor.row;
+                buf.cursor.col = window.cursor.col;
+                buf.cursor.goal_column = null; // Reset goal column on window switch
+            }
         }
     }
 

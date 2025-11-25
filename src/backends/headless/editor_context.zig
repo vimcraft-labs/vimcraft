@@ -37,11 +37,17 @@ pub const EditorContext = struct {
         var display = try Display.init(allocator);
         errdefer display.deinit();
 
-        return EditorContext{
+        var ctx = EditorContext{
             .allocator = allocator,
             .editor = editor,
             .display = display,
         };
+
+        // CRITICAL: Sync terminal dimensions from Display to Editor
+        // This ensures splitWindow/relayout use correct dimensions from start
+        ctx.syncTerminalDimensions();
+
+        return ctx;
     }
 
     pub fn deinit(self: *EditorContext) void {
@@ -194,9 +200,21 @@ pub const EditorContext = struct {
         return false;
     }
 
+    /// Sync terminal dimensions from Display to Editor
+    /// CRITICAL: Editor.terminal_rows/cols are used by splitWindow/relayout
+    /// Without this sync, window splits use default 24x80 dimensions
+    pub fn syncTerminalDimensions(self: *EditorContext) void {
+        self.editor.terminal_rows = self.display.terminal_rows;
+        self.editor.terminal_cols = self.display.terminal_cols;
+    }
+
     /// Execute a string of keys through the editor
     /// This is the main function for debug protocol testing
     pub fn executeKeys(self: *EditorContext, keys: []const u8) !void {
+        // CRITICAL: Sync terminal dimensions before processing commands
+        // Commands like :vsplit use Editor.terminal_rows/cols for layout calculation
+        self.syncTerminalDimensions();
+
         // Process each character/sequence
         var i: usize = 0;
         while (i < keys.len) {

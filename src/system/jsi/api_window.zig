@@ -83,6 +83,8 @@ pub export fn apiGetCurrentWin(
 
 /// vim.api.winGetCursor(win) -> [row, col]
 /// Returns cursor position (row is 1-indexed, col is 0-indexed per Neovim convention)
+/// CRITICAL: For current window, sync from buffer.cursor since cursor movements
+/// update buffer.cursor directly, not window.cursor
 pub export fn apiWinGetCursor(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
@@ -100,8 +102,29 @@ pub export fn apiWinGetCursor(
     const win_handle_val = args[0] orelse return c.hermes_value_create_null(rt);
     const win_handle = @as(i32, @intFromFloat(c.hermes_value_get_number(win_handle_val)));
 
+    // Get editor for cursor sync
+    const editor = getEditorFromContext(ctx);
+
     // Try to get cursor from Window struct first (multi-window support)
     if (getWindowFromHandle(ctx, win_handle)) |window| {
+        // CRITICAL: For current window, sync cursor from buffer BEFORE returning
+        // Cursor movements (hjkl) update buffer.cursor, not window.cursor
+        // window.cursor only gets synced on focusWindow()
+        if (editor) |e| {
+            const is_current_window = if (e.current_window_id) |curr_id|
+                window.id.eql(curr_id)
+            else
+                false;
+
+            if (is_current_window) {
+                // Sync buffer cursor to window cursor for accurate reporting
+                if (e.buffers.get(window.buffer_id)) |buffer| {
+                    window.cursor.row = buffer.cursor.row;
+                    window.cursor.col = buffer.cursor.col;
+                }
+            }
+        }
+
         const arr = c.hermes_array_create(rt, 2) orelse return c.hermes_value_create_null(rt);
         const row_val = c.hermes_value_create_number(rt, @floatFromInt(window.cursor.row + 1)); // 1-indexed
         const col_val = c.hermes_value_create_number(rt, @floatFromInt(window.cursor.col)); // 0-indexed

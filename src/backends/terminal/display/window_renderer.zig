@@ -138,8 +138,10 @@ fn ensureCursorVisible(window: *Window, buffer: *const Buffer, visible_height: u
     window.viewport.cursor_screen_col = window.cursor.col -| window.viewport.left_col;
 }
 
-/// Calculate gutter width for a window
-fn calculateWindowGutterWidth(window: *const Window, buffer: *const Buffer) usize {
+/// Calculate gutter width for a specific window
+/// Uses window-specific options and ensures minimum 4 digits for line numbers
+/// This must be used consistently for both rendering and cursor positioning
+pub fn calculateWindowGutterWidth(window: *const Window, buffer: *const Buffer) usize {
     var width: usize = 0;
 
     // Sign column
@@ -487,6 +489,7 @@ fn renderWindowSelectionLayer(
                 // Render selection highlight
                 var screen_col: usize = region.col + gutter_width;
                 var byte_idx: usize = 0;
+                var highlighted_any = false;
 
                 while (byte_idx < remaining.len and screen_col < region.col + region.width) {
                     const char_len = std.unicode.utf8ByteSequenceLength(remaining[byte_idx]) catch 1;
@@ -503,10 +506,23 @@ fn renderWindowSelectionLayer(
                             .char = ' ', // Transparent, just background
                             .bg = visual_bg,
                         });
+                        highlighted_any = true;
                     }
 
                     screen_col += 1;
                     byte_idx += char_len;
+                }
+
+                // Neovim behavior: empty lines in visual selection still highlight first cell
+                // This makes the selection visible even on blank lines
+                if (!highlighted_any and remaining.len == 0) {
+                    const first_col = region.col + gutter_width;
+                    if (first_col < region.col + region.width) {
+                        display.selection_layer.grid.setCell(screen_row, first_col, .{
+                            .char = ' ',
+                            .bg = visual_bg,
+                        });
+                    }
                 }
             }
         }
@@ -606,7 +622,9 @@ pub fn renderWindowStatusline(
     else
         registry.get("StatusLineNC");
 
-    // Format status text
+    // Format status text: filename [+] row:col
+    // NOTE: Mode indicator is shown on the global command line (last row), not here
+    // This matches Neovim's behavior where showmode displays on the command line
     const filename = buffer.filepath orelse "[No Name]";
     const modified = if (buffer.modified) "[+]" else "";
 
