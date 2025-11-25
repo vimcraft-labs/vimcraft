@@ -3,6 +3,36 @@
 /// Allows users to bind keys to commands or JavaScript callbacks
 const std = @import("std");
 
+// ============================================================================
+// Key Notation Conversion
+// ============================================================================
+
+/// Convert a raw byte to Vim key notation
+/// e.g., byte 8 (Ctrl+H) -> "<C-h>", byte 10 (Ctrl+J) -> "<C-j>"
+/// Returns null if no conversion needed (printable ASCII)
+pub fn byteToNotation(byte: u8, buf: *[5]u8) ?[]const u8 {
+    // Control characters (Ctrl+A through Ctrl+Z = 1-26)
+    if (byte >= 1 and byte <= 26) {
+        buf[0] = '<';
+        buf[1] = 'C';
+        buf[2] = '-';
+        buf[3] = 'a' + (byte - 1); // Convert to lowercase letter
+        buf[4] = '>';
+        return buf[0..5];
+    }
+    // Escape (27)
+    if (byte == 27) {
+        buf[0] = '<';
+        buf[1] = 'E';
+        buf[2] = 's';
+        buf[3] = 'c';
+        buf[4] = '>';
+        return buf[0..5];
+    }
+    // No conversion needed for printable ASCII
+    return null;
+}
+
 /// Mode for key mapping
 pub const Mode = enum {
     normal,

@@ -778,6 +778,54 @@ pub export fn apiWinGetNumber(
     return c.hermes_value_create_number(rt, -1);
 }
 
+/// vim.wincmd(direction) -> void
+/// Navigate to adjacent window in direction ('h'=left, 'j'=down, 'k'=up, 'l'=right)
+/// Matches Neovim's :wincmd command behavior
+pub export fn apiWincmd(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const rt = runtime orelse return null;
+    const ctx = global_ctx orelse return c.hermes_value_create_undefined(rt);
+
+    // Validate arguments (direction string)
+    if (count < 1) return c.hermes_value_create_undefined(rt);
+
+    const dir_val = args[0] orelse return c.hermes_value_create_undefined(rt);
+
+    // Get direction string
+    var dir_len: usize = 0;
+    const dir_ptr = c.hermes_value_get_string(rt, dir_val, &dir_len);
+    if (dir_ptr == null or dir_len == 0) return c.hermes_value_create_undefined(rt);
+    const dir_str = dir_ptr[0..dir_len];
+
+    // Parse direction (supports both single char and full word)
+    const NavigationDirection = @import("../../editor/window_layout.zig").NavigationDirection;
+    const direction: ?NavigationDirection = if (std.mem.eql(u8, dir_str, "h") or std.mem.eql(u8, dir_str, "left"))
+        .left
+    else if (std.mem.eql(u8, dir_str, "j") or std.mem.eql(u8, dir_str, "down"))
+        .down
+    else if (std.mem.eql(u8, dir_str, "k") or std.mem.eql(u8, dir_str, "up"))
+        .up
+    else if (std.mem.eql(u8, dir_str, "l") or std.mem.eql(u8, dir_str, "right"))
+        .right
+    else
+        null;
+
+    if (direction) |dir| {
+        const editor = getEditorFromContext(ctx) orelse return c.hermes_value_create_undefined(rt);
+        editor.navigateWindow(dir) catch {};
+        // Mark state dirty so rendering updates
+        editor.js_state_dirty = true;
+    }
+
+    return c.hermes_value_create_undefined(rt);
+}
+
 /// vim.api.winGetPosition(win) -> [row, col]
 /// Returns window position (screen coordinates)
 pub export fn apiWinGetPosition(
@@ -893,6 +941,9 @@ fn registerFunctions(runtime: *c.OVHermesRuntime) void {
     c.hermes_register_host_function(runtime, "vimApiWinCall", apiWinCall, null);
     c.hermes_register_host_function(runtime, "vimApiWinGetNumber", apiWinGetNumber, null);
     c.hermes_register_host_function(runtime, "vimApiWinGetPosition", apiWinGetPosition, null);
+
+    // Window navigation
+    c.hermes_register_host_function(runtime, "vimWincmd", apiWincmd, null);
 }
 
 /// Cleanup

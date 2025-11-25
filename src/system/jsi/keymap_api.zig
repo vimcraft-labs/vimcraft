@@ -83,16 +83,23 @@ pub export fn keymapSet(
     };
     defer ctx.allocator.free(lhs);
 
-    // Extract rhs (arg 2) - only support strings for now
+    // Extract rhs (arg 2) - support strings OR numbers (callback IDs)
     const rhs_value = args[2].?;
-    if (!c.hermes_value_is_string(rhs_value)) {
-        return helpers.returnError(runtime, "keymap.set: rhs must be a string (callbacks not yet supported)");
-    }
+    var rhs: MappingRHS = undefined;
 
-    const rhs_str = valueToString(runtime, rhs_value, ctx.allocator) catch {
-        return helpers.returnError(runtime, "keymap.set: failed to convert rhs to string");
-    };
-    const rhs = MappingRHS{ .keys = rhs_str };
+    if (c.hermes_value_is_string(rhs_value)) {
+        // String mapping: execute keys
+        const rhs_str = valueToString(runtime, rhs_value, ctx.allocator) catch {
+            return helpers.returnError(runtime, "keymap.set: failed to convert rhs to string");
+        };
+        rhs = MappingRHS{ .keys = rhs_str };
+    } else if (c.hermes_value_is_number(rhs_value)) {
+        // Number = callback ID (JavaScript manages the actual function)
+        const callback_id = @as(u32, @intFromFloat(c.hermes_value_get_number(rhs_value)));
+        rhs = MappingRHS{ .callback = callback_id };
+    } else {
+        return helpers.returnError(runtime, "keymap.set: rhs must be a string or callback ID (number)");
+    }
 
     // Extract options (arg 3, optional)
     var opts = KeymapOpts{};
@@ -255,4 +262,74 @@ pub fn register(runtime: *c.OVHermesRuntime, ctx: *KeymapContext) void {
 pub fn registerLegacy(runtime: *c.OVHermesRuntime, ctx: *KeymapContext) void {
     c.hermes_register_host_function(runtime, "keymapSet", keymapSet, @ptrCast(ctx));
     c.hermes_register_host_function(runtime, "keymapDel", keymapDel, @ptrCast(ctx));
+}
+
+// ============================================================================
+// Callback Execution (React Native pattern)
+// ============================================================================
+
+/// Execute a keymap callback by ID
+/// Called by editor when a callback mapping is triggered
+/// Uses JavaScript-side __handleKeymapCallback(id) to execute the actual function
+pub fn executeCallback(callback_id: u32) void {
+    // Import jsi_api to access global_keymap_ctx
+    const jsi_api = @import("jsi_api.zig");
+
+    const ctx = jsi_api.global_keymap_ctx orelse {
+        std.debug.print("[JSI] ERROR: No keymap context for callback execution\n", .{});
+        return;
+    };
+
+    const rt = ctx.runtime;
+
+    // Get global object
+    const global = c.hermes_get_global_object(rt);
+    if (global == null) {
+        std.debug.print("[JSI] ERROR: Failed to get global object\n", .{});
+        return;
+    }
+
+    // Get __handleKeymapCallback function
+    const callback_fn = c.hermes_object_get_property(rt, global, "__handleKeymapCallback");
+    if (callback_fn == null) {
+        c.hermes_object_destroy(global);
+        std.debug.print("[JSI] ERROR: __handleKeymapCallback not found\n", .{});
+        return;
+    }
+
+    // Verify it's a function
+    if (!c.hermes_value_is_function(rt, callback_fn)) {
+        c.hermes_value_destroy(callback_fn);
+        c.hermes_object_destroy(global);
+        std.debug.print("[JSI] ERROR: __handleKeymapCallback is not a function\n", .{});
+        return;
+    }
+
+    // Create callback ID argument
+    const id_arg = c.hermes_value_create_number(rt, @floatFromInt(callback_id));
+    if (id_arg == null) {
+        c.hermes_value_destroy(callback_fn);
+        c.hermes_object_destroy(global);
+        std.debug.print("[JSI] ERROR: Failed to create number for callback ID {}\n", .{callback_id});
+        return;
+    }
+
+    // Call __handleKeymapCallback(id) in JavaScript
+    var args = [_]?*c.OVHermesValue{id_arg};
+    const result = c.hermes_call_function(rt, callback_fn, &args, 1);
+
+    // Clean up
+    c.hermes_value_destroy(id_arg);
+    c.hermes_value_destroy(callback_fn);
+    c.hermes_object_destroy(global);
+
+    if (result != null) {
+        c.hermes_value_destroy(result);
+    } else {
+        // Null result could mean exception - log it
+        if (c.hermes_has_exception(rt)) {
+            const err_msg = c.hermes_get_exception_message(rt);
+            std.debug.print("[JSI] Keymap callback exception: {s}\n", .{err_msg});
+        }
+    }
 }

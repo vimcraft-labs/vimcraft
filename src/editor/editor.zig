@@ -1127,8 +1127,17 @@ pub const Editor = struct {
             const had_pending_keys = self.keymap_mgr.pending_keys.items.len > 0;
             const first_pending_key = if (had_pending_keys) self.keymap_mgr.pending_keys.items[0] else 0;
 
+            // Convert raw byte to Vim notation for keymap lookup
+            // e.g., Ctrl+H (byte 8) -> "<C-h>"
+            const keymap = @import("keymap/keymap.zig");
+            var notation_buf: [5]u8 = undefined;
+            const lookup_key = if (input.len == 1)
+                keymap.byteToNotation(input[0], &notation_buf) orelse input
+            else
+                input;
+
             // For now, Vimcraft has single-buffer support (buffer_id = 0)
-            const lookup_result = self.keymap_mgr.lookup(.normal, input, 0) catch {
+            const lookup_result = self.keymap_mgr.lookup(.normal, lookup_key, 0) catch {
                 // Error during lookup - clear pending and continue to built-in
                 self.keymap_mgr.clearPending();
                 return error.KeymapLookupError;
@@ -1164,10 +1173,12 @@ pub const Editor = struct {
                                 return changed;
                             }
                         },
-                        .callback => |_| {
-                            // Callback mappings not yet implemented - return error instead of silent failure
-                            self.logger.err("Callback mappings not yet implemented (vim.keymap.set with function)", .{}) catch {};
-                            return error.CallbackNotImplemented;
+                        .callback => |callback_id| {
+                            // Execute JavaScript callback via JSI
+                            const keymap_api = @import("../system/jsi/keymap_api.zig");
+                            keymap_api.executeCallback(callback_id);
+                            self.js_state_dirty = true; // Callback may have modified state
+                            return true;
                         },
                     }
                 },
@@ -1822,7 +1833,16 @@ pub const Editor = struct {
             const had_pending_keys = self.keymap_mgr.pending_keys.items.len > 0;
             const first_pending_key = if (had_pending_keys) self.keymap_mgr.pending_keys.items[0] else 0;
 
-            const lookup_result = self.keymap_mgr.lookup(.insert, input, 0) catch {
+            // Convert raw byte to Vim notation for keymap lookup
+            // e.g., Ctrl+H (byte 8) -> "<C-h>"
+            const keymap = @import("keymap/keymap.zig");
+            var notation_buf: [5]u8 = undefined;
+            const lookup_key = if (input.len == 1)
+                keymap.byteToNotation(input[0], &notation_buf) orelse input
+            else
+                input;
+
+            const lookup_result = self.keymap_mgr.lookup(.insert, lookup_key, 0) catch {
                 self.keymap_mgr.clearPending();
                 return error.KeymapLookupError;
             };
@@ -1848,9 +1868,12 @@ pub const Editor = struct {
                                 return changed;
                             }
                         },
-                        .callback => |_| {
-                            self.logger.err("Callback mappings not yet implemented", .{}) catch {};
-                            return error.CallbackNotImplemented;
+                        .callback => |callback_id| {
+                            // Execute JavaScript callback via JSI
+                            const keymap_api = @import("../system/jsi/keymap_api.zig");
+                            keymap_api.executeCallback(callback_id);
+                            self.js_state_dirty = true; // Callback may have modified state
+                            return true;
                         },
                     }
                 },

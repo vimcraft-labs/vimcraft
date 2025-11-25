@@ -2704,6 +2704,88 @@ export interface FiletypeAPI {
  *
  * @see https://vimcraft.com/docs/editor-api/user/lua
  */
+
+// ============================================================================
+// VimCmd - Ex Command Interface
+// ============================================================================
+
+/**
+ * Direction for window navigation commands.
+ */
+export type WincmdDirection = 'h' | 'j' | 'k' | 'l' | 'left' | 'right' | 'up' | 'down';
+
+/**
+ * Ex command methods.
+ *
+ * @example
+ * vim.cmd.wincmd('h');         // Window navigation
+ * vim.cmd.vsplit();            // Vertical split
+ * vim.cmd.write();             // Save file
+ */
+export interface VimCmd {
+  /**
+   * Navigate to adjacent window.
+   * @param direction - 'h'=left, 'j'=down, 'k'=up, 'l'=right
+   *
+   * @example
+   * vim.cmd.wincmd('h');  // Move to left window
+   * vim.cmd.wincmd('l');  // Move to right window
+   */
+  wincmd(direction: WincmdDirection): void;
+
+  /**
+   * Create a vertical split.
+   * @param file - Optional file to open in new split
+   *
+   * @example
+   * vim.cmd.vsplit();              // Empty vsplit
+   * vim.cmd.vsplit('file.txt');    // Vsplit with file
+   */
+  vsplit(file?: string): void;
+
+  /**
+   * Create a horizontal split.
+   * @param file - Optional file to open in new split
+   */
+  split(file?: string): void;
+
+  /**
+   * Save the current buffer.
+   */
+  write(): void;
+
+  /**
+   * Quit the current window.
+   */
+  quit(): void;
+
+  /**
+   * Edit a file.
+   * @param file - File path to open
+   */
+  edit(file?: string): void;
+
+  /**
+   * Create new buffer in horizontal split.
+   */
+  new(): void;
+
+  /**
+   * Create new buffer in vertical split.
+   */
+  vnew(): void;
+
+  /**
+   * Close all other windows (make current window the only one).
+   */
+  only(): void;
+
+  /**
+   * Close the current window.
+   */
+  close(): void;
+}
+
 export interface Vim {
   /**
    * Core API functions for buffer, window, and editor operations.
@@ -3004,18 +3086,21 @@ export interface Vim {
   treesitter?: TreeSitter;
 
   /**
-   * Execute an Ex command.
-   *
-   * Runs Vim command-line commands (what you'd type after `:` in Vim).
-   *
-   * @param cmd - Command to execute (without leading `:`)
+   * Ex command methods.
    *
    * @example
-   * vim.cmd('set number');        // Enable line numbers
-   * vim.cmd('write');             // Save file
-   * vim.cmd('edit /path/to/file'); // Open file
+   * vim.cmd.wincmd('h');           // Navigate to left window
+   * vim.cmd.vsplit('file.txt');    // Vertical split
+   * vim.cmd.write();               // Save file
+   *
+   * @example
+   * // Set up Cmd+hjkl for window navigation
+   * vim.keymap.set('n', '<D-h>', () => vim.cmd.wincmd('h'));
+   * vim.keymap.set('n', '<D-j>', () => vim.cmd.wincmd('j'));
+   * vim.keymap.set('n', '<D-k>', () => vim.cmd.wincmd('k'));
+   * vim.keymap.set('n', '<D-l>', () => vim.cmd.wincmd('l'));
    */
-  cmd(cmd: string): void;
+  cmd: VimCmd;
 
   /**
    * Define syntax highlighting for a highlight group.

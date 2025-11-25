@@ -429,9 +429,28 @@ const _legacyMotion = {
 // Freeze to prevent modifications
 Object.freeze(vim.motion);
 
+// ============================================================================
+// Keymap Callback Registry (React Native pattern)
+// ============================================================================
+// Keeps callback functions alive in JavaScript to prevent garbage collection
+// Zig stores only the callback ID, JavaScript executes the actual function
+globalThis._keymapCallbacks = {};
+globalThis._nextKeymapId = 1;
+
+// Called by native code when a callback keymap is triggered
+globalThis.__handleKeymapCallback = function(id) {
+  const callback = globalThis._keymapCallbacks[id];
+  if (callback) {
+    try {
+      callback();
+    } catch (e) {
+      globalThis.console.log('Keymap callback error:', e);
+    }
+  }
+};
+
 // vim.keymap API - Expose keymap HostObject methods
 // Allows users to create custom key mappings (Neovim compatible)
-// Direct HostObject access (zero-copy JSI)
 // vim.keymap.set(mode, lhs, rhs, opts)
 // mode: string ('n', 'i', 'v', 'c')
 // lhs: string (key to map, e.g., 'H', '<leader>w')
@@ -440,7 +459,23 @@ Object.freeze(vim.motion);
 // vim.keymap.del(mode, lhs)
 // mode: string ('n', 'i', 'v', 'c')
 // lhs: string (key to unmap)
-vim.keymap = vimKeymap;
+vim.keymap = {
+  set: function(mode, lhs, rhs, opts) {
+    if (typeof rhs === 'function') {
+      // Function callback - store in registry and pass ID to native
+      const id = globalThis._nextKeymapId++;
+      globalThis._keymapCallbacks[id] = rhs;
+      return vimKeymap.set(mode, lhs, id, opts);
+    } else {
+      // String mapping - pass directly to native
+      return vimKeymap.set(mode, lhs, rhs, opts);
+    }
+  },
+  del: function(mode, lhs) {
+    // TODO: Clean up callback from registry if it was a callback mapping
+    return vimKeymap.del(mode, lhs);
+  }
+};
 
 Object.freeze(vim.keymap);
 
@@ -1017,7 +1052,8 @@ vim.api = {
     if (typeof createUserCommand !== 'undefined') {
       return createUserCommand(name, callback, opts || {});
     }
-    throw new Error('createUserCmd not available (headless mode)');
+    // Stub: log warning instead of crashing (not yet implemented)
+    console.log('[vim.api] createUserCmd not yet implemented, skipping:', name);
   },
 
   // vim.api.delUserCmd(name)
@@ -1029,7 +1065,7 @@ vim.api = {
     if (typeof deleteUserCommand !== 'undefined') {
       return deleteUserCommand(name);
     }
-    throw new Error('delUserCmd not available (headless mode)');
+    // Stub: not yet implemented
   },
 
   // vim.api.bufCreateUserCmd(buffer, name, callback, opts)
@@ -1046,7 +1082,8 @@ vim.api = {
     if (typeof bufCreateUserCommand !== 'undefined') {
       return bufCreateUserCommand(buffer, name, callback, opts || {});
     }
-    throw new Error('bufCreateUserCmd not available (headless mode)');
+    // Stub: not yet implemented
+    console.log('[vim.api] bufCreateUserCmd not yet implemented, skipping:', name);
   },
 
   // vim.api.bufDelUserCmd(buffer, name)
@@ -1056,7 +1093,7 @@ vim.api = {
     if (typeof bufDeleteUserCommand !== 'undefined') {
       return bufDeleteUserCommand(buffer, name);
     }
-    throw new Error('bufDelUserCmd not available (headless mode)');
+    // Stub: not yet implemented
   },
 
   // vim.api.getUserCommands(opts)
@@ -1067,11 +1104,135 @@ vim.api = {
     if (typeof getUserCommands !== 'undefined') {
       return getUserCommands(opts || {});
     }
-    throw new Error('getUserCommands not available (headless mode)');
+    // Stub: return empty array (not yet implemented)
+    return [];
   }
 };
 
 Object.freeze(vim.api);
+
+// ============================================================================
+// vim.cmd - Ex command methods (Neovim 0.8+ style)
+// ============================================================================
+//
+// Direct method calls for Ex commands:
+//   vim.cmd.wincmd('h')           // Navigate to left window
+//   vim.cmd.vsplit('file.txt')    // Vertical split
+//   vim.cmd.write()               // Save file
+//   vim.cmd.quit()                // Quit
+//
+// Supported commands:
+//   wincmd(dir)    - Window navigation (h/j/k/l)
+//   vsplit([file]) - Vertical split
+//   split([file])  - Horizontal split
+//   write()        - Save file
+//   quit()         - Quit
+//   edit([file])   - Open file
+//   new()          - New buffer in split
+//   vnew()         - New buffer in vsplit
+//   only()         - Close other windows
+//   close()        - Close current window
+//
+// Examples:
+//   vim.cmd.wincmd('h');
+//   vim.cmd.vsplit();
+//   vim.keymap.set('n', '<D-h>', () => vim.cmd.wincmd('h'));
+//
+vim.cmd = {
+  // Window navigation
+  wincmd: function(direction) {
+    if (typeof vimWincmd !== 'undefined') {
+      return vimWincmd(direction);
+    }
+  },
+
+  // Window splits
+  vsplit: function(file) {
+    if (typeof vimCmdVsplit !== 'undefined') {
+      return vimCmdVsplit(file || '');
+    }
+    if (typeof vimE2E !== 'undefined' && vimE2E.keys) {
+      vimE2E.keys(':vsplit' + (file ? ' ' + file : '') + '\r');
+    }
+  },
+
+  split: function(file) {
+    if (typeof vimCmdSplit !== 'undefined') {
+      return vimCmdSplit(file || '');
+    }
+    if (typeof vimE2E !== 'undefined' && vimE2E.keys) {
+      vimE2E.keys(':split' + (file ? ' ' + file : '') + '\r');
+    }
+  },
+
+  // File operations
+  write: function() {
+    if (typeof vimCmdWrite !== 'undefined') {
+      return vimCmdWrite();
+    }
+    if (typeof vimE2E !== 'undefined' && vimE2E.keys) {
+      vimE2E.keys(':w\r');
+    }
+  },
+
+  quit: function() {
+    if (typeof vimCmdQuit !== 'undefined') {
+      return vimCmdQuit();
+    }
+    if (typeof vimE2E !== 'undefined' && vimE2E.keys) {
+      vimE2E.keys(':q\r');
+    }
+  },
+
+  edit: function(file) {
+    if (typeof vimCmdEdit !== 'undefined') {
+      return vimCmdEdit(file || '');
+    }
+    if (typeof vimE2E !== 'undefined' && vimE2E.keys) {
+      vimE2E.keys(':e' + (file ? ' ' + file : '') + '\r');
+    }
+  },
+
+  // New buffers
+  new: function() {
+    if (typeof vimCmdNew !== 'undefined') {
+      return vimCmdNew();
+    }
+    if (typeof vimE2E !== 'undefined' && vimE2E.keys) {
+      vimE2E.keys(':new\r');
+    }
+  },
+
+  vnew: function() {
+    if (typeof vimCmdVnew !== 'undefined') {
+      return vimCmdVnew();
+    }
+    if (typeof vimE2E !== 'undefined' && vimE2E.keys) {
+      vimE2E.keys(':vnew\r');
+    }
+  },
+
+  // Window management
+  only: function() {
+    if (typeof vimCmdOnly !== 'undefined') {
+      return vimCmdOnly();
+    }
+    if (typeof vimE2E !== 'undefined' && vimE2E.keys) {
+      vimE2E.keys(':only\r');
+    }
+  },
+
+  close: function() {
+    if (typeof vimCmdClose !== 'undefined') {
+      return vimCmdClose();
+    }
+    if (typeof vimE2E !== 'undefined' && vimE2E.keys) {
+      vimE2E.keys(':close\r');
+    }
+  },
+};
+
+Object.freeze(vim.cmd);
 
 // Event API - Expose vimEventEmitter methods on vim object
 // Allows plugins to use vim.on('BufWritePre', callback) syntax
