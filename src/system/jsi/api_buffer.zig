@@ -55,8 +55,9 @@ fn getBufferByHandle(handle: i64) ?*Buffer {
             return editor.getCurrentBuffer();
         } else if (handle > 0) {
             // Handle N = BufferId{.id=N}
+            // HashMap stores *Buffer, so get returns *Buffer directly
             const buf_id = BufferId{ .id = @intCast(handle) };
-            return editor.buffers.getPtr(buf_id);
+            return editor.buffers.get(buf_id);
         }
         return null;
     } else if (ctx.editor_ctx) |editor_ctx| {

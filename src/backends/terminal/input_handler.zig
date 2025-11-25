@@ -87,6 +87,7 @@ pub const InputHandler = struct {
         arrow_down,             // ESC[B
         arrow_right,            // ESC[C
         arrow_left,             // ESC[D
+        mouse_event,            // ESC[<button;col;row;M or ESC[<button;col;row;m (SGR 1006)
         normal_char,            // Any other byte(s)
     };
 
@@ -164,6 +165,34 @@ pub const InputHandler = struct {
 
         // Not a partial sequence - clear ESC timer
         self.esc_received_time = null;
+
+        // SGR mouse events (ESC[<button;col;row;M or ESC[<button;col;row;m)
+        // Format: \x1b[<Btn;Col;Row;M (press) or \x1b[<Btn;Col;Row;m (release)
+        // Minimum length: \x1b[<0;1;1M = 10 chars, but can be longer with multi-digit coords
+        if (unconsumed.len >= 3 and unconsumed[1] == '[' and unconsumed[2] == '<') {
+            // Look for terminator 'M' (press) or 'm' (release)
+            var i: usize = 3;
+            while (i < unconsumed.len) : (i += 1) {
+                const c = unconsumed[i];
+                if (c == 'M' or c == 'm') {
+                    // Complete mouse event found
+                    const seq_len = i + 1;
+                    const bytes = unconsumed[0..seq_len];
+                    self.buffer_start += seq_len;
+                    return .{ .complete = .{ .bytes = bytes, .kind = .mouse_event } };
+                }
+                // Valid chars in mouse sequence: digits and semicolons
+                if (c != ';' and (c < '0' or c > '9')) {
+                    // Invalid character - not a mouse sequence, bail out
+                    break;
+                }
+            }
+            // Started with ESC[< but no terminator yet - wait for more bytes
+            // (unless we hit an invalid char, in which case fall through to paste check)
+            if (i == unconsumed.len) {
+                return .{ .incomplete = {} };
+            }
+        }
 
         // Bracketed paste sequences
         const paste_start = "\x1b[200~";
@@ -336,4 +365,52 @@ test "input handler: normal chars don't trigger incomplete" {
         try testing.expectEqual(InputHandler.SequenceKind.normal_char, result.complete.kind);
         try testing.expectEqual(expected, result.complete.bytes[0]);
     }
+}
+
+test "input handler: SGR mouse event complete" {
+    const testing = std.testing;
+    var handler = InputHandler.init(testing.allocator);
+    defer handler.deinit();
+
+    // SGR mouse format: ESC[<button;col;row;M (press) or ESC[<button;col;row;m (release)
+    // Example: ESC[<0;10;5M = left button press at column 10, row 5
+    try handler.pushBytes("\x1b[<0;10;5M");
+
+    const result = handler.nextSequence();
+    try testing.expect(result == .complete);
+    try testing.expectEqual(InputHandler.SequenceKind.mouse_event, result.complete.kind);
+    try testing.expectEqualStrings("\x1b[<0;10;5M", result.complete.bytes);
+}
+
+test "input handler: SGR mouse event incomplete" {
+    const testing = std.testing;
+    var handler = InputHandler.init(testing.allocator);
+    defer handler.deinit();
+
+    // Feed partial mouse sequence
+    try handler.pushBytes("\x1b[<0;10");
+    {
+        const result = handler.nextSequence();
+        try testing.expect(result == .incomplete); // Needs more bytes!
+    }
+
+    try handler.pushBytes(";5M"); // Complete it
+    {
+        const result = handler.nextSequence();
+        try testing.expect(result == .complete);
+        try testing.expectEqual(InputHandler.SequenceKind.mouse_event, result.complete.kind);
+    }
+}
+
+test "input handler: SGR mouse release event" {
+    const testing = std.testing;
+    var handler = InputHandler.init(testing.allocator);
+    defer handler.deinit();
+
+    // Mouse release uses lowercase 'm'
+    try handler.pushBytes("\x1b[<0;20;15m");
+
+    const result = handler.nextSequence();
+    try testing.expect(result == .complete);
+    try testing.expectEqual(InputHandler.SequenceKind.mouse_event, result.complete.kind);
 }

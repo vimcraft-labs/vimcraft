@@ -325,6 +325,12 @@ pub fn execute(allocator: std.mem.Allocator, sandbox_path: []const u8, verbose: 
     try event_loop.init();
     defer event_loop.deinit();
 
+    // Initialize cellwidth system for proper character width handling
+    // CRITICAL: Required for wide character (emoji/CJK) rendering
+    const cellwidth = @import("../backends/terminal/display/cellwidth.zig");
+    try cellwidth.initGlobal(allocator);
+    defer cellwidth.deinitGlobal(allocator);
+
     // Create EditorContext with PTY (pseudo-terminal)
     // This enables real terminal rendering for visual bug detection
     var editor_ctx = try EditorContext.init(allocator);

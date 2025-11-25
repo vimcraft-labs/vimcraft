@@ -52,14 +52,18 @@ pub const Compositor = struct {
         // Clear output grid (resets cells to blank and marks dirty rows)
         self.output_grid.clear();
 
-        // CRITICAL FIX: Invalidate 'previous' buffer for dirty rows BEFORE blending
+        // CRITICAL FIX: Invalidate 'previous' buffer for ALL rows BEFORE blending
         // This ensures diff() sees cells as different even when content is identical between frames
-        // Example: Gutter shows "4  " in frame N and frame N+1. Without this fix:
-        //   - current has "4  ", previous has "4  " → diff() sees them as equal → 0 updates → terminal never refreshes
-        // With this fix:
-        //   - We mark previous as blank for dirty rows → current has "4  ", previous has blank → diff() generates updates
-        var iter = self.output_grid.dirty_lines.iterator(.{});
-        while (iter.next()) |row| {
+        //
+        // BUG FIX (January 2025): Previously only invalidated dirty rows, but clear() only
+        // marks rows dirty if they HAD content. This caused:
+        //   - Blank rows weren't marked dirty
+        //   - previous[row] kept old data for blank rows
+        //   - When separator was drawn to blank row: current == previous → diff skips → gap!
+        //
+        // Solution: Invalidate ALL rows unconditionally. This is safe because we're about
+        // to recomposite everything anyway.
+        for (0..self.output_grid.height) |row| {
             for (0..self.output_grid.width) |col| {
                 self.output_grid.previous[row][col] = .{ .char = 0, .fg = null, .bg = null };
             }
@@ -406,10 +410,17 @@ fn blendCell(src: Cell, dst: Cell, opacity: f32) Cell {
     else
         src.char;
 
+    // Preserve is_continuation from source cell (for wide character handling)
+    // This is critical for output_renderer's cursor position tracking
+    // BUG FIX: Must preserve src.is_continuation when it's true, even if char is space
+    // The continuation marker cell has char=' ' AND is_continuation=true
+    const final_continuation = src.is_continuation or dst.is_continuation;
+
     return Cell{
         .char = final_char,
         .fg = blended_fg,
         .bg = blended_bg,
+        .is_continuation = final_continuation,
     };
 }
 

@@ -315,12 +315,13 @@ pub fn initJSI(
 
     // Register E2E API (vim.e2e - E2E testing and plugin development debugging)
     // Available in ALL modes (Editor + EditorContext) - difference is rendering backend, not API
+    // CRITICAL: Use function pointer for getCurrentBuffer to support multi-window (splits)
+    // A static buffer pointer becomes stale after :vsplit creates a new window/buffer
     if (T == *Editor) {
         const e2e_ctx = allocator.create(e2e_api.E2EContext) catch @panic("Failed to allocate E2EContext");
-        const current_buffer = editor_or_context.getCurrentBuffer() orelse @panic("No current buffer for E2E API");
         e2e_ctx.* = e2e_api.E2EContext{
             .allocator = allocator,
-            .buffer = current_buffer,
+            .get_current_buffer_fn = &getCurrentBufferWrapper,
             .mode_manager = &editor_or_context.mode_manager,
             .visual_state = &editor_or_context.visual_state,
             .register_mgr = &editor_or_context.register_mgr,
@@ -336,7 +337,7 @@ pub fn initJSI(
         const e2e_ctx = allocator.create(e2e_api.E2EContext) catch @panic("Failed to allocate E2EContext");
         e2e_ctx.* = e2e_api.E2EContext{
             .allocator = allocator,
-            .buffer = editor_or_context.buffer(),
+            .get_current_buffer_fn = &getCurrentBufferWrapperContext,
             .mode_manager = editor_or_context.mode_manager(),
             .visual_state = editor_or_context.visual_state(),
             .register_mgr = editor_or_context.register_mgr(),
@@ -378,6 +379,23 @@ fn executeKeysWrapper(editor_ptr: *anyopaque, keys_str: []const u8) anyerror!voi
 fn executeKeysWrapperContext(ctx_ptr: *anyopaque, keys_str: []const u8) anyerror!void {
     const ctx: *EditorContext = @ptrCast(@alignCast(ctx_ptr));
     try ctx.executeKeys(keys_str);
+}
+
+// Import Buffer type for getCurrentBuffer wrappers
+const Buffer = @import("../../editor/buffer/buffer.zig").Buffer;
+
+/// Wrapper function for Editor.getCurrentBuffer that matches E2EContext function pointer signature
+/// This is critical for multi-window support - E2EContext must dynamically fetch the current buffer
+/// instead of caching a stale pointer that becomes invalid after :vsplit
+fn getCurrentBufferWrapper(editor_ptr: *anyopaque) ?*Buffer {
+    const editor: *Editor = @ptrCast(@alignCast(editor_ptr));
+    return editor.getCurrentBuffer();
+}
+
+/// Wrapper function for EditorContext.buffer() that matches E2EContext function pointer signature
+fn getCurrentBufferWrapperContext(ctx_ptr: *anyopaque) ?*Buffer {
+    const ctx: *EditorContext = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.buffer();
 }
 
 /// Re-register console.log with debugger pointer

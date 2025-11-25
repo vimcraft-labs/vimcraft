@@ -25,15 +25,16 @@ const Syntax = @import("treesitter/syntax.zig").Syntax;
 const Parser = @import("treesitter/parser.zig").Parser;
 const languages = @import("treesitter/languages.zig");
 
-/// Buffer identifier (Helix-style architecture)
-/// Wraps u64 for type safety (prevents accidental mixing with line numbers, etc.)
-pub const BufferId = struct {
-    id: u64,
+// Window management
+const Window = @import("window.zig").Window;
+pub const WindowId = @import("window.zig").WindowId;
+const WindowLayout = @import("window_layout.zig").WindowLayout;
+const SplitDirection = @import("window_layout.zig").SplitDirection;
+const NavigationDirection = @import("window_layout.zig").NavigationDirection;
 
-    pub fn eql(self: BufferId, other: BufferId) bool {
-        return self.id == other.id;
-    }
-};
+/// Buffer identifier (Helix-style architecture)
+/// Re-export from window.zig to avoid type mismatch issues
+pub const BufferId = @import("window.zig").BufferId;
 
 /// Pending command for multi-key sequences (like dd, dw)
 const PendingCommand = struct {
@@ -146,7 +147,10 @@ pub const Editor = struct {
     allocator: std.mem.Allocator,
 
     // Buffer management (Helix-style HashMap architecture)
-    buffers: std.AutoHashMap(BufferId, Buffer),
+    // CRITICAL: Store *Buffer (heap-allocated pointers) to prevent HashMap rehash invalidation
+    // When HashMap rehashes on grow, value pointers from getPtr() become stale
+    // With *Buffer, the Buffer objects live on heap and survive HashMap rehashing
+    buffers: std.AutoHashMap(BufferId, *Buffer),
     current_buffer_id: ?BufferId,
     next_buffer_id: u64,
     cwd: []const u8, // Working directory (owned, must be freed in deinit)
@@ -211,6 +215,18 @@ pub const Editor = struct {
     viewport_top: usize = 0,
     viewport_left: usize = 0,
 
+    // Window management (Phase 5)
+    // Windows map WindowId -> Window for O(1) access
+    windows: std.AutoHashMap(WindowId, *Window),
+    current_window_id: ?WindowId = null,
+    window_layout: ?WindowLayout = null,
+    next_window_id: u32 = 1, // Window ID 0 is reserved for "current" in API
+
+    // Terminal dimensions (for relayout after splits)
+    // Set by backend on resize, used for window dimension calculations
+    terminal_rows: usize = 24,
+    terminal_cols: usize = 80,
+
     pub fn init(allocator: std.mem.Allocator) !Editor {
         // Get current working directory (heap-allocated, will be freed in deinit)
         const cwd = std.process.getCwdAlloc(allocator) catch |err| blk: {
@@ -219,14 +235,30 @@ pub const Editor = struct {
         };
         errdefer allocator.free(cwd);
 
-        // Initialize buffer HashMap
-        var buffers = std.AutoHashMap(BufferId, Buffer).init(allocator);
+        // Initialize buffer HashMap (stores *Buffer to survive HashMap rehashing)
+        var buffers = std.AutoHashMap(BufferId, *Buffer).init(allocator);
         errdefer buffers.deinit();
 
-        // Create initial unnamed buffer (ID 1)
-        const initial_buffer = Buffer.init(allocator);
+        // Create initial unnamed buffer (ID 1) - heap-allocated to survive HashMap rehash
+        const initial_buffer = try allocator.create(Buffer);
+        errdefer allocator.destroy(initial_buffer);
+        initial_buffer.* = Buffer.init(allocator);
         const initial_id = BufferId{ .id = 1 };
         try buffers.put(initial_id, initial_buffer);
+
+        // Initialize window HashMap and create initial window
+        var windows = std.AutoHashMap(WindowId, *Window).init(allocator);
+        errdefer windows.deinit();
+
+        const initial_win_id = WindowId{ .id = 1 };
+        const initial_window = try allocator.create(Window);
+        errdefer allocator.destroy(initial_window);
+        initial_window.* = Window.init(allocator, initial_win_id, initial_id);
+        try windows.put(initial_win_id, initial_window);
+
+        // Initialize window layout with the initial window
+        var window_layout = try WindowLayout.init(allocator, initial_win_id);
+        errdefer window_layout.deinit();
 
         var ts_loader = try Loader.init(allocator);
         errdefer ts_loader.deinit();
@@ -267,6 +299,11 @@ pub const Editor = struct {
             .pending_register = PendingRegister{},
             .pending_text_object = PendingTextObject{},
             .cmd_buffer = CommandBuffer.init(allocator),
+            // Window management
+            .windows = windows,
+            .current_window_id = initial_win_id,
+            .window_layout = window_layout,
+            .next_window_id = 2, // Next window will be ID 2
         };
     }
 
@@ -396,10 +433,30 @@ pub const Editor = struct {
         // since JSI owns the EventEmitter's lifecycle (created in initJSI)
         // Do NOT clean it up here to avoid double-free
 
-        // Clean up all buffers
+        // Clean up all windows (heap-allocated)
+        // CRITICAL: valueIterator() returns **Window (pointer to HashMap slot containing *Window)
+        // We need to dereference to get the actual *Window to destroy
+        var win_iter = self.windows.valueIterator();
+        while (win_iter.next()) |window_ptr| {
+            const window = window_ptr.*; // Dereference to get *Window
+            window.deinit();
+            self.allocator.destroy(window);
+        }
+        self.windows.deinit();
+
+        // Clean up window layout
+        if (self.window_layout) |*layout| {
+            layout.deinit();
+        }
+
+        // Clean up all buffers (heap-allocated)
+        // CRITICAL: valueIterator() returns **Buffer (pointer to HashMap slot containing *Buffer)
+        // We need to dereference to get the actual *Buffer to destroy
         var iter = self.buffers.valueIterator();
-        while (iter.next()) |buffer| {
+        while (iter.next()) |buffer_ptr| {
+            const buffer = buffer_ptr.*; // Dereference to get *Buffer
             buffer.deinit();
+            self.allocator.destroy(buffer);
         }
         self.buffers.deinit();
 
@@ -422,13 +479,18 @@ pub const Editor = struct {
     /// Returns null if no buffer is active (should never happen in practice)
     pub fn getCurrentBuffer(self: *Editor) ?*Buffer {
         const id = self.current_buffer_id orelse return null;
-        return self.buffers.getPtr(id);
+        // HashMap stores *Buffer, so get returns *Buffer directly (no need for getPtr)
+        return self.buffers.get(id);
     }
 
     /// Create a new empty buffer and return its ID (Helix-style)
     /// Does NOT switch to the new buffer automatically
     pub fn createBuffer(self: *Editor) !BufferId {
-        const new_buffer = Buffer.init(self.allocator);
+        // Heap-allocate Buffer to survive HashMap rehashing
+        const new_buffer = try self.allocator.create(Buffer);
+        errdefer self.allocator.destroy(new_buffer);
+        new_buffer.* = Buffer.init(self.allocator);
+
         const new_id = BufferId{ .id = self.next_buffer_id };
         self.next_buffer_id += 1;
 
@@ -443,22 +505,37 @@ pub const Editor = struct {
         // Check if file is already open (duplicate detection like Helix)
         var iter = self.buffers.iterator();
         while (iter.next()) |entry| {
-            if (entry.value_ptr.filepath) |filepath| {
+            // HashMap stores *Buffer, so value_ptr.* gives us *Buffer
+            if (entry.value_ptr.*.filepath) |filepath| {
                 if (std.mem.eql(u8, filepath, path)) {
                     // Already open, switch to it
-                    self.current_buffer_id = entry.key_ptr.*;
+                    const existing_id = entry.key_ptr.*;
+                    self.current_buffer_id = existing_id;
+                    // CRITICAL: Also update current window's buffer_id to keep them in sync
+                    if (self.getCurrentWindow()) |win| {
+                        win.buffer_id = existing_id;
+                    }
                     self.triggerAutocommand("BufEnter");
-                    return entry.key_ptr.*;
+                    return existing_id;
                 }
             }
         }
 
         // Not open, create new buffer
         const new_id = try self.createBuffer();
-        const buf = self.buffers.getPtr(new_id).?;
+        // HashMap stores *Buffer, so get returns *Buffer directly
+        const buf = self.buffers.get(new_id).?;
 
-        // Load file content
-        try buf.loadFile(path);
+        // Load file content (handle non-existent files like Vim does)
+        buf.loadFile(path) catch |err| {
+            if (err == error.FileNotFound) {
+                // File doesn't exist - create empty buffer with filepath set (Vim :e behavior)
+                buf.filepath = try self.allocator.dupe(u8, path);
+                buf.modified = false;
+            } else {
+                return err; // Propagate other errors
+            }
+        };
 
         // Detect filetype
         const first_line = buf.getLine(0);
@@ -476,6 +553,11 @@ pub const Editor = struct {
 
         // Switch to new buffer
         self.current_buffer_id = new_id;
+
+        // CRITICAL: Also update current window's buffer_id to keep them in sync
+        if (self.getCurrentWindow()) |win| {
+            win.buffer_id = new_id;
+        }
 
         // Trigger autocommands
         self.triggerAutocommand("BufRead");
@@ -496,6 +578,11 @@ pub const Editor = struct {
 
         self.current_buffer_id = id;
 
+        // CRITICAL: Also update current window's buffer_id to keep them in sync
+        if (self.getCurrentWindow()) |win| {
+            win.buffer_id = id;
+        }
+
         // Trigger BufEnter for new buffer
         self.triggerAutocommand("BufEnter");
     }
@@ -504,7 +591,8 @@ pub const Editor = struct {
     /// Checks if buffer is modified and returns error if so (unless force=true)
     /// Switches to previous buffer if deleting current buffer
     pub fn deleteBuffer(self: *Editor, id: BufferId, force: bool) !void {
-        const buf = self.buffers.getPtr(id) orelse return error.BufferNotFound;
+        // HashMap stores *Buffer, so get returns *Buffer directly
+        const buf = self.buffers.get(id) orelse return error.BufferNotFound;
 
         // Check if buffer is modified
         if (!force and buf.modified) {
@@ -529,14 +617,19 @@ pub const Editor = struct {
                 if (!found_other) {
                     const new_id = try self.createBuffer();
                     self.current_buffer_id = new_id;
+                    // CRITICAL: Also update current window's buffer_id to keep them in sync
+                    if (self.getCurrentWindow()) |win| {
+                        win.buffer_id = new_id;
+                    }
                 }
             }
         }
 
-        // Remove buffer from HashMap (this calls deinit via iterator)
+        // Remove buffer from HashMap (heap-allocated, must deinit and destroy)
         if (self.buffers.fetchRemove(id)) |kv| {
-            var buf_copy = kv.value;
-            buf_copy.deinit();
+            const buf_ptr = kv.value;
+            buf_ptr.deinit();
+            self.allocator.destroy(buf_ptr);
         }
     }
 
@@ -550,7 +643,8 @@ pub const Editor = struct {
         if (!force) {
             var iter = self.buffers.iterator();
             while (iter.next()) |entry| {
-                if (!entry.key_ptr.eql(current_id) and entry.value_ptr.modified) {
+                // HashMap stores *Buffer, so value_ptr is **Buffer, need extra deref
+                if (!entry.key_ptr.eql(current_id) and entry.value_ptr.*.modified) {
                     return error.BufferModified;
                 }
             }
@@ -688,6 +782,212 @@ pub const Editor = struct {
 
         return result.toOwnedSlice(self.allocator);
     }
+
+    // ========================================================================
+    // Window Management (Phase 5)
+    // ========================================================================
+
+    /// Get pointer to current window
+    pub fn getCurrentWindow(self: *Editor) ?*Window {
+        const win_id = self.current_window_id orelse return null;
+        const win_ptr = self.windows.get(win_id) orelse return null;
+        return win_ptr;
+    }
+
+    /// Get window by handle (0 = current window, positive = WindowId.id)
+    pub fn getWindow(self: *Editor, handle: i64) ?*Window {
+        if (handle == 0) {
+            return self.getCurrentWindow();
+        } else if (handle > 0) {
+            const win_id = WindowId{ .id = @intCast(handle) };
+            return self.windows.get(win_id);
+        }
+        return null;
+    }
+
+    /// Check if a window handle is valid
+    pub fn isWindowValid(self: *Editor, handle: i64) bool {
+        if (handle == 0) {
+            return self.current_window_id != null;
+        } else if (handle > 0) {
+            const win_id = WindowId{ .id = @intCast(handle) };
+            return self.windows.contains(win_id);
+        }
+        return false;
+    }
+
+    /// List all window IDs (for vim.api.listWins)
+    pub fn listWindows(self: *Editor) ![]WindowId {
+        if (self.window_layout) |*layout| {
+            return layout.getAllWindows();
+        }
+        // Fallback: return current window only
+        var result = try self.allocator.alloc(WindowId, 1);
+        if (self.current_window_id) |id| {
+            result[0] = id;
+        } else {
+            result[0] = WindowId{ .id = 1 };
+        }
+        return result;
+    }
+
+    /// Split current window horizontally (new window above, Vim behavior)
+    pub fn splitHorizontal(self: *Editor) !WindowId {
+        return self.splitWindow(.horizontal, true);
+    }
+
+    /// Split current window vertically (new window to the left, Vim behavior)
+    pub fn splitVertical(self: *Editor) !WindowId {
+        return self.splitWindow(.vertical, true);
+    }
+
+    /// Internal: split a window in the specified direction
+    fn splitWindow(self: *Editor, direction: SplitDirection, before: bool) !WindowId {
+        const current_win = self.getCurrentWindow() orelse return error.NoCurrentWindow;
+        const layout = &(self.window_layout orelse return error.NoLayout);
+
+        // Create new window ID
+        const new_win_id = WindowId{ .id = self.next_window_id };
+        self.next_window_id += 1;
+
+        // Create new window showing same buffer
+        const new_window = try self.allocator.create(Window);
+        errdefer self.allocator.destroy(new_window);
+        new_window.* = Window.init(self.allocator, new_win_id, current_win.buffer_id);
+        new_window.cursor = current_win.cursor;
+        new_window.viewport = current_win.viewport;
+
+        try self.windows.put(new_win_id, new_window);
+        errdefer _ = self.windows.remove(new_win_id);
+
+        // Update layout
+        try layout.split(current_win.id, new_win_id, direction, before);
+
+        // Focus new window (sets both current_window_id AND current_buffer_id)
+        self.current_window_id = new_win_id;
+        self.current_buffer_id = new_window.buffer_id;
+
+        // Recalculate window dimensions after split
+        self.relayout(self.terminal_rows, self.terminal_cols);
+
+        // Mark both windows as needing redraw
+        current_win.needs_redraw = true;
+        new_window.needs_redraw = true;
+
+        self.logger.info("Split window: created window {} from window {}", .{ new_win_id.id, current_win.id.id }) catch {};
+
+        return new_win_id;
+    }
+
+    /// Close a window
+    pub fn closeWindow(self: *Editor, win_id: WindowId, force: bool) !void {
+        const window = self.windows.get(win_id) orelse return error.InvalidWindow;
+        var layout = &(self.window_layout orelse return error.NoLayout);
+
+        // Check if buffer is modified (unless force)
+        // BUT: Allow closing if other windows also show this buffer (Vim behavior)
+        if (!force) {
+            if (self.buffers.get(window.buffer_id)) |buffer| {
+                if (buffer.modified) {
+                    // Count windows showing this buffer
+                    var windows_with_buffer: usize = 0;
+                    var win_iter = self.windows.valueIterator();
+                    while (win_iter.next()) |win_ptr| {
+                        if (win_ptr.*.buffer_id.eql(window.buffer_id)) {
+                            windows_with_buffer += 1;
+                        }
+                    }
+
+                    // Only block close if this is the LAST window showing this buffer
+                    if (windows_with_buffer <= 1) {
+                        return error.BufferModified;
+                    }
+                }
+            }
+        }
+
+        // Remove from layout (returns new active window or null if last window)
+        const new_active = try layout.removeWindow(win_id) orelse {
+            return error.CannotCloseLastWindow;
+        };
+
+        // Cleanup window (heap-allocated)
+        if (self.windows.fetchRemove(win_id)) |kv| {
+            const win_ptr = kv.value; // *Window (heap-allocated)
+            win_ptr.*.deinit();
+            self.allocator.destroy(win_ptr);
+        }
+
+        // Update current window AND buffer to match new active window
+        self.current_window_id = new_active;
+        if (self.windows.get(new_active)) |new_win| {
+            self.current_buffer_id = new_win.buffer_id;
+        }
+
+        self.logger.info("Closed window {}, new active: {}", .{ win_id.id, new_active.id }) catch {};
+    }
+
+    /// Focus a different window
+    pub fn focusWindow(self: *Editor, win_id: WindowId) !void {
+        if (!self.windows.contains(win_id)) {
+            return error.InvalidWindow;
+        }
+        self.current_window_id = win_id;
+
+        // Update current buffer to match window's buffer
+        if (self.windows.get(win_id)) |window| {
+            self.current_buffer_id = window.buffer_id;
+        }
+    }
+
+    /// Navigate to adjacent window in direction
+    pub fn navigateWindow(self: *Editor, direction: NavigationDirection) !void {
+        const current_win_id = self.current_window_id orelse return error.NoCurrentWindow;
+        var layout = &(self.window_layout orelse return error.NoLayout);
+
+        // Convert windows HashMap to pointer map for layout query
+        var windows_ptr = std.AutoHashMap(WindowId, *Window).init(self.allocator);
+        defer windows_ptr.deinit();
+
+        var iter = self.windows.iterator();
+        while (iter.next()) |entry| {
+            try windows_ptr.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        const adjacent = layout.findAdjacentWindow(current_win_id, direction, &windows_ptr);
+        if (adjacent) |adj_win_id| {
+            try self.focusWindow(adj_win_id);
+        }
+    }
+
+    /// Recalculate all window positions after terminal resize
+    pub fn relayout(self: *Editor, rows: usize, cols: usize) void {
+        // Store terminal dimensions for future splits
+        self.terminal_rows = rows;
+        self.terminal_cols = cols;
+
+        var layout = &(self.window_layout orelse return);
+
+        // Build pointer map for layout calculation
+        var windows_ptr = std.AutoHashMap(WindowId, *Window).init(self.allocator);
+        defer windows_ptr.deinit();
+
+        var iter = self.windows.iterator();
+        while (iter.next()) |entry| {
+            windows_ptr.put(entry.key_ptr.*, entry.value_ptr.*) catch continue;
+        }
+
+        layout.calculateLayout(&windows_ptr, rows, cols);
+    }
+
+    /// Get window count
+    pub fn windowCount(self: *Editor) usize {
+        return self.windows.count();
+    }
+
+    // ========================================================================
+    // End Window Management
+    // ========================================================================
 
     /// Load file and detect filetype (legacy method - kept for backwards compatibility)
     /// TODO: Migrate callers to use loadBufferFromFile() instead
@@ -1060,6 +1360,75 @@ pub const Editor = struct {
                     }
                 }
 
+                // Handle pending Ctrl+W commands (window management)
+                if (pending == 23) {
+                    switch (char) {
+                        'h' => { // Ctrl+W h - move to window left
+                            self.navigateWindow(.left) catch {};
+                            self.pending_cmd.clear();
+                            return true;
+                        },
+                        'j' => { // Ctrl+W j - move to window below
+                            self.navigateWindow(.down) catch {};
+                            self.pending_cmd.clear();
+                            return true;
+                        },
+                        'k' => { // Ctrl+W k - move to window above
+                            self.navigateWindow(.up) catch {};
+                            self.pending_cmd.clear();
+                            return true;
+                        },
+                        'l' => { // Ctrl+W l - move to window right
+                            self.navigateWindow(.right) catch {};
+                            self.pending_cmd.clear();
+                            return true;
+                        },
+                        'w' => { // Ctrl+W w - cycle to next window
+                            self.navigateWindow(.right) catch {}; // Simple cycle for now
+                            self.pending_cmd.clear();
+                            return true;
+                        },
+                        's' => { // Ctrl+W s - horizontal split
+                            _ = self.splitHorizontal() catch {};
+                            self.pending_cmd.clear();
+                            return true;
+                        },
+                        'v' => { // Ctrl+W v - vertical split
+                            _ = self.splitVertical() catch {};
+                            self.pending_cmd.clear();
+                            return true;
+                        },
+                        'c', 'q' => { // Ctrl+W c / Ctrl+W q - close window
+                            if (self.current_window_id) |win_id| {
+                                self.closeWindow(win_id, false) catch {};
+                            }
+                            self.pending_cmd.clear();
+                            return true;
+                        },
+                        'o' => { // Ctrl+W o - close all other windows
+                            if (self.window_layout) |*layout| {
+                                const windows = layout.getAllWindows() catch &[_]WindowId{};
+                                defer if (windows.len > 0) self.allocator.free(windows);
+
+                                for (windows) |win_id| {
+                                    if (self.current_window_id) |current| {
+                                        if (!win_id.eql(current)) {
+                                            self.closeWindow(win_id, true) catch {};
+                                        }
+                                    }
+                                }
+                            }
+                            self.pending_cmd.clear();
+                            return true;
+                        },
+                        else => {
+                            // Unknown Ctrl+W command, clear pending
+                            self.pending_cmd.clear();
+                            return false;
+                        },
+                    }
+                }
+
                 // Handle pending 'y' commands (yank)
                 if (pending == 'y') {
                     switch (char) {
@@ -1245,6 +1614,12 @@ pub const Editor = struct {
                 'z' => {
                     self.pending_cmd.set('z');
                     return false; // Just setting pending state
+                },
+
+                // Window commands (Ctrl+W followed by h/j/k/l/s/v/c/o/w)
+                23 => { // Ctrl+W
+                    self.pending_cmd.set(23);
+                    return false; // Wait for next key
                 },
 
                 // Viewport-relative movement (H, M, L)
@@ -1759,11 +2134,24 @@ pub const Editor = struct {
                     const buf = self.getCurrentBuffer() orelse return error.NoActiveBuffer;
                     try buf.saveFile();
                 } else if (std.mem.eql(u8, cmd, "q")) {
-                    // Quit - backends handle this differently
-                    // Terminal backend: exit program
-                    // Debug backend: just exit command mode
+                    // Quit - close window if multiple windows, otherwise request quit
                     self.cmd_buffer.clear();
                     self.mode_manager.enterNormal();
+
+                    // If multiple windows, close current window
+                    if (self.windows.count() > 1) {
+                        if (self.current_window_id) |win_id| {
+                            self.closeWindow(win_id, false) catch |err| {
+                                if (err == error.LastWindow) {
+                                    // Shouldn't happen since we checked count > 1
+                                    self.logger.err("Cannot close last window", .{}) catch {};
+                                }
+                            };
+                        }
+                    }
+                    // If only one window, backends handle quit differently
+                    // Terminal backend: exit program
+                    // Debug backend: just exit command mode
                     return true; // Mode changed
                 } else if (std.mem.eql(u8, cmd, "wq")) {
                     const buf = self.getCurrentBuffer() orelse return error.NoActiveBuffer;
@@ -1819,6 +2207,38 @@ pub const Editor = struct {
                         const modified = if (info.modified) "[+]" else "   ";
                         const name = info.filepath orelse "[No Name]";
                         self.logger.info("{s}{d: >3} {s} {s}", .{ marker, info.id.id, modified, name }) catch {};
+                    }
+                }
+                // Window split commands
+                else if (std.mem.eql(u8, cmd, "sp") or std.mem.eql(u8, cmd, "split")) {
+                    _ = self.splitHorizontal() catch |err| {
+                        self.logger.err("Failed to split: {}", .{err}) catch {};
+                    };
+                } else if (std.mem.eql(u8, cmd, "vs") or std.mem.eql(u8, cmd, "vsplit")) {
+                    _ = self.splitVertical() catch |err| {
+                        self.logger.err("Failed to vsplit: {}", .{err}) catch {};
+                    };
+                } else if (std.mem.eql(u8, cmd, "close") or std.mem.eql(u8, cmd, "clo")) {
+                    if (self.current_window_id) |win_id| {
+                        self.closeWindow(win_id, false) catch |err| {
+                            if (err == error.LastWindow) {
+                                self.logger.err("Cannot close last window", .{}) catch {};
+                            }
+                        };
+                    }
+                } else if (std.mem.eql(u8, cmd, "only") or std.mem.eql(u8, cmd, "on")) {
+                    // Close all other windows (keep only current)
+                    if (self.window_layout) |*layout| {
+                        const windows = layout.getAllWindows() catch &[_]WindowId{};
+                        defer if (windows.len > 0) self.allocator.free(windows);
+
+                        for (windows) |win_id| {
+                            if (self.current_window_id) |current| {
+                                if (!win_id.eql(current)) {
+                                    self.closeWindow(win_id, true) catch {};
+                                }
+                            }
+                        }
                     }
                 }
                 // Working directory commands

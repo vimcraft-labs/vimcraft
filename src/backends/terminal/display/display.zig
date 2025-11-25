@@ -26,6 +26,13 @@ const terminal_control = @import("terminal_control.zig");
 const layer_renderer = @import("layer_renderer.zig");
 const output_renderer = @import("output_renderer.zig");
 
+// Multi-window rendering (Phase 5)
+const window_renderer = @import("window_renderer.zig");
+const separator_renderer = @import("separator_renderer.zig");
+const WindowLayout = @import("../../../editor/window_layout.zig").WindowLayout;
+const Window = @import("../../../editor/window.zig").Window;
+const WindowId = @import("../../../editor/window.zig").WindowId;
+
 // Highlight registry (for StatusLine highlight support)
 const highlight_api = @import("../../../system/jsi/highlight_api.zig");
 
@@ -716,6 +723,287 @@ pub const Display = struct {
         self.render_stats.cells_updated_last = updates.len;
         // TODO: Get blended cell count from compositor when stats are available
         // self.render_stats.cells_blended_last = compositor_stats.cells_blended;
+    }
+
+    // ============================================================================
+    // MULTI-WINDOW RENDERING (Phase 5)
+    // ============================================================================
+    // Renders all windows in the editor using the WindowRenderer and SeparatorRenderer.
+    // This is used when there are multiple windows (splits).
+    //
+    // Architecture:
+    //   1. Iterate through all windows in the editor
+    //   2. For each window, use WindowRenderer to render to its screen region
+    //   3. Use SeparatorRenderer to draw split lines between windows
+    //   4. Position cursor at active window's cursor location
+
+    /// Render all windows in the editor (multi-window mode)
+    /// This replaces the single-window render() when splits are active
+    pub fn renderAllWindows(
+        self: *Display,
+        editor: *Editor,
+        visual_state: *const VisualState,
+        yank_highlight: *const YankHighlight,
+        cursorline_enabled: bool,
+        list_enabled: bool,
+        listchars: *const ListChars,
+        laststatus: u8,
+    ) !void {
+        // Update terminal size
+        try self.getTerminalSize();
+
+        // Recalculate layout for current terminal size
+        if (editor.window_layout) |*layout| {
+            const text_rows = if (self.terminal_rows > 1) self.terminal_rows - 1 else 1;
+            layout.calculateLayout(&editor.windows, text_rows, self.terminal_cols);
+        }
+
+        // STATISTICS: Record render start time
+        self.render_stats.recordRenderStart();
+
+        // Begin synchronized update to prevent flickering
+        try self.beginSynchronizedUpdate();
+        errdefer {
+            self.endSynchronizedUpdate() catch {};
+            self.flush() catch {};
+        }
+
+        // Hide cursor during rendering
+        try self.hideCursor();
+
+        // Clear all layers before rendering
+        self.base_layer.grid.clear();
+        self.gutter_layer.grid.clear();
+        self.cursor_layer.grid.clear();
+        self.selection_layer.grid.clear();
+        self.yank_layer.grid.clear();
+
+        // Get active window for cursor positioning
+        const active_win_id = editor.current_window_id;
+        const active_window = if (active_win_id) |id| editor.windows.get(id) else null;
+
+        // Render each window
+        var window_iter = editor.windows.valueIterator();
+        while (window_iter.next()) |win| {
+            // HashMap stores *Buffer, so get returns *Buffer directly
+            const buffer = editor.buffers.get(win.*.buffer_id) orelse continue;
+            const is_active = if (active_win_id) |id| win.*.id.eql(id) else false;
+
+            // Create render context for this window
+            const context = window_renderer.WindowRenderContext{
+                .window = win.*,
+                .buffer = buffer,
+                .region = .{
+                    .row = win.*.screen_row,
+                    .col = win.*.screen_col,
+                    .height = win.*.height,
+                    .width = win.*.width,
+                },
+                .is_active = is_active,
+                .registry = &editor.highlight_registry,
+                .visual_state = visual_state,
+                .yank_highlight = yank_highlight,
+                .cursorline_enabled = cursorline_enabled and is_active,
+                .list_enabled = list_enabled,
+                .listchars = listchars,
+                // Pass tree-sitter syntax for highlighting (shared across all windows)
+                .syntax = if (editor.syntax) |*s| s else null,
+            };
+
+            // Render window to compositor layers
+            try window_renderer.renderWindow(self, &context);
+
+            // Render window statusline to base_layer BEFORE compositor runs
+            // This ensures statuslines are part of the compositor state and don't
+            // bypass the diff algorithm (which was causing separator gaps!)
+            if (laststatus > 0) {
+                try window_renderer.renderWindowStatusline(
+                    self,
+                    win.*,
+                    buffer,
+                    .{
+                        .row = win.*.screen_row,
+                        .col = win.*.screen_col,
+                        .height = win.*.height,
+                        .width = win.*.width,
+                    },
+                    is_active,
+                    &editor.highlight_registry,
+                );
+            }
+        }
+
+        // Render separators between windows
+        // IMPORTANT: This must be AFTER statusline rendering so separators appear
+        // on top of statuslines at the intersection point
+        if (editor.window_layout) |*layout| {
+            separator_renderer.renderSeparators(self, layout, &editor.windows, &editor.highlight_registry);
+        }
+
+        // Apply virtual text overlay
+        self.virtual_text.applyToGrid(&self.virtual_text_layer.grid);
+
+        // Composite all layers
+        try self.compositor.composite(self.layer_manager.layers.items);
+
+        // Get composited output and compute diff
+        const output = self.compositor.getOutput();
+        const updates = try output.diff(self.allocator);
+        defer self.allocator.free(updates);
+
+        // Render changed cells
+        try output_renderer.renderUpdates(self, updates);
+
+        // NOTE: Statuslines are now rendered BEFORE compositor (above), not after.
+        // This fixes the separator gap bug where statuslines were bypassing the
+        // compositor's diff algorithm, causing state inconsistency between
+        // compositor buffer and actual terminal state.
+
+        // Swap buffers
+        output.swapBuffers();
+
+        // Position cursor at active window's cursor location
+        if (active_window) |win| {
+            // HashMap stores *Buffer, so get returns *Buffer directly
+            const buffer = editor.buffers.get(win.buffer_id) orelse {
+                self.render_stats.recordRenderEnd();
+                return;
+            };
+
+            // Get gutter width for this window
+            const gutter_width = self.gutter_manager.getTotalWidth();
+
+            // Calculate cursor display position using WINDOW cursor (not buffer.cursor!)
+            // Each window has its own cursor position for the same buffer
+            // Using buffer.cursor causes cursor to jump between panes in vsplit
+            const cursor_display_col = if (win.cursor.row < buffer.lineCount()) blk: {
+                const line = buffer.getLine(win.cursor.row) orelse break :blk win.cursor.col;
+                defer buffer.allocator.free(line);
+                const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
+                    line[0 .. line.len - 1]
+                else
+                    line;
+                break :blk char_width.byteToDisplayColumn(line_without_newline, win.cursor.col);
+            } else win.cursor.col;
+
+            // Calculate screen position relative to window
+            const screen_row = win.screen_row + (win.cursor.row -| win.viewport.top_line);
+            const screen_col = win.screen_col + gutter_width + (cursor_display_col -| win.viewport.left_col);
+            const clamped_col = @min(screen_col, win.screen_col + win.width - 1);
+            const clamped_row = @min(screen_row, win.screen_row + win.height - 1);
+
+            // Move cursor
+            if (self.last_cursor_row != clamped_row or self.last_cursor_col != clamped_col or updates.len > 0) {
+                try self.moveCursor(clamped_row, clamped_col);
+                self.last_cursor_row = clamped_row;
+                self.last_cursor_col = clamped_col;
+                self.render_stats.cursor_position_codes += 1;
+            }
+        }
+
+        // STATISTICS: Record render end time
+        self.render_stats.recordRenderEnd();
+        self.render_stats.layers_composited_last = self.layer_manager.layers.items.len;
+        self.render_stats.cells_updated_last = updates.len;
+    }
+
+    /// Render a window's statusline at its designated row
+    fn renderWindowStatusLine(
+        self: *Display,
+        window: *Window,
+        buffer: *Buffer,
+        is_active: bool,
+        highlight_registry: *const highlight_api.HighlightRegistry,
+    ) !void {
+        // Statusline row is immediately after the window content
+        const status_row = window.screen_row + window.height;
+
+        // Don't render if outside terminal bounds
+        if (status_row >= self.terminal_rows) return;
+
+        // Move cursor to statusline position
+        try self.moveCursor(status_row, window.screen_col);
+
+        // Get StatusLine or StatusLineNC style based on active state
+        const style_name = if (is_active) "StatusLine" else "StatusLineNC";
+        const style = highlight_registry.get(style_name);
+
+        // Apply style
+        var buf: [32]u8 = undefined;
+        const has_custom_style = style.fg != null or style.bg != null;
+
+        if (has_custom_style) {
+            if (style.fg) |fg| {
+                const rgb = fg.toRgb();
+                const fg_code = try std.fmt.bufPrint(&buf, "\x1b[38;2;{d};{d};{d}m", .{ rgb.r, rgb.g, rgb.b });
+                try self.writeOutput(fg_code);
+            }
+            if (style.bg) |bg| {
+                const rgb = bg.toRgb();
+                const bg_code = try std.fmt.bufPrint(&buf, "\x1b[48;2;{d};{d};{d}m", .{ rgb.r, rgb.g, rgb.b });
+                try self.writeOutput(bg_code);
+            }
+            if (style.modifiers.bold) {
+                try self.writeOutput("\x1b[1m");
+            }
+        } else {
+            // Fallback: inverse video for active, dim for inactive
+            if (is_active) {
+                try self.writeOutput("\x1b[7m");
+            } else {
+                try self.writeOutput("\x1b[2;7m"); // Dim + inverse
+            }
+        }
+
+        // Build statusline content: [filepath] [modified] [position]
+        const filepath = buffer.filepath orelse "[No Name]";
+        const modified_indicator: []const u8 = if (buffer.modified) " [+]" else "";
+        const position_info = try std.fmt.bufPrint(&self.stdout_buf, " {}:{}", .{ buffer.cursor.row + 1, buffer.cursor.col + 1 });
+
+        // Calculate available space
+        const available = window.width;
+        var col: usize = 0;
+
+        // Write filename (truncate if needed)
+        const max_filename_len = if (available > 20) available - 20 else available;
+        const truncated_filepath = if (filepath.len > max_filename_len)
+            filepath[filepath.len - max_filename_len ..]
+        else
+            filepath;
+
+        for (truncated_filepath) |char| {
+            if (col >= available) break;
+            try self.writeOutput(&[_]u8{char});
+            col += 1;
+        }
+
+        // Write modified indicator
+        for (modified_indicator) |char| {
+            if (col >= available) break;
+            try self.writeOutput(&[_]u8{char});
+            col += 1;
+        }
+
+        // Fill middle with spaces, then write position at end
+        const position_start = if (available > position_info.len) available - position_info.len else col;
+        while (col < position_start) : (col += 1) {
+            try self.writeOutput(" ");
+        }
+
+        // Write position info
+        for (position_info) |char| {
+            if (col >= available) break;
+            try self.writeOutput(&[_]u8{char});
+            col += 1;
+        }
+
+        // Fill remaining space
+        while (col < available) : (col += 1) {
+            try self.writeOutput(" ");
+        }
+
+        // Reset attributes
+        try self.writeOutput("\x1b[0m");
     }
 
     /// Headless render: Update compositor state WITHOUT writing to stdout

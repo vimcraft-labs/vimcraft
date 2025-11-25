@@ -25,11 +25,13 @@ const Display = @import("../../backends/terminal/display/display.zig").Display;
 /// E2E Context - holds references to editor state
 pub const E2EContext = struct {
     allocator: std.mem.Allocator,
-    buffer: *Buffer,
+    /// Function pointer to get current buffer (dynamically, not stale pointer!)
+    /// This is critical for multi-window support (splits)
+    get_current_buffer_fn: *const fn (*anyopaque) ?*Buffer,
     mode_manager: *ModeManager,
     visual_state: *VisualState,
     register_mgr: *RegisterManager,
-    /// Editor reference for executeKeys
+    /// Editor reference for executeKeys and getCurrentBuffer
     editor: *anyopaque,
     /// Function pointer to execute keys on editor
     execute_keys_fn: *const fn (*anyopaque, []const u8) anyerror!void,
@@ -37,6 +39,12 @@ pub const E2EContext = struct {
     js_state_dirty: ?*bool,
     /// Display reference for PTY capture (optional for backwards compatibility)
     display: ?*Display = null,
+
+    /// Get the current buffer (dynamically fetched, not cached)
+    /// Returns null if no buffer is active
+    pub fn getCurrentBuffer(self: *E2EContext) ?*Buffer {
+        return self.get_current_buffer_fn(self.editor);
+    }
 };
 
 /// Global context (set during registration)
@@ -54,11 +62,12 @@ fn getCursor(
     _: usize,
 ) callconv(.c) ?*c.OVHermesValue {
     const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const buffer = ctx.getCurrentBuffer() orelse return helpers.returnUndefined(runtime);
 
     // Create result object { line: n, col: n }
     const result = c.hermes_value_create_object(runtime) orelse return helpers.returnUndefined(runtime);
-    const line_val = c.hermes_value_create_number(runtime, @floatFromInt(ctx.buffer.cursor.row));
-    const col_val = c.hermes_value_create_number(runtime, @floatFromInt(ctx.buffer.cursor.col));
+    const line_val = c.hermes_value_create_number(runtime, @floatFromInt(buffer.cursor.row));
+    const col_val = c.hermes_value_create_number(runtime, @floatFromInt(buffer.cursor.col));
 
     if (line_val != null and col_val != null) {
         c.hermes_value_set_property(runtime, result, "line", line_val);
@@ -90,6 +99,7 @@ fn getState(
     _: usize,
 ) callconv(.c) ?*c.OVHermesValue {
     const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const buffer = ctx.getCurrentBuffer() orelse return helpers.returnUndefined(runtime);
     const allocator = ctx.allocator;
 
     // Create result object
@@ -106,8 +116,8 @@ fn getState(
     // cursor
     const cursor_obj = c.hermes_value_create_object(runtime);
     if (cursor_obj) |co| {
-        const line_val = c.hermes_value_create_number(runtime, @floatFromInt(ctx.buffer.cursor.row));
-        const col_val = c.hermes_value_create_number(runtime, @floatFromInt(ctx.buffer.cursor.col));
+        const line_val = c.hermes_value_create_number(runtime, @floatFromInt(buffer.cursor.row));
+        const col_val = c.hermes_value_create_number(runtime, @floatFromInt(buffer.cursor.col));
         if (line_val) |lv| {
             c.hermes_value_set_property(runtime, co, "line", lv);
             c.hermes_value_destroy(lv);
@@ -163,23 +173,23 @@ fn getState(
     // buffer
     const buffer_obj = c.hermes_value_create_object(runtime);
     if (buffer_obj) |bo| {
-        const modified_val = c.hermes_value_create_boolean(runtime, ctx.buffer.modified);
+        const modified_val = c.hermes_value_create_boolean(runtime, buffer.modified);
         if (modified_val) |mv| {
             c.hermes_value_set_property(runtime, bo, "modified", mv);
             c.hermes_value_destroy(mv);
         }
-        const line_count_val = c.hermes_value_create_number(runtime, @floatFromInt(ctx.buffer.lineCount()));
+        const line_count_val = c.hermes_value_create_number(runtime, @floatFromInt(buffer.lineCount()));
         if (line_count_val) |lcv| {
             c.hermes_value_set_property(runtime, bo, "lineCount", lcv);
             c.hermes_value_destroy(lcv);
         }
 
         // buffer.lines (array of strings)
-        const line_count = ctx.buffer.lineCount();
+        const line_count = buffer.lineCount();
         const lines_arr = c.hermes_array_create(runtime, line_count);
         if (lines_arr) |la| {
             for (0..line_count) |i| {
-                if (ctx.buffer.getLine(i)) |line| {
+                if (buffer.getLine(i)) |line| {
                     defer allocator.free(line);
                     // Remove trailing newline for cleaner API
                     const trimmed = if (line.len > 0 and line[line.len - 1] == '\n')
@@ -211,10 +221,11 @@ fn getBufferContent(
     _: usize,
 ) callconv(.c) ?*c.OVHermesValue {
     const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const buffer = ctx.getCurrentBuffer() orelse return helpers.returnUndefined(runtime);
 
     // Get full buffer content
-    const content = ctx.buffer.content.toString() catch return helpers.returnUndefined(runtime);
-    defer ctx.buffer.content.allocator.free(content);
+    const content = buffer.content.toString() catch return helpers.returnUndefined(runtime);
+    defer buffer.content.allocator.free(content);
 
     return c.hermes_value_create_string(runtime, content.ptr, content.len);
 }
@@ -227,6 +238,7 @@ fn getLine(
     arg_count: usize,
 ) callconv(.c) ?*c.OVHermesValue {
     const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const buffer = ctx.getCurrentBuffer() orelse return helpers.returnUndefined(runtime);
 
     if (arg_count < 1) return helpers.returnUndefined(runtime);
 
@@ -234,7 +246,7 @@ fn getLine(
     const line_num = helpers.extractNumberArg(runtime.?, arg) catch return helpers.returnUndefined(runtime);
     const line_idx: usize = @intFromFloat(line_num);
 
-    if (ctx.buffer.getLine(line_idx)) |line| {
+    if (buffer.getLine(line_idx)) |line| {
         defer ctx.allocator.free(line);
         // Remove trailing newline
         const trimmed = if (line.len > 0 and line[line.len - 1] == '\n')
@@ -869,24 +881,50 @@ fn ptyRender(
     // When capture mode is active (for PTY testing), always use full render
     // to generate ANSI escape codes. Otherwise, use headless for clean output.
     if (g_verbose or display.capture_mode) {
-        display.render(
-            editor_ctx,
-            "-- NORMAL --", // Default status line
-            false, // cursorline disabled
-            ctx.visual_state,
-            &editor_ctx.editor.yank_highlight,
-            false, // list mode disabled
-            &listchars,
-            2, // laststatus = always show
-        ) catch |err| {
-            var msg_buf: [256]u8 = undefined;
-            const msg = std.fmt.bufPrint(&msg_buf, "render failed: {}", .{err}) catch "render failed";
-            if (msg.len < msg_buf.len) {
-                msg_buf[msg.len] = 0;
-            }
-            c.hermes_throw_error(runtime, msg.ptr);
-            return null;
-        };
+        // Check if multi-window mode (more than 1 window)
+        // Multi-window requires renderAllWindows() which includes separator rendering
+        const is_multi_window = editor_ctx.editor.windows.count() > 1;
+
+        if (is_multi_window) {
+            // Multi-window mode: Use renderAllWindows for separator rendering
+            display.renderAllWindows(
+                &editor_ctx.editor,
+                ctx.visual_state,
+                &editor_ctx.editor.yank_highlight,
+                false, // cursorline disabled
+                false, // list mode disabled
+                &listchars,
+                2, // laststatus = always show
+            ) catch |err| {
+                var msg_buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "renderAllWindows failed: {}", .{err}) catch "render failed";
+                if (msg.len < msg_buf.len) {
+                    msg_buf[msg.len] = 0;
+                }
+                c.hermes_throw_error(runtime, msg.ptr);
+                return null;
+            };
+        } else {
+            // Single window mode: Use standard render
+            display.render(
+                editor_ctx,
+                "-- NORMAL --", // Default status line
+                false, // cursorline disabled
+                ctx.visual_state,
+                &editor_ctx.editor.yank_highlight,
+                false, // list mode disabled
+                &listchars,
+                2, // laststatus = always show
+            ) catch |err| {
+                var msg_buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "render failed: {}", .{err}) catch "render failed";
+                if (msg.len < msg_buf.len) {
+                    msg_buf[msg.len] = 0;
+                }
+                c.hermes_throw_error(runtime, msg.ptr);
+                return null;
+            };
+        }
     } else {
         // Headless render: Update compositor state WITHOUT writing to stdout
         // This keeps stdout clean for JSON test results
@@ -1053,6 +1091,7 @@ fn assertCursorAt(
     arg_count: usize,
 ) callconv(.c) ?*c.OVHermesValue {
     const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const buffer = ctx.getCurrentBuffer() orelse return helpers.returnUndefined(runtime);
 
     if (arg_count < 2) {
         c.hermes_throw_error(runtime, "assert.cursorAt requires 2 arguments (line, col)");
@@ -1068,8 +1107,8 @@ fn assertCursorAt(
         return null;
     };
 
-    const actual_line = ctx.buffer.cursor.row;
-    const actual_col = ctx.buffer.cursor.col;
+    const actual_line = buffer.cursor.row;
+    const actual_col = buffer.cursor.col;
 
     if (@as(usize, @intFromFloat(expected_line)) != actual_line or
         @as(usize, @intFromFloat(expected_col)) != actual_col)
@@ -1095,6 +1134,7 @@ fn assertBufferContains(
     arg_count: usize,
 ) callconv(.c) ?*c.OVHermesValue {
     const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const buffer = ctx.getCurrentBuffer() orelse return helpers.returnUndefined(runtime);
 
     if (arg_count < 1) {
         c.hermes_throw_error(runtime, "assert.bufferContains requires 1 argument");
@@ -1111,11 +1151,11 @@ fn assertBufferContains(
     const expected = expected_ptr[0..expected_len];
 
     // Get buffer content
-    const content = ctx.buffer.content.toString() catch {
+    const content = buffer.content.toString() catch {
         c.hermes_throw_error(runtime, "Failed to get buffer content");
         return null;
     };
-    defer ctx.buffer.content.allocator.free(content);
+    defer buffer.content.allocator.free(content);
 
     if (std.mem.indexOf(u8, content, expected) == null) {
         var msg_buf: [512]u8 = undefined;
@@ -1513,18 +1553,21 @@ const MAX_PREVIEW_LINES: usize = 10;
 
 /// Capture current editor state as a snapshot
 fn captureStateSnapshot(allocator: std.mem.Allocator, ctx: *E2EContext) ?StateSnapshot {
+    // Get current buffer (dynamic lookup for multi-window support)
+    const buffer = ctx.getCurrentBuffer() orelse return null;
+
     // Get mode string (static, no allocation needed)
     const mode = ctx.mode_manager.getModeString();
 
     // Get line count
-    const line_count = ctx.buffer.lineCount();
+    const line_count = buffer.lineCount();
 
     // Capture first N lines for preview
     const preview_count = @min(line_count, MAX_PREVIEW_LINES);
     var preview_lines = allocator.alloc([]const u8, preview_count) catch return null;
 
     for (0..preview_count) |i| {
-        if (ctx.buffer.getLine(i)) |line| {
+        if (buffer.getLine(i)) |line| {
             // Remove trailing newline for cleaner output
             const trimmed = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
@@ -1547,8 +1590,8 @@ fn captureStateSnapshot(allocator: std.mem.Allocator, ctx: *E2EContext) ?StateSn
 
     return StateSnapshot{
         .mode = mode,
-        .cursor_line = ctx.buffer.cursor.row,
-        .cursor_col = ctx.buffer.cursor.col,
+        .cursor_line = buffer.cursor.row,
+        .cursor_col = buffer.cursor.col,
         .line_count = line_count,
         .buffer_preview = preview_lines,
     };

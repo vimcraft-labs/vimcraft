@@ -566,6 +566,9 @@ pub const TerminalBackend = struct {
     }
 
     /// Handle mouse events (terminal-specific feature)
+    /// Supports both single-window and multi-window (split) modes:
+    /// - In multi-window mode: clicking a window focuses it and moves cursor within that window
+    /// - In single-window mode: clicking moves cursor to clicked position
     fn handleMouseEvent(self: *TerminalBackend, input: []const u8) !bool {
         // Check for SGR mouse events: ESC[<button;col;row;M or ESC[<button;col;row;m
         if (input.len < 6 or input[0] != 27 or input[1] != '[' or input[2] != '<') {
@@ -610,29 +613,99 @@ pub const TerminalBackend = struct {
             const screen_row = if (row > 0) row - 1 else 0;
             const screen_col = if (col > 0) col - 1 else 0;
 
-            // Account for gutter width (line numbers, signs, etc.)
-            const gutter_width = self.display.gutter_manager.getTotalWidth();
+            // Check if we have multiple windows (split mode)
+            const has_multiple_windows = self.editor.windows.count() > 1;
 
-            // Use saturating addition to prevent integer overflow
-            const buffer_row = self.display.viewport_top +| screen_row;
-            const text_col = if (screen_col >= gutter_width)
-                screen_col - gutter_width
-            else
-                0;
-            const buffer_col = self.display.viewport_left +| text_col;
+            if (has_multiple_windows) {
+                // MULTI-WINDOW MODE: Find which window was clicked and focus it
+                const Window = @import("../../editor/window.zig").Window;
+                const WindowId = @import("../../editor/window.zig").WindowId;
 
-            // Move cursor to clicked position (clamped to buffer bounds)
-            const buf = self.editor.getCurrentBuffer() orelse return true;
-            if (buffer_row < buf.lineCount()) {
-                const line = buf.getLine(buffer_row) orelse return true;
-                defer buf.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
-                const line_len = if (line.len > 0 and line[line.len - 1] == '\n')
-                    line.len - 1
+                // Find window containing the clicked screen position
+                var clicked_window_id: ?WindowId = null;
+                var window_iter = self.editor.windows.valueIterator();
+                while (window_iter.next()) |win| {
+                    // Check if click is within this window's bounds
+                    const win_row_start = win.*.screen_row;
+                    const win_row_end = win.*.screen_row + win.*.height;
+                    const win_col_start = win.*.screen_col;
+                    const win_col_end = win.*.screen_col + win.*.width;
+
+                    if (screen_row >= win_row_start and screen_row < win_row_end and
+                        screen_col >= win_col_start and screen_col < win_col_end)
+                    {
+                        clicked_window_id = win.*.id;
+                        break;
+                    }
+                }
+
+                if (clicked_window_id) |win_id| {
+                    // Focus this window
+                    self.editor.current_window_id = win_id;
+
+                    // Get the window pointer for accessing its properties
+                    // windows is HashMap(WindowId, *Window) - get() returns ?*Window
+                    const win: *Window = self.editor.windows.get(win_id) orelse return true;
+
+                    // Calculate position within the window
+                    const local_row = screen_row - win.screen_row;
+                    const local_col = screen_col - win.screen_col;
+
+                    // Account for gutter width (line numbers, signs, etc.)
+                    const gutter_width = self.display.gutter_manager.getTotalWidth();
+                    const text_col = if (local_col >= gutter_width)
+                        local_col - gutter_width
+                    else
+                        0;
+
+                    // Convert to buffer coordinates using window's viewport
+                    const buffer_row = win.viewport.top_line +| local_row;
+                    const buffer_col = win.viewport.left_col +| text_col;
+
+                    // Get the buffer for this window
+                    // HashMap stores *Buffer, so get returns *Buffer directly
+                    const buf = self.editor.buffers.get(win.buffer_id) orelse return true;
+
+                    // Move BUFFER cursor to clicked position (clamped to buffer bounds)
+                    // The buffer cursor is the source of truth - rendering uses buffer.cursor
+                    if (buffer_row < buf.lineCount()) {
+                        const line = buf.getLine(buffer_row) orelse return true;
+                        defer buf.allocator.free(line);
+                        const line_len = if (line.len > 0 and line[line.len - 1] == '\n')
+                            line.len - 1
+                        else
+                            line.len;
+
+                        buf.cursor.row = buffer_row;
+                        buf.cursor.col = @min(buffer_col, line_len);
+                    }
+                }
+            } else {
+                // SINGLE-WINDOW MODE: Original behavior
+                // Account for gutter width (line numbers, signs, etc.)
+                const gutter_width = self.display.gutter_manager.getTotalWidth();
+
+                // Use saturating addition to prevent integer overflow
+                const buffer_row = self.display.viewport_top +| screen_row;
+                const text_col = if (screen_col >= gutter_width)
+                    screen_col - gutter_width
                 else
-                    line.len;
+                    0;
+                const buffer_col = self.display.viewport_left +| text_col;
 
-                buf.cursor.row = buffer_row;
-                buf.cursor.col = @min(buffer_col, line_len);
+                // Move cursor to clicked position (clamped to buffer bounds)
+                const buf = self.editor.getCurrentBuffer() orelse return true;
+                if (buffer_row < buf.lineCount()) {
+                    const line = buf.getLine(buffer_row) orelse return true;
+                    defer buf.allocator.free(line);
+                    const line_len = if (line.len > 0 and line[line.len - 1] == '\n')
+                        line.len - 1
+                    else
+                        line.len;
+
+                    buf.cursor.row = buffer_row;
+                    buf.cursor.col = @min(buffer_col, line_len);
+                }
             }
         }
 
@@ -790,7 +863,8 @@ pub const TerminalBackend = struct {
         // CRITICAL FIX: Also check needs_layer_update for cursorline/relativenumber/linenumber (cursor row changed)
         // CRITICAL FIX: Also check mode_changed for status line updates (i/ESC changes mode display)
         // CRITICAL FIX: Also check js_state_changed for hot reload (highlight changes require full render)
-        if (!buffer_changed and !yank_active and !visual_active and !viewport_scroll_needed and !viewport_top_changed and !needs_layer_update and !mode_changed and !js_state_changed) {
+        // CRITICAL FIX: Also check current_mode_is_command - command mode needs full render to show command buffer
+        if (!buffer_changed and !yank_active and !visual_active and !viewport_scroll_needed and !viewport_top_changed and !needs_layer_update and !mode_changed and !js_state_changed and !current_mode_is_command) {
             // Only cursor moved (Normal mode) - use lightweight path
             try self.display.renderCursorOnly(self.editor);
 
@@ -865,17 +939,34 @@ pub const TerminalBackend = struct {
         else
             2;
 
-        // Render to display
-        try self.display.render(
-            self.editor,
-            status,
-            cursorline_enabled,
-            &self.editor.visual_state,
-            &self.editor.yank_highlight,
-            list_enabled,
-            &listchars,
-            laststatus,
-        );
+        // Choose render path: single-window vs multi-window
+        // Use renderAllWindows when there are multiple windows (splits active)
+        const has_multiple_windows = self.editor.windows.count() > 1;
+
+        if (has_multiple_windows) {
+            // MULTI-WINDOW RENDER PATH: Use the window renderer
+            try self.display.renderAllWindows(
+                self.editor,
+                &self.editor.visual_state,
+                &self.editor.yank_highlight,
+                cursorline_enabled,
+                list_enabled,
+                &listchars,
+                laststatus,
+            );
+        } else {
+            // SINGLE-WINDOW RENDER PATH: Use the original render function
+            try self.display.render(
+                self.editor,
+                status,
+                cursorline_enabled,
+                &self.editor.visual_state,
+                &self.editor.yank_highlight,
+                list_enabled,
+                &listchars,
+                laststatus,
+            );
+        }
 
         // Set cursor shape ONLY when mode changes (prevent flickering during rapid input)
         // PERFORMANCE FIX: Sending cursor shape codes on every render (10+ times/sec when holding a key)

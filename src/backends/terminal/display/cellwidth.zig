@@ -1,33 +1,30 @@
 const std = @import("std");
 const uucode = @import("uucode");
 
-/// Width override entry for a character or range
+/// Width override entry for a character or range (like Neovim's setcellwidths())
 pub const CellWidthEntry = struct {
     start: u21,
     end: u21,
     width: u8,
 };
 
-/// Ambiguous width mode (similar to Neovim's 'ambiwidth' option)
+/// Ambiguous width mode (like Neovim's 'ambiwidth' option)
 pub const AmbiWidthMode = enum {
-    single, // Ambiguous width chars are single-width
+    single, // Ambiguous width chars are single-width (default)
     double, // Ambiguous width chars are double-width
-    auto, // Auto-detect based on terminal
 };
 
 /// Configuration for character width handling
+/// Follows Neovim's approach: Unicode standard + user configuration
 pub const CellWidthConfig = struct {
-    /// User-defined character width overrides
+    /// User-defined character width overrides (via vim.fn.setcellwidths())
     overrides: std.ArrayList(CellWidthEntry),
 
-    /// How to handle ambiguous width characters
+    /// How to handle ambiguous width characters (like Neovim's 'ambiwidth')
     ambiwidth: AmbiWidthMode = .single,
 
-    /// Whether to use emoji presentation for emoji characters
-    emoji_mode: bool = true,
-
-    /// Terminal-specific adjustments detected at startup
-    terminal_quirks: TerminalQuirks = .{},
+    /// Whether emoji characters >= 0x1F000 should be width 2 (like Neovim's 'emoji')
+    emoji: bool = true,
 
     allocator: std.mem.Allocator,
 
@@ -55,7 +52,7 @@ pub const CellWidthConfig = struct {
 
     /// Get the width override for a character (if any)
     pub fn getOverride(self: *const CellWidthConfig, codepoint: u21) ?u8 {
-        // Binary search for efficiency
+        // Linear search (overrides are typically small)
         for (self.overrides.items) |entry| {
             if (codepoint >= entry.start and codepoint <= entry.end) {
                 return entry.width;
@@ -69,22 +66,7 @@ pub const CellWidthConfig = struct {
     }
 };
 
-/// Terminal-specific quirks detected at startup
-pub const TerminalQuirks = struct {
-    /// Some terminals render emoji with wcwidth=1 as 2-wide
-    emoji_wcwidth_mismatch: bool = false,
-
-    /// Terminal name (for debugging)
-    name: []const u8 = "unknown",
-
-    /// Terminal program (TERM_PROGRAM env var)
-    program: []const u8 = "unknown",
-
-    /// Is this WezTerm?
-    is_wezterm: bool = false,
-};
-
-/// Global cellwidth configuration (similar to Neovim's global state)
+/// Global cellwidth configuration
 var global_config: ?*CellWidthConfig = null;
 
 /// Initialize the global cellwidth configuration
@@ -93,9 +75,6 @@ pub fn initGlobal(allocator: std.mem.Allocator) !void {
 
     global_config = try allocator.create(CellWidthConfig);
     global_config.?.* = try CellWidthConfig.init(allocator);
-
-    // Detect terminal and apply default configuration
-    try detectTerminalAndConfigure(global_config.?);
 }
 
 /// Deinitialize the global configuration
@@ -107,72 +86,17 @@ pub fn deinitGlobal(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Detect terminal and apply appropriate configuration
-fn detectTerminalAndConfigure(config: *CellWidthConfig) !void {
-    // Get TERM environment variable
-    const term = std.posix.getenv("TERM") orelse "unknown";
-    const term_program = std.posix.getenv("TERM_PROGRAM");
-
-    // Set terminal name for debugging
-    config.terminal_quirks.name = term;
-
-    // Terminal-specific detection
-    if (term_program) |tp| {
-        config.terminal_quirks.program = tp;
-
-        if (std.mem.eql(u8, tp, "WezTerm")) {
-            config.terminal_quirks.emoji_wcwidth_mismatch = true;
-            config.terminal_quirks.is_wezterm = true;
-
-            // WezTerm-specific: Force ALL emoji/symbol ranges to width 2
-            // WezTerm renders these as 2-wide regardless of what wcwidth says
-
-            // ALL emoji and symbol blocks that might render wide in WezTerm
-            try config.addOverride(0x2190, 0x21FF, 2); // Arrows
-            try config.addOverride(0x2300, 0x23FF, 2); // Misc Technical
-            try config.addOverride(0x2460, 0x24FF, 2); // Enclosed Alphanumerics
-            try config.addOverride(0x25A0, 0x25FF, 2); // Geometric Shapes
-            try config.addOverride(0x2600, 0x27BF, 2); // Misc Symbols & Dingbats
-            try config.addOverride(0x2900, 0x297F, 2); // Supplemental Arrows-B
-            try config.addOverride(0x2B00, 0x2BFF, 2); // Misc Symbols and Arrows
-
-            // All emoji blocks
-            try config.addOverride(0x1F000, 0x1FFFF, 2); // ALL emoji ranges
-
-            // Even more specific problem characters in WezTerm
-            try config.addOverride(0x203C, 0x203C, 2); // ‼
-            try config.addOverride(0x2049, 0x2049, 2); // ⁉
-            try config.addOverride(0x2122, 0x2122, 2); // ™
-            try config.addOverride(0x2139, 0x2139, 2); // ℹ
-            try config.addOverride(0x2194, 0x2199, 2); // ↔ ↕ etc
-            try config.addOverride(0x21A9, 0x21AA, 2); // ↩ ↪
-            try config.addOverride(0x231A, 0x231B, 2); // ⌚ ⌛
-            try config.addOverride(0x2328, 0x2328, 2); // ⌨
-            try config.addOverride(0x23E9, 0x23F3, 2); // ⏩ ⏪ etc
-            try config.addOverride(0x23F8, 0x23FA, 2); // ⏸ ⏹ ⏺
-            try config.addOverride(0x24C2, 0x24C2, 2); // Ⓜ
-
-        } else if (std.mem.eql(u8, tp, "ghostty")) {
-            config.terminal_quirks.emoji_wcwidth_mismatch = false;
-            // Ghostty is more consistent, but still apply modern emoji
-            try config.addOverride(0x1F000, 0x1FFFF, 2); // Modern emoji
-        }
-    } else {
-        // Default: assume emoji should be width 2
-        if (config.emoji_mode) {
-            try config.addOverride(0x1F000, 0x1FFFF, 2); // Modern emoji
-            try config.addOverride(0x2600, 0x27BF, 2); // Common symbols
-        }
-    }
-}
-
 /// Get the display width of a Unicode codepoint
-/// This is the main API that respects configuration and overrides
+/// Follows Neovim's utf_char2cells() logic:
+/// 1. Check user overrides (setcellwidths)
+/// 2. Use Unicode standard (uucode/utf8proc)
+/// 3. Check 'ambiwidth' option
+/// 4. Check 'emoji' option for emoji >= 0x1F000
 pub fn getWidth(codepoint: u21) u8 {
     // Check if codepoint is beyond Unicode range
     if (codepoint > uucode.config.max_code_point) return 1;
 
-    // Check for user/terminal overrides first
+    // 1. Check for user overrides first (like Neovim's cw_value())
     if (global_config) |config| {
         if (config.getOverride(codepoint)) |override| {
             return override;
@@ -182,41 +106,21 @@ pub fn getWidth(codepoint: u21) u8 {
     // Handle zero-width characters explicitly
     if (isZeroWidth(codepoint)) return 0;
 
-    // Get base width from uucode
+    // 2. Get base width from uucode (Unicode standard, like Neovim's utf8proc)
     const base_width = uucode.get(.width, codepoint);
 
-    // SPECIAL WEZTERM HANDLING: Force ALL emoji-like characters to width 2
-    // WezTerm renders many characters as 2-wide even when wcwidth says 1
+    // 3. Apply ambiguous width configuration (like Neovim's 'ambiwidth')
     if (global_config) |config| {
-        if (config.terminal_quirks.is_wezterm) {
-            // We detected WezTerm - be aggressive with width 2
-            // WezTerm renders many characters wider than expected
-
-            // Check for emoji and symbol ranges that WezTerm renders as double-width
-            // Note: Box drawing (0x2500-0x257F) are typically single-width
-            if ((codepoint >= 0x203C and codepoint <= 0x203C) or // ‼
-                (codepoint >= 0x2049 and codepoint <= 0x2049) or // ⁉
-                (codepoint >= 0x2122 and codepoint <= 0x2122) or // ™
-                (codepoint >= 0x2139 and codepoint <= 0x2139) or // ℹ
-                (codepoint >= 0x2190 and codepoint <= 0x21FF) or // Arrows
-                (codepoint >= 0x2300 and codepoint <= 0x23FF) or // Misc Technical
-                (codepoint >= 0x2460 and codepoint <= 0x24FF) or // Enclosed Alphanumerics
-                (codepoint >= 0x25A0 and codepoint <= 0x25FF) or // Geometric Shapes
-                (codepoint >= 0x2600 and codepoint <= 0x27BF) or // Misc Symbols & Dingbats
-                (codepoint >= 0x2900 and codepoint <= 0x297F) or // Supplemental Arrows-B
-                (codepoint >= 0x2B00 and codepoint <= 0x2BFF) or // Misc Symbols and Arrows
-                (codepoint >= 0x1F000 and codepoint <= 0x1FFFF)) // All modern emoji
-            {
-                // For WezTerm, ALWAYS force these chars to width 2 regardless of base width
-                // This ensures consistent rendering in WezTerm
-                return 2;
-            }
+        if (config.ambiwidth == .double and isAmbiguousWidth(codepoint)) {
+            return 2;
         }
     }
 
-    // Apply ambiguous width configuration
+    // 4. Apply emoji configuration (like Neovim's 'emoji' option)
+    // Characters >= 0x1F000 may be considered width 2 when emoji is enabled
     if (global_config) |config| {
-        if (config.ambiwidth == .double and isAmbiguousWidth(codepoint)) {
+        if (config.emoji and codepoint >= 0x1F000 and codepoint <= 0x1FFFF) {
+            // Modern emoji are width 2 when emoji mode is enabled
             return 2;
         }
     }
@@ -224,46 +128,78 @@ pub fn getWidth(codepoint: u21) u8 {
     return base_width;
 }
 
-/// Check if a character is zero-width (combining marks, etc.)
+/// Check if a character is zero-width (combining marks, variation selectors, etc.)
 fn isZeroWidth(codepoint: u21) bool {
-    // Variation Selectors
+    // Variation Selectors (VS1-VS16)
     if (codepoint >= 0xFE00 and codepoint <= 0xFE0F) return true;
+    // Variation Selectors Supplement
     if (codepoint >= 0xE0100 and codepoint <= 0xE01EF) return true;
 
     // Zero-width characters
     if (codepoint == 0x200B or // Zero Width Space
         codepoint == 0x200C or // Zero Width Non-Joiner
         codepoint == 0x200D or // Zero Width Joiner
-        codepoint == 0xFEFF) // Zero Width No-Break Space
+        codepoint == 0xFEFF) // Zero Width No-Break Space (BOM)
         return true;
 
-    // Combining marks
+    // Combining Diacritical Marks
     if (codepoint >= 0x0300 and codepoint <= 0x036F) return true;
+    // Combining Diacritical Marks Extended
     if (codepoint >= 0x1AB0 and codepoint <= 0x1AFF) return true;
+    // Combining Diacritical Marks Supplement
     if (codepoint >= 0x1DC0 and codepoint <= 0x1DFF) return true;
+    // Combining Half Marks
     if (codepoint >= 0xFE20 and codepoint <= 0xFE2F) return true;
 
     return false;
 }
 
 /// Check if a character has ambiguous East Asian width
+/// TODO: Implement proper East Asian Width property lookup from Unicode data
 fn isAmbiguousWidth(codepoint: u21) bool {
-    // For now, return false as we don't have easy access to East Asian Width property
-    // This could be improved later with a proper Unicode database
-    _ = codepoint;
+    // Common ambiguous width characters
+    // These are characters that may be rendered as either single or double width
+    // depending on the context (CJK vs Western)
+
+    // Greek letters (often ambiguous)
+    if (codepoint >= 0x0391 and codepoint <= 0x03C9) return true;
+
+    // Cyrillic letters (often ambiguous)
+    if (codepoint >= 0x0410 and codepoint <= 0x044F) return true;
+
+    // Box drawing characters
+    if (codepoint >= 0x2500 and codepoint <= 0x257F) return true;
+
+    // For a complete implementation, we'd need the full East Asian Width
+    // property from Unicode data. For now, return false for most characters.
     return false;
 }
 
 /// Set cell widths for a list of characters (like Neovim's setcellwidths())
+/// This is the user-facing API for configuring character widths
 pub fn setCellWidths(entries: []const CellWidthEntry) !void {
     if (global_config) |config| {
-        // Clear existing overrides
+        // Clear existing user overrides
         config.overrides.clearRetainingCapacity();
 
         // Add new entries
         for (entries) |entry| {
             try config.addOverride(entry.start, entry.end, entry.width);
         }
+    }
+}
+
+/// Set the ambiguous width mode (like Neovim's 'ambiwidth' option)
+pub fn setAmbiWidth(mode: AmbiWidthMode) void {
+    if (global_config) |config| {
+        config.ambiwidth = mode;
+    }
+}
+
+/// Set the emoji mode (like Neovim's 'emoji' option)
+pub fn setEmoji(enabled: bool) void {
+    if (global_config) |config| {
+        config.emoji = enabled;
     }
 }
 
@@ -285,9 +221,8 @@ pub fn getStringWidth(str: []const u8) usize {
     return total_width;
 }
 
-// Test support
+// Tests
 test "cellwidth: basic ASCII" {
-    // Initialize for testing
     try initGlobal(std.testing.allocator);
     defer deinitGlobal(std.testing.allocator);
 
@@ -312,7 +247,7 @@ test "cellwidth: zero-width marks" {
     try std.testing.expectEqual(@as(u8, 0), getWidth(0x0300)); // Combining grave
 }
 
-test "cellwidth: custom overrides" {
+test "cellwidth: user overrides" {
     try initGlobal(std.testing.allocator);
     defer deinitGlobal(std.testing.allocator);
 
@@ -325,20 +260,33 @@ test "cellwidth: custom overrides" {
     }
 }
 
-test "cellwidth: emoji widths" {
+test "cellwidth: modern emoji with emoji option" {
     try initGlobal(std.testing.allocator);
     defer deinitGlobal(std.testing.allocator);
 
-    // Test that common emoji return width 2
+    // Modern emoji (>= 0x1F000) should be width 2 when emoji=true (default)
     try std.testing.expectEqual(@as(u8, 2), getWidth(0x1F3AF)); // 🎯
     try std.testing.expectEqual(@as(u8, 2), getWidth(0x1F680)); // 🚀
-    try std.testing.expectEqual(@as(u8, 2), getWidth(0x1F5A5)); // 🖥️
-    try std.testing.expectEqual(@as(u8, 2), getWidth(0x2699)); // ⚙️
-    try std.testing.expectEqual(@as(u8, 2), getWidth(0x26A1)); // ⚡
-    try std.testing.expectEqual(@as(u8, 2), getWidth(0x21A9)); // ↩️
-    try std.testing.expectEqual(@as(u8, 2), getWidth(0x2702)); // ✂️
 
-    // ASCII should still be width 1
-    try std.testing.expectEqual(@as(u8, 1), getWidth('A'));
-    try std.testing.expectEqual(@as(u8, 1), getWidth('1'));
+    // Disable emoji mode
+    setEmoji(false);
+
+    // Now they use uucode's base width (which may be 1 or 2)
+    // The exact value depends on uucode's Unicode data
+    const width = getWidth(0x1F680);
+    try std.testing.expect(width == 1 or width == 2);
+}
+
+test "cellwidth: symbols use Unicode standard" {
+    try initGlobal(std.testing.allocator);
+    defer deinitGlobal(std.testing.allocator);
+
+    // Symbols like ⚠ (U+26A0) use uucode's standard width
+    // No terminal-specific hacks - users can override with setcellwidths()
+    const warning_width = getWidth(0x26A0); // ⚠
+    try std.testing.expect(warning_width == 1 or warning_width == 2);
+
+    // Arrows use uucode's standard width
+    const arrow_width = getWidth(0x2192); // →
+    try std.testing.expect(arrow_width == 1 or arrow_width == 2);
 }

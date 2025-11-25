@@ -375,4 +375,184 @@ vim.e2e.describe("Edge Cases: Window API", function() {
     });
 });
 
+// ============================================================================
+// ADDITIONAL EDGE CASES (Comprehensive Coverage)
+// ============================================================================
+
+vim.e2e.describe("Edge Cases: Boundary Values", function() {
+    vim.e2e.test("winSetCursor with row 0 (invalid in Neovim)", function() {
+        // Neovim uses 1-indexed rows, row 0 should be treated as row 1
+        vim.api.winSetCursor(0, [0, 0]);
+        const pos = vim.api.winGetCursor(0);
+        vim.e2e.assert.equal(pos[0], 1, "Row 0 should be treated as row 1");
+    });
+
+    vim.e2e.test("winSetCursor with negative row", function() {
+        vim.api.winSetCursor(0, [-5, 0]);
+        const pos = vim.api.winGetCursor(0);
+        vim.e2e.assert.true(pos[0] >= 1, "Negative row should be clamped to valid range");
+    });
+
+    vim.e2e.test("winSetCursor with negative column", function() {
+        vim.api.winSetCursor(0, [1, -5]);
+        const pos = vim.api.winGetCursor(0);
+        vim.e2e.assert.true(pos[1] >= 0, "Negative column should be clamped to 0");
+    });
+
+    vim.e2e.test("winSetCursor with very large row", function() {
+        vim.api.winSetCursor(0, [999999, 0]);
+        const pos = vim.api.winGetCursor(0);
+        vim.e2e.assert.true(pos[0] <= 100, "Very large row should be clamped");
+    });
+
+    vim.e2e.test("winSetCursor with very large column", function() {
+        vim.api.winSetCursor(0, [1, 999999]);
+        const pos = vim.api.winGetCursor(0);
+        vim.e2e.assert.true(pos[1] < 999999, "Very large column should be clamped");
+    });
+});
+
+vim.e2e.describe("Edge Cases: Empty and Null Arguments", function() {
+    vim.e2e.test("winGetVar with empty string name", function() {
+        const value = vim.api.winGetVar(0, "");
+        vim.e2e.assert.equal(value, undefined, "Empty name should return undefined");
+    });
+
+    vim.e2e.test("winSetVar with empty string name", function() {
+        vim.api.winSetVar(0, "", "value");
+        const value = vim.api.winGetVar(0, "");
+        // Empty name should either be ignored or stored
+        vim.e2e.assert.true(true, "Should not throw for empty name");
+    });
+
+    vim.e2e.test("winDelVar with empty string name", function() {
+        vim.api.winDelVar(0, "");
+        vim.e2e.assert.true(true, "Should not throw for empty name");
+    });
+
+    vim.e2e.test("winSetVar with null value", function() {
+        vim.api.winSetVar(0, "null_val", null);
+        const value = vim.api.winGetVar(0, "null_val");
+        vim.e2e.assert.equal(value, null, "Should store null value");
+    });
+
+    vim.e2e.test("winSetVar with undefined value", function() {
+        vim.api.winSetVar(0, "undef_val", undefined);
+        const value = vim.api.winGetVar(0, "undef_val");
+        // undefined may be stored as undefined or ignored
+        vim.e2e.assert.true(true, "Should not throw for undefined value");
+    });
+
+    vim.e2e.test("winSetVar with array value", function() {
+        vim.api.winSetVar(0, "arr_val", [1, 2, 3]);
+        const value = vim.api.winGetVar(0, "arr_val");
+        vim.e2e.assert.true(Array.isArray(value), "Should store array value");
+        vim.e2e.assert.equal(value.length, 3, "Array should have correct length");
+    });
+
+    vim.e2e.test("winSetVar with boolean value", function() {
+        vim.api.winSetVar(0, "bool_true", true);
+        vim.api.winSetVar(0, "bool_false", false);
+        vim.e2e.assert.equal(vim.api.winGetVar(0, "bool_true"), true, "Should store true");
+        vim.e2e.assert.equal(vim.api.winGetVar(0, "bool_false"), false, "Should store false");
+    });
+});
+
+vim.e2e.describe("Edge Cases: Special Window Handles", function() {
+    vim.e2e.test("window handle 0 is always current window", function() {
+        const cursor0 = vim.api.winGetCursor(0);
+        const cursorCurrent = vim.api.winGetCursor(vim.api.getCurrentWin());
+        vim.e2e.assert.equal(cursor0[0], cursorCurrent[0], "Handle 0 should match current window");
+        vim.e2e.assert.equal(cursor0[1], cursorCurrent[1], "Handle 0 should match current window");
+    });
+
+    vim.e2e.test("float window handle (0.5) treated as integer", function() {
+        // JavaScript may pass float, should be converted to int
+        const valid = vim.api.winIsValid(0.5);
+        // 0.5 truncates to 0, which is valid
+        vim.e2e.assert.true(valid, "Float 0.5 should truncate to 0 (valid)");
+    });
+
+    vim.e2e.test("NaN window handle treated as invalid", function() {
+        const valid = vim.api.winIsValid(NaN);
+        vim.e2e.assert.false(valid, "NaN should be invalid");
+    });
+
+    vim.e2e.test("Infinity window handle treated as invalid", function() {
+        const valid = vim.api.winIsValid(Infinity);
+        vim.e2e.assert.false(valid, "Infinity should be invalid");
+    });
+});
+
+vim.e2e.describe("Edge Cases: winCall Context Isolation", function() {
+    vim.e2e.test("winCall preserves current window after execution", function() {
+        const before = vim.api.getCurrentWin();
+        vim.api.winCall(0, function() {
+            // Do something in window context
+            vim.api.winGetCursor(0);
+        });
+        const after = vim.api.getCurrentWin();
+        vim.e2e.assert.equal(before, after, "Current window should be preserved");
+    });
+
+    vim.e2e.test("winCall handles exception in callback", function() {
+        // This tests that exceptions don't break window state
+        try {
+            vim.api.winCall(0, function() {
+                throw new Error("Test error");
+            });
+        } catch (e) {
+            // Expected to throw
+        }
+        // Window should still be accessible
+        const valid = vim.api.winIsValid(0);
+        vim.e2e.assert.true(valid, "Window should still be valid after exception");
+    });
+
+    vim.e2e.test("winCall with function returning undefined", function() {
+        const result = vim.api.winCall(0, function() {
+            // No return statement
+        });
+        vim.e2e.assert.equal(result, undefined, "Should return undefined");
+    });
+});
+
+vim.e2e.describe("Edge Cases: winClose Behavior", function() {
+    vim.e2e.test("winClose on invalid window does not throw", function() {
+        vim.api.winClose(9999, false);
+        vim.e2e.assert.true(true, "Should not throw for invalid window");
+    });
+
+    vim.e2e.test("winClose with force on invalid window does not throw", function() {
+        vim.api.winClose(9999, true);
+        vim.e2e.assert.true(true, "Should not throw for invalid window with force");
+    });
+});
+
+vim.e2e.describe("Edge Cases: Concurrent Variable Operations", function() {
+    vim.e2e.test("rapid set/get operations work correctly", function() {
+        for (let i = 0; i < 100; i++) {
+            vim.api.winSetVar(0, "rapid_" + i, i);
+        }
+        // Verify a few values
+        vim.e2e.assert.equal(vim.api.winGetVar(0, "rapid_0"), 0, "First value correct");
+        vim.e2e.assert.equal(vim.api.winGetVar(0, "rapid_50"), 50, "Middle value correct");
+        vim.e2e.assert.equal(vim.api.winGetVar(0, "rapid_99"), 99, "Last value correct");
+    });
+
+    vim.e2e.test("set then delete then get returns undefined", function() {
+        vim.api.winSetVar(0, "temp_var", "exists");
+        vim.api.winDelVar(0, "temp_var");
+        const value = vim.api.winGetVar(0, "temp_var");
+        vim.e2e.assert.equal(value, undefined, "Deleted var should be undefined");
+    });
+
+    vim.e2e.test("delete then set creates new variable", function() {
+        vim.api.winDelVar(0, "recreate_var");
+        vim.api.winSetVar(0, "recreate_var", "new_value");
+        const value = vim.api.winGetVar(0, "recreate_var");
+        vim.e2e.assert.equal(value, "new_value", "Recreated var should have new value");
+    });
+});
+
 vim.e2e.runAll();

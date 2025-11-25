@@ -197,6 +197,8 @@ vim.e2e.test("custom map", () => {
 | All tests | Full suite | `for d in tests/e2e/*/; do vimc test "$d"; done` |
 | Debug mode | Verbose output | `vimc test tests/e2e/motion --debug` |
 
+> **Note**: Do NOT prefix with `DYLD_LIBRARY_PATH=...`. The binary handles library paths internally. Just use `vimc test <path>` directly.
+
 ## Troubleshooting
 
 | Problem | Likely Cause | Fix | Reference |
