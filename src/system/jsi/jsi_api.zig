@@ -242,6 +242,7 @@ pub fn initJSI(
         const usercommand_ctx = usercommand_api.UserCommandContext.init(allocator, runtime) catch @panic("Failed to allocate UserCommandContext");
         global_usercommand_ctx = usercommand_ctx;
         usercommand_api.register(runtime, usercommand_ctx);
+        usercommand_api.registerLegacy(runtime, usercommand_ctx); // Register global functions for runtime.js
 
         // Store in Editor for use by native code (executing user commands)
         editor_or_context.usercommand_ctx = usercommand_ctx;
@@ -265,6 +266,10 @@ pub fn initJSI(
         const usercommand_ctx = usercommand_api.UserCommandContext.init(allocator, runtime) catch @panic("Failed to allocate UserCommandContext");
         global_usercommand_ctx = usercommand_ctx;
         usercommand_api.register(runtime, usercommand_ctx);
+        usercommand_api.registerLegacy(runtime, usercommand_ctx); // Register global functions for runtime.js
+
+        // Store in inner Editor for use by native code (executing user commands)
+        editor_or_context.editor.usercommand_ctx = usercommand_ctx;
     }
 
     // Register highlight API (vim.api.setHighlight, vim.api.getHighlight)

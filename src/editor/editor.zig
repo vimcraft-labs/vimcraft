@@ -19,7 +19,9 @@ const KeymapManager = @import("keymap/keymap.zig").KeymapManager;
 const Loader = @import("treesitter/loader.zig").Loader;
 const EventEmitter = @import("../system/jsi/event_emitter.zig").EventEmitter;
 const AutocmdManager = @import("../system/jsi/autocmd_api.zig").AutocmdManager;
-const UserCommandContext = @import("../system/jsi/usercommand_api.zig").UserCommandContext;
+const usercommand_api_mod = @import("../system/jsi/usercommand_api.zig");
+const UserCommandContext = usercommand_api_mod.UserCommandContext;
+const UserCommand = usercommand_api_mod.UserCommand;
 const HighlightRegistry = @import("../system/jsi/highlight_api.zig").HighlightRegistry;
 const Syntax = @import("treesitter/syntax.zig").Syntax;
 const Parser = @import("treesitter/parser.zig").Parser;
@@ -2343,6 +2345,35 @@ pub const Editor = struct {
                         };
                     }
                 }
+                // Check for user-defined commands (vim.api.createUserCmd)
+                // User commands start with uppercase letter
+                else if (cmd.len > 0 and std.ascii.isUpper(cmd[0])) {
+                    // Parse command: "Hello arg1 arg2" -> name="Hello", args="arg1 arg2"
+                    var name_end: usize = 0;
+                    for (cmd, 0..) |c, i| {
+                        if (c == ' ' or c == '!') {
+                            name_end = i;
+                            break;
+                        }
+                    } else {
+                        name_end = cmd.len;
+                    }
+
+                    const cmd_name = cmd[0..name_end];
+                    const has_bang = name_end < cmd.len and cmd[name_end] == '!';
+                    const args_start = if (has_bang) name_end + 1 else name_end;
+                    const args = if (args_start < cmd.len) std.mem.trimLeft(u8, cmd[args_start..], " ") else "";
+
+                    // Look up user command
+                    if (self.usercommand_ctx) |ctx| {
+                        const buffer_id: usize = if (self.current_buffer_id) |bid| bid.id else 0;
+                        if (ctx.getCommand(cmd_name, buffer_id)) |user_cmd| {
+                            // Execute the JavaScript callback
+                            self.executeUserCommand(user_cmd, cmd_name, args, has_bang);
+                            self.js_state_dirty = true;
+                        }
+                    }
+                }
 
                 self.cmd_buffer.clear();
                 self.mode_manager.enterNormal();
@@ -2360,6 +2391,80 @@ pub const Editor = struct {
                 return false; // Non-printable character, ignored
             },
         }
+    }
+
+    /// Execute a user-defined command (vim.api.createUserCmd)
+    /// Calls the JavaScript callback with args object
+    fn executeUserCommand(self: *Editor, user_cmd: *const UserCommand, name: []const u8, args: []const u8, bang: bool) void {
+        const usercommand_api = @import("../system/jsi/usercommand_api.zig");
+        const c = @import("../system/jsi/c_api.zig").c;
+
+        // Get runtime from usercommand context
+        const ctx = self.usercommand_ctx orelse return;
+        const runtime = ctx.runtime;
+
+        // Create args object for callback
+        // { name: string, args: string, fargs: string[], bang: boolean }
+        const args_obj = c.hermes_value_create_object(runtime) orelse return;
+        defer c.hermes_value_destroy(args_obj);
+
+        // Set name
+        if (c.hermes_value_create_string(runtime, name.ptr, name.len)) |val| {
+            c.hermes_value_set_property(runtime, args_obj, "name", val);
+            c.hermes_value_destroy(val);
+        }
+
+        // Set args (raw string)
+        if (c.hermes_value_create_string(runtime, args.ptr, args.len)) |val| {
+            c.hermes_value_set_property(runtime, args_obj, "args", val);
+            c.hermes_value_destroy(val);
+        }
+
+        // Set bang
+        if (c.hermes_value_create_boolean(runtime, bang)) |val| {
+            c.hermes_value_set_property(runtime, args_obj, "bang", val);
+            c.hermes_value_destroy(val);
+        }
+
+        // Set fargs (split by whitespace)
+        // For now, simple split - count spaces first
+        var fargs_count: usize = 0;
+        if (args.len > 0) {
+            fargs_count = 1;
+            for (args) |ch| {
+                if (ch == ' ') fargs_count += 1;
+            }
+        }
+        const fargs_arr = c.hermes_array_create(runtime, fargs_count) orelse {
+            // Call callback without fargs
+            var call_args = [_]?*c.OVHermesValue{args_obj};
+            _ = c.hermes_call_function(runtime, user_cmd.callback, &call_args, 1);
+            return;
+        };
+        defer c.hermes_value_destroy(fargs_arr);
+
+        // Split and populate fargs
+        if (args.len > 0) {
+            var idx: usize = 0;
+            var iter = std.mem.splitScalar(u8, args, ' ');
+            while (iter.next()) |part| {
+                if (c.hermes_value_create_string(runtime, part.ptr, part.len)) |val| {
+                    c.hermes_array_set(runtime, fargs_arr, idx, val);
+                    c.hermes_value_destroy(val);
+                    idx += 1;
+                }
+            }
+        }
+        c.hermes_value_set_property(runtime, args_obj, "fargs", fargs_arr);
+
+        // Call the JavaScript callback
+        var call_args = [_]?*c.OVHermesValue{args_obj};
+        const result = c.hermes_call_function(runtime, user_cmd.callback, &call_args, 1);
+        if (result) |res| {
+            c.hermes_value_destroy(res);
+        }
+
+        _ = usercommand_api; // Suppress unused import warning
     }
 
     /// Handle scrolling commands (Ctrl+D, Ctrl+U)

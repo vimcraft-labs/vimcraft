@@ -328,11 +328,14 @@ pub export fn createUserCommand(
     };
     defer ctx.allocator.free(name);
 
-    // Extract callback (arg 1)
-    const callback = args[1].?;
-    if (!c.hermes_value_is_function(runtime, callback)) {
+    // Extract callback (arg 1) - must clone to prevent GC
+    const callback_raw = args[1].?;
+    if (!c.hermes_value_is_function(runtime, callback_raw)) {
         return helpers.returnError(runtime, "createUserCommand: callback must be a function");
     }
+    const callback = c.hermes_value_clone(runtime, callback_raw) orelse {
+        return helpers.returnError(runtime, "createUserCommand: failed to clone callback");
+    };
 
     // Extract options (arg 2, optional)
     var opts = CommandOpts{};
@@ -344,10 +347,17 @@ pub export fn createUserCommand(
         }
     }
 
+    // Free opts.desc after addCommand (it makes its own copy)
+    defer if (opts.desc) |desc| {
+        ctx.allocator.free(desc);
+    };
+
     // Add the command
     ctx.addCommand(name, callback, opts) catch |err| {
+        // Destroy cloned callback on failure
+        c.hermes_value_destroy(callback);
         return switch (err) {
-            error.InvalidCommandName => helpers.returnError(runtime, "createUserCommand: command name must start with uppercase letter"),
+            error.InvalidCommandName => helpers.returnError(runtime, "createUserCommand: command name must start with uppercase letter (e.g., 'Hello' not 'hello')"),
             error.CommandExists => helpers.returnError(runtime, "createUserCommand: command already exists (use force: true to overwrite)"),
             else => helpers.returnError(runtime, "createUserCommand: failed to create command"),
         };
@@ -409,11 +419,14 @@ pub export fn bufCreateUserCommand(
     };
     defer ctx.allocator.free(name);
 
-    // Extract callback (arg 2)
-    const callback = args[2].?;
-    if (!c.hermes_value_is_function(runtime, callback)) {
+    // Extract callback (arg 2) - must clone to prevent GC
+    const callback_raw = args[2].?;
+    if (!c.hermes_value_is_function(runtime, callback_raw)) {
         return helpers.returnError(runtime, "bufCreateUserCommand: callback must be a function");
     }
+    const callback = c.hermes_value_clone(runtime, callback_raw) orelse {
+        return helpers.returnError(runtime, "bufCreateUserCommand: failed to clone callback");
+    };
 
     // Extract options (arg 3, optional)
     var opts = CommandOpts{};
@@ -426,10 +439,17 @@ pub export fn bufCreateUserCommand(
     }
     opts.buffer = buffer_id;
 
+    // Free opts.desc after addCommand (it makes its own copy)
+    defer if (opts.desc) |desc| {
+        ctx.allocator.free(desc);
+    };
+
     // Add the command
     ctx.addCommand(name, callback, opts) catch |err| {
+        // Destroy cloned callback on failure
+        c.hermes_value_destroy(callback);
         return switch (err) {
-            error.InvalidCommandName => helpers.returnError(runtime, "bufCreateUserCommand: command name must start with uppercase letter"),
+            error.InvalidCommandName => helpers.returnError(runtime, "bufCreateUserCommand: command name must start with uppercase letter (e.g., 'Hello' not 'hello')"),
             error.CommandExists => helpers.returnError(runtime, "bufCreateUserCommand: command already exists (use force: true to overwrite)"),
             else => helpers.returnError(runtime, "bufCreateUserCommand: failed to create command"),
         };
