@@ -2505,6 +2505,35 @@ export interface CursorAPI {
    * vim.cursor.clearRenderPosition();
    */
   clearRenderPosition(): void;
+
+  /**
+   * Hide the terminal cursor.
+   *
+   * Used by animation plugins (like smear-cursor) to hide the real
+   * terminal cursor during animation, preventing "ghosting" artifacts.
+   *
+   * @example
+   * // Hide cursor at animation start
+   * vim.cursor.hide();
+   *
+   * // ... run animation frames ...
+   *
+   * // Show cursor when done
+   * vim.cursor.show();
+   */
+  hide(): void;
+
+  /**
+   * Show the terminal cursor.
+   *
+   * Restores cursor visibility after hiding. Should be called when
+   * animation completes to restore normal cursor behavior.
+   *
+   * @example
+   * // Show cursor after animation ends
+   * vim.cursor.show();
+   */
+  show(): void;
 }
 
 // ============================================================================

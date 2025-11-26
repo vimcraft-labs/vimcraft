@@ -604,7 +604,16 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     // Otherwise processTimerQueue() in main loop will access freed memory → segfault
     const runtime_nullable = hermes_c.hermes_runtime_create();
     var runtime: ?*hermes_c.OVHermesRuntime = null;
+    var jsi_initialized = false;
+
+    // CRITICAL FIX: Defer JSI cleanup at FUNCTION scope, not inside if-block!
+    // Previously, defer was inside the if-block, causing it to run when the block
+    // exited (before main event loop), clearing global_autocmd_manager and breaking
+    // all plugin callbacks (CursorMoved events, etc.)
     defer {
+        if (jsi_initialized) {
+            jsi_api.deinitJSI();
+        }
         if (runtime) |rt| {
             hermes_c.hermes_runtime_destroy(rt);
         }
@@ -623,7 +632,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
         // Register JSI host functions (pass editor for cursor hooks and display for trail rendering)
         jsi_api.initJSI(allocator, @ptrCast(runtime.?), &highlight_config, &options_mgr, &editor, &display);
-        defer jsi_api.deinitJSI(); // Clean up ConfigContext BEFORE runtime destruction
+        jsi_initialized = true; // Track that JSI was initialized
 
         // Mark config load start (if metrics enabled)
         if (metrics_mod.getGlobalMetrics()) |m| {
@@ -665,18 +674,17 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
 
             for (plugin_files.items) |plugin| {
                 if (plugin.has_entry) {
-                    const filename = std.fs.path.basename(plugin.index_path);
                     const load_start = std.time.milliTimestamp();
 
                     jsi_api.loadPlugin(@ptrCast(rt), plugin.index_path, allocator) catch |err| {
-                        std.debug.print("WARNING: Failed to load plugin {s}: {}\n", .{ filename, err });
+                        std.debug.print("WARNING: Failed to load plugin {s}: {}\n", .{ plugin.name, err });
                         continue;
                     };
 
                     // Record plugin load time (if metrics enabled)
                     if (metrics_mod.getGlobalMetrics()) |m| {
                         const load_time = std.time.milliTimestamp() - load_start;
-                        m.recordPluginLoad(filename, load_time) catch {};
+                        m.recordPluginLoad(plugin.name, load_time) catch {};
                     }
                 }
             }
@@ -1059,8 +1067,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         }
 
         for (plugin_files.items) |plugin| {
-            const filename = std.fs.path.basename(plugin.index_path);
-            const msg = try std.fmt.allocPrint(allocator, "  Loading plugin: {s}", .{filename});
+            const msg = try std.fmt.allocPrint(allocator, "  Loading plugin: {s}", .{plugin.name});
             defer allocator.free(msg);
             debugger.log(msg, .info);
 
@@ -1068,7 +1075,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
                 const load_start = std.time.milliTimestamp();
 
                 jsi_api.loadPlugin(@ptrCast(runtime), plugin.index_path, allocator) catch |err| {
-                    const err_msg = try std.fmt.allocPrint(allocator, "  WARNING: Failed to load {s}: {}", .{ filename, err });
+                    const err_msg = try std.fmt.allocPrint(allocator, "  WARNING: Failed to load {s}: {}", .{ plugin.name, err });
                     defer allocator.free(err_msg);
                     debugger.log(err_msg, .warning);
                     continue;
@@ -1077,7 +1084,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
                 // Record plugin load time (if metrics enabled)
                 if (metrics_mod.getGlobalMetrics()) |m| {
                     const load_time = std.time.milliTimestamp() - load_start;
-                    m.recordPluginLoad(filename, load_time) catch {};
+                    m.recordPluginLoad(plugin.name, load_time) catch {};
                 }
             }
         }

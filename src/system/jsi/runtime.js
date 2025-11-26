@@ -43,6 +43,17 @@ globalThis.clearInterval = function(id) {
   __nativeClearTimer(id);
 };
 
+// setImmediate polyfill (used internally by Promise resolution in some JS environments)
+// Hermes doesn't provide this natively, but Promise.resolve() may use it internally.
+// We implement it using setTimeout(fn, 0) for compatibility.
+globalThis.setImmediate = function(callback) {
+  return setTimeout(callback, 0);
+};
+
+globalThis.clearImmediate = function(id) {
+  clearTimeout(id);
+};
+
 // Called by native code when timer fires
 globalThis.__handleTimerCallback = function(id) {
   const callback = globalThis._timerCallbacks[id];
@@ -1166,10 +1177,355 @@ vim.api = {
     }
     // Stub: return empty array (not yet implemented)
     return [];
+  },
+
+  // === Mode Functions ===
+
+  // vim.api.getMode() -> { mode: string, blocking: boolean }
+  //   returns: mode object with current mode string (n, i, v, c) and blocking state
+  getMode: function() {
+    if (typeof vimApiGetMode !== 'undefined') {
+      return vimApiGetMode();
+    }
+    return { mode: 'n', blocking: false }; // Default to normal mode
+  },
+
+  // vim.api.getOption(name) -> any
+  //   name: string - Option name
+  //   returns: option value
+  getOption: function(name) {
+    return vim.opt[name];
+  }
+};
+
+// ============================================================================
+// Neovim-compatible Aliases (nvim_* naming convention)
+// ============================================================================
+// smear-cursor and other Neovim plugins use nvim_* naming
+// These aliases map to the camelCase API above
+
+// Mode
+vim.api.nvim_get_mode = function() {
+  if (typeof vimApiGetMode !== 'undefined') {
+    return vimApiGetMode();
+  }
+  return { mode: 'n', blocking: false }; // Default to normal mode
+};
+
+// Buffer functions
+vim.api.nvim_get_current_buf = vim.api.getCurrentBuf;
+vim.api.nvim_buf_line_count = vim.api.bufLineCount;
+vim.api.nvim_buf_get_lines = vim.api.bufGetLines;
+vim.api.nvim_buf_set_lines = vim.api.bufSetLines;
+vim.api.nvim_buf_get_name = vim.api.bufGetName;
+vim.api.nvim_buf_is_valid = vim.api.bufIsValid;
+vim.api.nvim_set_current_buf = vim.api.setCurrentBuf;
+vim.api.nvim_list_bufs = vim.api.listBufs;
+vim.api.nvim_buf_set_name = vim.api.bufSetName;
+vim.api.nvim_buf_delete = vim.api.bufDelete;
+vim.api.nvim_create_buf = vim.api.createBuf;
+vim.api.nvim_buf_get_text = vim.api.bufGetText;
+vim.api.nvim_buf_set_text = vim.api.bufSetText;
+vim.api.nvim_buf_is_loaded = vim.api.bufIsLoaded;
+vim.api.nvim_buf_get_var = vim.api.bufGetVar;
+vim.api.nvim_buf_set_var = vim.api.bufSetVar;
+vim.api.nvim_buf_del_var = vim.api.bufDelVar;
+vim.api.nvim_buf_get_changedtick = vim.api.bufGetChangedtick;
+vim.api.nvim_buf_get_offset = vim.api.bufGetOffset;
+vim.api.nvim_buf_call = vim.api.bufCall;
+
+// Window functions
+vim.api.nvim_get_current_win = vim.api.getCurrentWin;
+vim.api.nvim_win_get_cursor = vim.api.winGetCursor;
+vim.api.nvim_win_set_cursor = vim.api.winSetCursor;
+vim.api.nvim_win_is_valid = vim.api.winIsValid;
+vim.api.nvim_win_get_buf = vim.api.winGetBuf;
+vim.api.nvim_win_get_height = vim.api.winGetHeight;
+vim.api.nvim_win_get_width = vim.api.winGetWidth;
+vim.api.nvim_set_current_win = vim.api.setCurrentWin;
+vim.api.nvim_list_wins = vim.api.listWins;
+vim.api.nvim_win_set_buf = vim.api.winSetBuf;
+vim.api.nvim_win_set_height = vim.api.winSetHeight;
+vim.api.nvim_win_set_width = vim.api.winSetWidth;
+vim.api.nvim_win_close = vim.api.winClose;
+vim.api.nvim_win_get_var = vim.api.winGetVar;
+vim.api.nvim_win_set_var = vim.api.winSetVar;
+vim.api.nvim_win_del_var = vim.api.winDelVar;
+vim.api.nvim_win_call = vim.api.winCall;
+vim.api.nvim_win_get_number = vim.api.winGetNumber;
+vim.api.nvim_win_get_position = vim.api.winGetPosition;
+
+// Highlight functions
+vim.api.nvim_set_hl = vim.api.setHighlight;
+vim.api.nvim_get_hl = function(ns_id, opts) {
+  // Neovim nvim_get_hl(ns_id, opts) where opts.name is the hl group
+  if (opts && opts.name) {
+    return vim.api.getHighlight(ns_id, opts.name);
+  }
+  return vim.api.getHighlight(ns_id, opts);
+};
+
+// Autocommand functions
+vim.api.nvim_create_autocmd = vim.api.createAutocmd;
+vim.api.nvim_del_autocmd = vim.api.delAutocmd;
+vim.api.nvim_create_augroup = vim.api.createAugroup;
+vim.api.nvim_clear_autocmds = vim.api.clearAutocmds;
+
+// User command functions
+vim.api.nvim_create_user_command = vim.api.createUserCmd;
+vim.api.nvim_del_user_command = vim.api.delUserCmd;
+vim.api.nvim_buf_create_user_command = vim.api.bufCreateUserCmd;
+vim.api.nvim_buf_del_user_command = vim.api.bufDelUserCmd;
+vim.api.nvim_get_commands = vim.api.getUserCommands;
+
+// Option functions (Neovim style)
+vim.api.nvim_get_option_value = function(name, opts) {
+  // opts can have: scope ('global'|'local'), buf, win
+  if (opts && opts.scope === 'local') {
+    return vim.optLocal[name];
+  } else if (opts && opts.scope === 'global') {
+    return vim.optGlobal[name];
+  }
+  return vim.opt[name];
+};
+
+vim.api.nvim_set_option_value = function(name, value, opts) {
+  if (opts && opts.scope === 'local') {
+    vim.optLocal[name] = value;
+  } else if (opts && opts.scope === 'global') {
+    vim.optGlobal[name] = value;
+  } else {
+    vim.opt[name] = value;
   }
 };
 
 Object.freeze(vim.api);
+
+// ============================================================================
+// vim.fn - Vimscript Function Wrappers (Neovim compatible)
+// ============================================================================
+// Provides vim.fn.funcname() style access to Vim functions
+// Used by Neovim plugins like smear-cursor
+
+vim.fn = {
+  // vim.fn.getwininfo([winid]) -> array of window info objects
+  // Returns information about all windows or specific window
+  // Each object contains: winid, bufnr, winnr, height, width, wincol, winrow, etc.
+  getwininfo: function(winid) {
+    const wins = vim.api.listWins();
+    const result = [];
+
+    for (const w of wins) {
+      if (winid !== undefined && w !== winid) continue;
+
+      const pos = vim.api.winGetPosition(w) || [0, 0];
+      const info = {
+        winid: w,
+        bufnr: vim.api.winGetBuf(w),
+        winnr: vim.api.winGetNumber(w),
+        height: vim.api.winGetHeight(w),
+        width: vim.api.winGetWidth(w),
+        winrow: pos[0],
+        wincol: pos[1],
+        terminal: 0,
+        quickfix: 0,
+        loclist: 0,
+        textoff: 0, // columns used by line numbers, signs, etc.
+      };
+      result.push(info);
+    }
+
+    return result;
+  },
+
+  // vim.fn.winsaveview() -> object
+  // Returns view information for current window
+  winsaveview: function() {
+    const pos = vim.api.winGetCursor(0);
+    return {
+      lnum: pos ? pos[0] : 1,
+      col: pos ? pos[1] : 0,
+      coladd: 0,
+      curswant: pos ? pos[1] : 0,
+      topline: 1, // TODO: track scroll position
+      topfill: 0,
+      leftcol: 0,
+      skipcol: 0,
+    };
+  },
+
+  // vim.fn.winrestview(view) -> void
+  // Restores view to saved state
+  winrestview: function(view) {
+    if (view && view.lnum !== undefined) {
+      vim.api.winSetCursor(0, [view.lnum, view.col || 0]);
+    }
+  },
+
+  // vim.fn.line(expr) -> number
+  // Get line number for various expressions
+  line: function(expr) {
+    if (expr === '.') {
+      // Current line
+      const pos = vim.api.winGetCursor(0);
+      return pos ? pos[0] : 1;
+    } else if (expr === '$') {
+      // Last line
+      return vim.api.bufLineCount(0);
+    } else if (expr === 'w0') {
+      // First visible line in window
+      return 1; // TODO: track viewport
+    } else if (expr === 'w$') {
+      // Last visible line in window
+      return vim.api.winGetHeight(0);
+    }
+    return 0;
+  },
+
+  // vim.fn.col(expr) -> number
+  // Get column number for various expressions
+  col: function(expr) {
+    if (expr === '.') {
+      const pos = vim.api.winGetCursor(0);
+      return pos ? pos[1] + 1 : 1; // Vim columns are 1-indexed
+    } else if (expr === '$') {
+      // End of current line
+      const pos = vim.api.winGetCursor(0);
+      if (pos) {
+        const lines = vim.api.bufGetLines(0, pos[0] - 1, pos[0], false);
+        return lines && lines[0] ? lines[0].length + 1 : 1;
+      }
+      return 1;
+    }
+    return 0;
+  },
+
+  // vim.fn.winnr() -> number
+  // Get current window number
+  winnr: function() {
+    return vim.api.winGetNumber(0);
+  },
+
+  // vim.fn.bufnr([expr]) -> number
+  // Get buffer number
+  bufnr: function(expr) {
+    if (expr === undefined || expr === '%') {
+      return vim.api.getCurrentBuf();
+    }
+    return -1; // Buffer not found
+  },
+
+  // vim.fn.bufname([expr]) -> string
+  // Get buffer name
+  bufname: function(expr) {
+    const bufnr = expr === undefined || expr === '%' ? 0 : expr;
+    return vim.api.bufGetName(bufnr);
+  },
+
+  // vim.fn.expand(expr) -> string
+  // Expand special keywords
+  expand: function(expr) {
+    if (expr === '%') {
+      return vim.api.bufGetName(0);
+    } else if (expr === '%:p') {
+      return vim.api.bufGetName(0); // Already absolute
+    } else if (expr === '%:t') {
+      const name = vim.api.bufGetName(0);
+      return name.split('/').pop() || '';
+    }
+    return expr;
+  },
+
+  // vim.fn.mode() -> string
+  // Get current mode character
+  mode: function() {
+    const modeInfo = vim.api.nvim_get_mode();
+    return modeInfo.mode;
+  },
+
+  // vim.fn.has(feature) -> 0|1
+  // Check for feature support
+  has: function(feature) {
+    const supported = [
+      'nvim', 'vimcraft', 'timers', 'syntax', 'autocmd',
+      'signs', 'virtual_text', 'highlighting',
+    ];
+    return supported.includes(feature) ? 1 : 0;
+  },
+
+  // vim.fn.exists(expr) -> 0|1|2
+  // Check if variable/function/etc exists
+  exists: function(expr) {
+    // Check for functions
+    if (expr.startsWith('*')) {
+      const fn = expr.slice(1);
+      return typeof vim.fn[fn] === 'function' ? 1 : 0;
+    }
+    // Check for vim.g variables
+    if (expr.startsWith('g:')) {
+      return vim.g && vim.g[expr.slice(2)] !== undefined ? 1 : 0;
+    }
+    return 0;
+  },
+};
+
+Object.freeze(vim.fn);
+
+// ============================================================================
+// vim.autocmd - Autocommand API (Neovim compatible)
+// ============================================================================
+// Provides vim.autocmd.create() style access (alternative to vim.api.createAutocmd)
+// Used by Neovim plugins like smear-cursor
+
+vim.autocmd = {
+  // vim.autocmd.create(event, opts) -> number (autocmd ID)
+  // Wrapper around vim.api.createAutocmd for convenience
+  // Supports TWO signatures:
+  //   1. Neovim style: vim.autocmd.create(event, { callback, group, pattern, once })
+  //   2. smear-cursor style: vim.autocmd.create(group, event, callback)
+  create: function(eventOrGroup, optsOrEvent, callbackOrUndef) {
+    // Detect signature: if 3rd arg is function, it's smear-cursor style
+    if (typeof callbackOrUndef === 'function') {
+      // smear-cursor style: (group, event, callback)
+      const group = eventOrGroup;
+      const event = optsOrEvent;
+      const callback = callbackOrUndef;
+      return vim.api.createAutocmd(event, { callback: callback, group: group });
+    } else {
+      // Neovim style: (event, opts)
+      return vim.api.createAutocmd(eventOrGroup, optsOrEvent);
+    }
+  },
+
+  // vim.autocmd.delete(id) -> void
+  // Wrapper around vim.api.delAutocmd
+  delete: function(id) {
+    return vim.api.delAutocmd(id);
+  },
+
+  // vim.autocmd.group(name, opts) -> string (group name)
+  // Wrapper around vim.api.createAugroup
+  group: function(name, opts) {
+    return vim.api.createAugroup(name, opts);
+  },
+
+  // vim.autocmd.clear(groupOrOpts) -> void
+  // Wrapper around vim.api.clearAutocmds
+  // Supports TWO signatures:
+  //   1. Neovim style: vim.autocmd.clear({ group: 'name' })
+  //   2. smear-cursor style: vim.autocmd.clear('groupName')
+  clear: function(groupOrOpts) {
+    if (typeof groupOrOpts === 'string') {
+      // smear-cursor style: just group name
+      return vim.api.clearAutocmds({ group: groupOrOpts });
+    } else {
+      // Neovim style: opts object
+      return vim.api.clearAutocmds(groupOrOpts);
+    }
+  },
+};
+
+Object.freeze(vim.autocmd);
 
 // ============================================================================
 // vim.cmd - Ex command methods (Neovim 0.8+ style)
@@ -1402,57 +1758,262 @@ if (typeof __process !== 'undefined') {
   Object.freeze(globalThis.process);
 }
 
-// fetch - HTTP Client API (Browser-style)
-// Provides HTTP requests via Zig's std.http.Client
+// ============================================================================
+// Fetch API - Async HTTP Client (Browser-style with Promises)
+// ============================================================================
+// Provides async HTTP requests via libuv thread pool
+// React Native pattern: JS manages Promise callbacks, native triggers them
 //
-// fetch(url, options?) -> Response
-//   Make an HTTP request (synchronous for now, TODO: add Promise)
+// fetch(url, options?) -> Promise<Response>
+//   Make an async HTTP request (non-blocking!)
 //
 //   url: string - Full URL (https://example.com/api)
 //
 //   options: object (optional)
 //     - method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS'
 //     - headers: { 'Content-Type': 'application/json', ... }
+//               NOTE: Only common headers supported (Content-Type, Accept, Authorization,
+//               User-Agent, X-API-Key, Cache-Control, Cookie, Origin, etc.)
 //     - body: string (request body for POST/PUT/PATCH)
+//     - signal: AbortSignal (for cancellation support)
+//     - maxResponseSize: number (max response size in bytes, default 10MB)
 //
 //   Response: object
 //     - status: number (HTTP status code)
 //     - ok: boolean (true if status 200-299)
 //     - statusText: string ('OK', 'Not Found', etc.)
-//     - headers: object (response headers)
-//     - _body: string (raw response body - use text() or json())
-//
-//   Response methods (via prototype):
 //     - text(): string - Get response body as string
 //     - json(): object - Parse response body as JSON
 //
 // Examples:
-//   // GET request
-//   const res = fetch('https://api.example.com/data');
+//   // GET request with async/await
+//   const res = await fetch('https://api.example.com/data');
 //   const data = res.json();
 //
 //   // POST with JSON body
-//   const res = fetch('https://api.example.com/data', {
+//   const res = await fetch('https://api.example.com/data', {
 //     method: 'POST',
 //     headers: { 'Content-Type': 'application/json' },
 //     body: JSON.stringify({ key: 'value' })
 //   });
-if (typeof __fetch !== 'undefined') {
-  // Wrap native fetch to add text() and json() methods
-  globalThis.fetch = function(url, options) {
-    const response = __fetch(url, options);
+//
+//   // Promise chain style
+//   fetch('https://api.example.com/data')
+//     .then(res => res.json())
+//     .then(data => console.log(data))
+//     .catch(err => console.error(err));
+//
+//   // With AbortController for cancellation
+//   const controller = new AbortController();
+//   setTimeout(() => controller.abort(), 5000); // Cancel after 5s
+//   try {
+//     const res = await fetch('https://api.example.com/data', {
+//       signal: controller.signal
+//     });
+//   } catch (e) {
+//     if (e.name === 'AbortError') console.log('Request was cancelled');
+//   }
 
-    // Add text() method (return _body as-is)
-    response.text = function() {
+// ============================================================================
+// AbortController / AbortSignal (Browser-compatible cancellation)
+// ============================================================================
+// ES5-style for Hermes compatibility (no ES6 class syntax)
+
+// DOMException polyfill (minimal for AbortError)
+function DOMException(message, name) {
+  var error = new Error(message);
+  error.name = name || 'DOMException';
+  return error;
+}
+
+// AbortSignal - Represents a signal that can be used to abort operations
+function AbortSignal() {
+  this._aborted = false;
+  this._reason = undefined;
+  this._listeners = [];
+}
+
+// AbortSignal properties and methods
+Object.defineProperty(AbortSignal.prototype, 'aborted', {
+  get: function() { return this._aborted; }
+});
+
+Object.defineProperty(AbortSignal.prototype, 'reason', {
+  get: function() { return this._reason; }
+});
+
+AbortSignal.prototype.addEventListener = function(type, listener) {
+  if (type === 'abort') {
+    this._listeners.push(listener);
+  }
+};
+
+AbortSignal.prototype.removeEventListener = function(type, listener) {
+  if (type === 'abort') {
+    var idx = this._listeners.indexOf(listener);
+    if (idx !== -1) this._listeners.splice(idx, 1);
+  }
+};
+
+AbortSignal.prototype.throwIfAborted = function() {
+  if (this._aborted) {
+    throw this._reason;
+  }
+};
+
+// Internal: trigger abort
+AbortSignal.prototype._abort = function(reason) {
+  if (this._aborted) return;
+  this._aborted = true;
+  this._reason = reason || new DOMException('The operation was aborted', 'AbortError');
+  for (var i = 0; i < this._listeners.length; i++) {
+    try {
+      this._listeners[i]({ type: 'abort', target: this });
+    } catch (e) {
+      console.log('[AbortSignal] Listener error:', e);
+    }
+  }
+};
+
+// Static factory for timed abort
+AbortSignal.timeout = function(ms) {
+  var controller = new AbortController();
+  setTimeout(function() {
+    controller.abort(new DOMException('The operation timed out', 'TimeoutError'));
+  }, ms);
+  return controller.signal;
+};
+
+// AbortController - Controls an AbortSignal
+function AbortController() {
+  this._signal = new AbortSignal();
+}
+
+Object.defineProperty(AbortController.prototype, 'signal', {
+  get: function() { return this._signal; }
+});
+
+AbortController.prototype.abort = function(reason) {
+  this._signal._abort(reason);
+};
+
+// Make AbortController/AbortSignal globally available
+globalThis.AbortController = AbortController;
+globalThis.AbortSignal = AbortSignal;
+globalThis.DOMException = DOMException;
+
+// Fetch callback registry (React Native pattern)
+globalThis._fetchCallbacks = {};
+globalThis._nextFetchId = 1;
+
+// Called by native code when fetch completes
+globalThis.__handleFetchCallback = function(id, result) {
+  const callbacks = globalThis._fetchCallbacks[id];
+  delete globalThis._fetchCallbacks[id];
+
+  if (!callbacks) {
+    return;
+  }
+
+  const { resolve, reject, signal, abortListener } = callbacks;
+
+  // Clean up abort listener to prevent memory leak
+  if (signal && abortListener) {
+    signal.removeEventListener('abort', abortListener);
+  }
+
+  // Check if aborted after completion (race condition edge case)
+  if (signal && signal.aborted) {
+    reject(signal.reason || new DOMException('The operation was aborted', 'AbortError'));
+    return;
+  }
+
+  if (result.error) {
+    // Check if it was a cancellation
+    if (result.error.includes('cancelled') || result.error.includes('canceled')) {
+      reject(new DOMException('The operation was aborted', 'AbortError'));
+    } else {
+      reject(new Error(result.error));
+    }
+    return;
+  }
+
+  if (!result.success) {
+    reject(new Error(result.error || 'Fetch failed'));
+    return;
+  }
+
+  // Create Response object
+  const response = {
+    status: result.status,
+    ok: result.status >= 200 && result.status < 300,
+    statusText: result.statusText,
+    _body: result.body,
+
+    // Response methods
+    text: function() {
       return this._body;
-    };
-
-    // Add json() method (parse _body as JSON)
-    response.json = function() {
+    },
+    json: function() {
       return JSON.parse(this._body);
-    };
+    }
+  };
 
-    return response;
+  resolve(response);
+};
+
+// Global fetch function (Browser-compatible, async)
+if (typeof __nativeFetch !== 'undefined') {
+  globalThis.fetch = function(url, options) {
+    return new Promise((resolve, reject) => {
+      const opts = options || {};
+      const signal = opts.signal;
+
+      // Check if already aborted before starting
+      if (signal && signal.aborted) {
+        reject(signal.reason || new DOMException('The operation was aborted', 'AbortError'));
+        return;
+      }
+
+      const id = globalThis._nextFetchId++;
+
+      // Set up abort listener before storing callback
+      let abortListener = null;
+      if (signal) {
+        abortListener = () => {
+          // Try to cancel the in-flight request
+          if (typeof __abortFetch !== 'undefined') {
+            __abortFetch(id);
+          }
+          // Clean up callback and reject
+          const callbacks = globalThis._fetchCallbacks[id];
+          if (callbacks) {
+            delete globalThis._fetchCallbacks[id];
+            callbacks.reject(signal.reason || new DOMException('The operation was aborted', 'AbortError'));
+          }
+        };
+        signal.addEventListener('abort', abortListener);
+      }
+
+      // Store callback with abortListener for cleanup
+      globalThis._fetchCallbacks[id] = { resolve, reject, signal, abortListener };
+
+      try {
+        // Pass options to native
+        __nativeFetch(id, url, {
+          method: opts.method,
+          headers: opts.headers,
+          body: opts.body,
+          maxResponseSize: opts.maxResponseSize
+        });
+      } catch (e) {
+        delete globalThis._fetchCallbacks[id];
+        if (signal && abortListener) {
+          signal.removeEventListener('abort', abortListener);
+        }
+        reject(e);
+      }
+    });
   };
 }
 

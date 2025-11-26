@@ -157,6 +157,8 @@ pub fn processQueue(allocator: std.mem.Allocator) void {
     // If no pending timers, nothing to do
     if (pending.items.len == 0) return;
 
+    debug_log.log("[TIMER] processQueue: {d} timers to process", .{pending.items.len});
+
     // Now we're on the main thread - SAFE to call JavaScript!
     // Process each timer individually
     for (pending.items) |timer_id| {
@@ -190,6 +192,7 @@ pub fn processQueue(allocator: std.mem.Allocator) void {
         }
 
         // Only call if timer still exists (not cleared)
+        debug_log.log("[TIMER] timer_id={d} exists={}", .{ timer_id, timer_exists });
         if (timer_exists) {
             // Create timer ID argument
             const id_arg = c.hermes_value_create_number(rt, @floatFromInt(timer_id));
@@ -210,14 +213,18 @@ pub fn processQueue(allocator: std.mem.Allocator) void {
             c.hermes_value_destroy(id_arg);
 
             if (result != null) {
+                debug_log.log("[TIMER] callback {d} executed successfully", .{timer_id});
                 c.hermes_value_destroy(result);
             } else {
                 // Null result could mean exception - log it
                 if (c.hermes_has_exception(rt)) {
                     const err_msg = c.hermes_get_exception_message(rt);
                     std.debug.print("[JSI] Timer callback exception: {s}\n", .{err_msg});
+                    debug_log.log("[TIMER] callback {d} threw exception: {s}", .{ timer_id, err_msg });
                 }
             }
+        } else {
+            debug_log.log("[TIMER] timer_id={d} skipped (timer was cleared)", .{timer_id});
         }
 
         // Clean up at end of loop iteration (AFTER function call!)

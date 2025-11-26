@@ -34,11 +34,11 @@ pub const AutocmdEntry = struct {
 
 /// Autocmd Manager - manages autocommands with Neovim-compatible API
 pub const AutocmdManager = struct {
-    /// Map of event name -> list of autocmds
-    autocmds: std.StringHashMap(std.ArrayListUnmanaged(AutocmdEntry)),
+    /// Map of event name -> list of autocmds (heap-allocated to avoid move issues)
+    autocmds: *std.StringHashMap(std.ArrayListUnmanaged(AutocmdEntry)),
 
-    /// Map of group name -> list of autocmd IDs in that group
-    groups: std.StringHashMap(std.ArrayListUnmanaged(u32)),
+    /// Map of group name -> list of autocmd IDs in that group (heap-allocated)
+    groups: *std.StringHashMap(std.ArrayListUnmanaged(u32)),
 
     /// Next autocmd ID (monotonically increasing)
     next_id: u32,
@@ -54,10 +54,17 @@ pub const AutocmdManager = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, event_emitter: *EventEmitter) Self {
+    pub fn init(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime, event_emitter: *EventEmitter) !Self {
+        // Heap-allocate hash maps to avoid any move/copy issues with JSI callbacks
+        const autocmds_map = try allocator.create(std.StringHashMap(std.ArrayListUnmanaged(AutocmdEntry)));
+        autocmds_map.* = std.StringHashMap(std.ArrayListUnmanaged(AutocmdEntry)).init(allocator);
+
+        const groups_map = try allocator.create(std.StringHashMap(std.ArrayListUnmanaged(u32)));
+        groups_map.* = std.StringHashMap(std.ArrayListUnmanaged(u32)).init(allocator);
+
         return .{
-            .autocmds = std.StringHashMap(std.ArrayListUnmanaged(AutocmdEntry)).init(allocator),
-            .groups = std.StringHashMap(std.ArrayListUnmanaged(u32)).init(allocator),
+            .autocmds = autocmds_map,
+            .groups = groups_map,
             .next_id = 1,
             .event_emitter = event_emitter,
             .runtime = runtime,
@@ -104,7 +111,7 @@ pub const AutocmdManager = struct {
             const owned_event = try self.allocator.dupe(u8, event);
             errdefer self.allocator.free(owned_event);
 
-            const result = try self.autocmds.getOrPut(owned_event);
+            const result = try self.autocmds.*.getOrPut(owned_event);
             if (!result.found_existing) {
                 result.value_ptr.* = .empty;
             } else {
@@ -117,7 +124,7 @@ pub const AutocmdManager = struct {
 
         // Track in group if specified
         if (owned_group) |group| {
-            const group_result = try self.groups.getOrPut(group);
+            const group_result = try self.groups.*.getOrPut(group);
             if (!group_result.found_existing) {
                 group_result.value_ptr.* = .empty;
             }
@@ -129,7 +136,7 @@ pub const AutocmdManager = struct {
 
     /// Delete an autocommand by ID
     pub fn deleteAutoCommand(self: *Self, id: u32) void {
-        var iter = self.autocmds.iterator();
+        var iter = self.autocmds.*.iterator();
         while (iter.next()) |entry| {
             var list = entry.value_ptr.*;
             var i: usize = 0;
@@ -153,14 +160,14 @@ pub const AutocmdManager = struct {
 
     /// Clear all autocommands in a group
     pub fn clearGroup(self: *Self, group_name: []const u8) void {
-        if (self.groups.get(group_name)) |ids| {
+        if (self.groups.*.get(group_name)) |ids| {
             for (ids.items) |id| {
                 self.deleteAutoCommand(id);
             }
         }
 
         // Remove group entry
-        if (self.groups.fetchRemove(group_name)) |kv| {
+        if (self.groups.*.fetchRemove(group_name)) |kv| {
             var list = kv.value;
             list.deinit(self.allocator);
         }
@@ -169,7 +176,7 @@ pub const AutocmdManager = struct {
     /// Execute autocommands for an event
     /// Called from Zig when events occur (e.g., buffer enter, file write)
     pub fn execAutocmds(self: *Self, event: []const u8, ev_data: AutocmdEventData) !void {
-        const list = self.autocmds.get(event) orelse return;
+        const list = self.autocmds.*.get(event) orelse return;
 
         // Create event object to pass to callbacks
         const ev_obj = try self.createEventObject(event, ev_data);
@@ -252,7 +259,7 @@ pub const AutocmdManager = struct {
 
     pub fn deinit(self: *Self) void {
         // Free all autocmd entries
-        var iter = self.autocmds.iterator();
+        var iter = self.autocmds.*.iterator();
         while (iter.next()) |entry| {
             for (entry.value_ptr.items) |item| {
                 c.hermes_value_destroy(item.callback);
@@ -263,14 +270,16 @@ pub const AutocmdManager = struct {
             entry.value_ptr.deinit(self.allocator);
             self.allocator.free(entry.key_ptr.*);
         }
-        self.autocmds.deinit();
+        self.autocmds.*.deinit();
+        self.allocator.destroy(self.autocmds);
 
         // Free groups
-        var group_iter = self.groups.iterator();
+        var group_iter = self.groups.*.iterator();
         while (group_iter.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
         }
-        self.groups.deinit();
+        self.groups.*.deinit();
+        self.allocator.destroy(self.groups);
     }
 };
 
@@ -354,6 +363,9 @@ pub export fn apiCreateAutoCommand(
 
     // Parse event argument (string only for now, array support can be added later)
     // TODO: Add array support when hermes_value_is_array is added to C API
+    // IMPORTANT: We must copy the event string to a stable buffer BEFORE making more JSI calls
+    // because JSI string pointers can be invalidated by subsequent get_property calls
+    var event_storage: [64]u8 = undefined;
     var events_buf: [16][]const u8 = undefined;
     var events_count: usize = 0;
 
@@ -361,8 +373,15 @@ pub export fn apiCreateAutoCommand(
         var len: usize = 0;
         const ptr = c.hermes_value_get_string(rt, args[0], &len);
         if (ptr != null and len > 0) {
-            events_buf[0] = ptr[0..len];
-            events_count = 1;
+            // Copy to stable buffer immediately
+            if (len <= event_storage.len) {
+                @memcpy(event_storage[0..len], ptr[0..len]);
+                events_buf[0] = event_storage[0..len];
+                events_count = 1;
+            } else {
+                c.hermes_throw_error(rt, "createAutoCommand: event name too long");
+                return null;
+            }
         }
     }
 
@@ -394,28 +413,35 @@ pub export fn apiCreateAutoCommand(
         return null;
     }
 
-    // Get optional pattern
+    // IMPORTANT: JSI string pointers can be invalidated by subsequent get_property calls,
+    // so we must copy ALL strings to stable buffers immediately after extraction.
+
+    // Get optional pattern (copy to stable storage)
+    var pattern_storage: [256]u8 = undefined;
     var pattern_slice: ?[]const u8 = null;
     if (c.hermes_value_get_property(rt, opts_val, "pattern")) |pattern_val| {
         defer c.hermes_value_destroy(pattern_val);
         if (c.hermes_value_is_string(pattern_val)) {
             var len: usize = 0;
             const ptr = c.hermes_value_get_string(rt, pattern_val, &len);
-            if (ptr != null and len > 0) {
-                pattern_slice = ptr[0..len];
+            if (ptr != null and len > 0 and len <= pattern_storage.len) {
+                @memcpy(pattern_storage[0..len], ptr[0..len]);
+                pattern_slice = pattern_storage[0..len];
             }
         }
     }
 
-    // Get optional group
+    // Get optional group (copy to stable storage)
+    var group_storage: [64]u8 = undefined;
     var group_slice: ?[]const u8 = null;
     if (c.hermes_value_get_property(rt, opts_val, "group")) |group_val| {
         defer c.hermes_value_destroy(group_val);
         if (c.hermes_value_is_string(group_val)) {
             var len: usize = 0;
             const ptr = c.hermes_value_get_string(rt, group_val, &len);
-            if (ptr != null and len > 0) {
-                group_slice = ptr[0..len];
+            if (ptr != null and len > 0 and len <= group_storage.len) {
+                @memcpy(group_storage[0..len], ptr[0..len]);
+                group_slice = group_storage[0..len];
             }
         }
     }
@@ -429,15 +455,17 @@ pub export fn apiCreateAutoCommand(
         }
     }
 
-    // Get optional desc
+    // Get optional desc (copy to stable storage)
+    var desc_storage: [256]u8 = undefined;
     var desc_slice: ?[]const u8 = null;
     if (c.hermes_value_get_property(rt, opts_val, "desc")) |desc_val| {
         defer c.hermes_value_destroy(desc_val);
         if (c.hermes_value_is_string(desc_val)) {
             var len: usize = 0;
             const ptr = c.hermes_value_get_string(rt, desc_val, &len);
-            if (ptr != null and len > 0) {
-                desc_slice = ptr[0..len];
+            if (ptr != null and len > 0 and len <= desc_storage.len) {
+                @memcpy(desc_storage[0..len], ptr[0..len]);
+                desc_slice = desc_storage[0..len];
             }
         }
     }

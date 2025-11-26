@@ -359,12 +359,14 @@ fn expandHomePath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
 /// Validate path to prevent directory traversal attacks
 ///
 /// Security policy (Defense-in-Depth):
-/// 1. Resolve symlinks (TOCTOU mitigation via realpath)
-/// 2. Check for null bytes (injection prevention)
-/// 3. Reject paths containing ".." (parent directory traversal)
-/// 4. Ensure absolute path after expansion
-/// 5. Normalize case (case-insensitive filesystem bug fix)
-/// 6. Restrict to allowed directories (whitelist):
+/// 1. Check for null bytes (injection prevention)
+/// 2. Reject paths containing ".." (parent directory traversal)
+/// 3. Ensure absolute path after expansion
+/// 4. Check original path against whitelist (BEFORE symlink resolution)
+///    - This allows user-created symlinks in ~/.config/vimcraft/plugins/
+/// 5. Resolve symlinks and check resolved path (TOCTOU mitigation)
+/// 6. Normalize case (case-insensitive filesystem bug fix)
+/// 7. Restrict to allowed directories (whitelist):
 ///    - ~/.config/vimcraft/ (user config)
 ///    - /tmp/ (testing only - disabled in production builds)
 ///    - Current working directory (project-local plugins)
@@ -389,7 +391,32 @@ pub fn validatePath(path: []const u8) LoadError!void {
         return LoadError.InvalidPath;
     }
 
-    // 4. Resolve symlinks to prevent symlink-based bypasses (TOCTOU mitigation)
+    const home = std.posix.getenv("HOME");
+
+    // 4. Check ORIGINAL path against whitelist BEFORE symlink resolution
+    // This allows symlinks created by user in ~/.config/vimcraft/plugins/
+    // to point anywhere (user intent is trusted for symlinks they create)
+    var normalized_original_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const normalized_original = normalizePath(&normalized_original_buf, path);
+
+    // Allow: ~/.config/vimcraft/ (original path, before symlink resolution)
+    if (home) |home_dir| {
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const vimcraft_config = std.fmt.bufPrint(&buf, "{s}/.config/vimcraft", .{home_dir}) catch {
+            return LoadError.InvalidPath;
+        };
+
+        var normalized_whitelist_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const normalized_whitelist = normalizePath(&normalized_whitelist_buf, vimcraft_config);
+
+        if (std.mem.startsWith(u8, normalized_original, normalized_whitelist)) {
+            // Original path is in ~/.config/vimcraft/, allow even if symlink points elsewhere
+            // User explicitly created this symlink, so trust their intent
+            return; // Allowed
+        }
+    }
+
+    // 5. Resolve symlinks to prevent symlink-based bypasses (TOCTOU mitigation)
     var resolved_buf: [std.fs.max_path_bytes]u8 = undefined;
     const resolved_path = std.fs.cwd().realpath(path, &resolved_buf) catch |err| {
         // If path doesn't exist yet, validate the parent directory instead
@@ -406,15 +433,14 @@ pub fn validatePath(path: []const u8) LoadError!void {
         return LoadError.InvalidPath;
     };
 
-    // 5. Normalize case for case-insensitive filesystem bug fix (macOS/Windows)
+    // 6. Normalize case for case-insensitive filesystem bug fix (macOS/Windows)
     // Convert both resolved_path and whitelist paths to lowercase for comparison
     var normalized_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const normalized_path = normalizePath(&normalized_path_buf, resolved_path);
 
-    // 6. Check if path is in allowed directories (whitelist)
-    const home = std.posix.getenv("HOME");
+    // 7. Check if RESOLVED path is in allowed directories (whitelist)
 
-    // Allow: ~/.config/vimcraft/
+    // Allow: ~/.config/vimcraft/ (resolved path)
     if (home) |home_dir| {
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         const vimcraft_config = std.fmt.bufPrint(&buf, "{s}/.config/vimcraft", .{home_dir}) catch {

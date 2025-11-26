@@ -146,11 +146,15 @@ pub fn initJSI(
     // Register animation frame API (requestAnimationFrame)
     animation_api.register(runtime, allocator);
 
-    // Register cursor API (getCursorPosition)
-    // Only register if we have an Editor (not EditorContext)
+    // Register cursor API (getCursorPosition, hide, show)
+    // Register for both Editor and EditorContext
+    // Pass display for cursor visibility control (hide/show during animations)
     const T = @TypeOf(editor_or_context);
     if (T == *Editor) {
-        cursor_api.register(runtime, editor_or_context);
+        cursor_api.register(runtime, editor_or_context, display);
+    } else if (T == *EditorContext) {
+        // EditorContext has its own display - pass pointer to it
+        cursor_api.registerForEditorContext(runtime, editor_or_context, &editor_or_context.display);
     }
 
     // Register filetype API (vim.filetype.match)
@@ -165,7 +169,8 @@ pub fn initJSI(
     }
 
     // Register layer API (createLayer, renderVirtualText, setLayerOpacity, etc.)
-    layer_api.register(runtime, display);
+    // Pass js_state_dirty_ptr so layer changes trigger full render (not cursor-only optimization)
+    layer_api.register(runtime, display, js_state_dirty_ptr);
 
     // Register motion API (vim.motion.* functions)
     // Register for both Editor and EditorContext
@@ -230,7 +235,8 @@ pub fn initJSI(
 
         // Register autocmd API (vim.api.createAutoCommand, vim.api.deleteAutoCommand, etc.)
         const autocmd_mgr = allocator.create(autocmd_api.AutocmdManager) catch @panic("Failed to allocate AutocmdManager");
-        autocmd_mgr.* = autocmd_api.AutocmdManager.init(allocator, runtime, emitter);
+        autocmd_mgr.* = autocmd_api.AutocmdManager.init(allocator, runtime, emitter) catch @panic("Failed to init AutocmdManager");
+
         global_autocmd_manager = autocmd_mgr;
         autocmd_api.initAutocmdManager(autocmd_mgr);
         autocmd_api.register(runtime);
@@ -257,10 +263,13 @@ pub fn initJSI(
 
         // Register autocmd API (vim.api.createAutoCommand, vim.api.deleteAutoCommand, etc.)
         const autocmd_mgr = allocator.create(autocmd_api.AutocmdManager) catch @panic("Failed to allocate AutocmdManager");
-        autocmd_mgr.* = autocmd_api.AutocmdManager.init(allocator, runtime, emitter);
+        autocmd_mgr.* = autocmd_api.AutocmdManager.init(allocator, runtime, emitter) catch @panic("Failed to init AutocmdManager");
         global_autocmd_manager = autocmd_mgr;
         autocmd_api.initAutocmdManager(autocmd_mgr);
         autocmd_api.register(runtime);
+
+        // Store in inner Editor for use by native code (firing autocmds on CursorMoved, etc.)
+        editor_or_context.editor.autocmd_manager = autocmd_mgr;
 
         // Register user command API (for completeness in headless mode)
         const usercommand_ctx = usercommand_api.UserCommandContext.init(allocator, runtime) catch @panic("Failed to allocate UserCommandContext");
@@ -476,7 +485,8 @@ pub fn deinitJSI() void {
         }
         global_process_ctx = null;
     }
-    // Clean up fetch context
+    // Clean up fetch context and module state (queue, in-flight tracker)
+    fetch_api.deinit(); // CRITICAL: Clean up fetch queue and in-flight requests
     if (global_fetch_ctx) |ctx| {
         if (global_allocator) |alloc| {
             alloc.destroy(ctx);
@@ -530,10 +540,13 @@ pub fn clearAllModuleCache() void {
 // Re-export commonly used functions from modules for backwards compatibility
 pub const processTimerQueue = timer_api.processQueue;
 pub const processAnimationFrames = animation_api.processFrames;
+pub const processFetchQueue = fetch_api.processQueue;
 pub const clearAllTimers = timer_api.clearAll;
 pub const deinitTimers = timer_api.deinit;
+pub const deinitFetch = fetch_api.deinit;
 
 /// Load plugin file (NO wrapper - assumes runtime.js already loaded)
+/// Uses esbuild bundling to resolve imports (e.g., './src/index')
 /// Uses new transpiler system for TypeScript support and WyHash caching
 pub fn loadPlugin(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: std.mem.Allocator) !void {
     // Get cache directory from global state (initialized in main.zig)
@@ -546,9 +559,63 @@ pub fn loadPlugin(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
         .stats = &global_cache_stats,
     };
 
-    // Load module (transpile + compile + cache)
-    const bytecode = try transpiler.loadModule(allocator, loader_config, filepath);
+    // Use bundling to resolve imports (plugins often have imports like './src/index')
+    // This is different from loadConfig which also wraps with runtime.js
+    const esbuild = @import("../transpiler/esbuild.zig");
+    const hermes = @import("../transpiler/hermes.zig");
+    const cache = @import("../transpiler/cache.zig");
+
+    // Expand ~ to home directory
+    const expanded_path = if (std.mem.startsWith(u8, filepath, "~/")) blk: {
+        const home = std.posix.getenv("HOME") orelse return error.HomeNotFound;
+        break :blk try std.fmt.allocPrint(allocator, "{s}{s}", .{ home, filepath[1..] });
+    } else try allocator.dupe(u8, filepath);
+    defer allocator.free(expanded_path);
+
+    // Check cache first (based on mtime)
+    const cache_key = cache.computeCacheKey(allocator, expanded_path) catch return error.CacheFailed;
+    defer allocator.free(cache_key);
+
+    const cache_path = try std.fmt.allocPrint(allocator, "{s}/{s}.hbc", .{ cache_dir, cache_key });
+    defer allocator.free(cache_path);
+
+    // Try cache first
+    if (loader_config.enable_cache and cache.isCacheFresh(expanded_path, cache_path)) {
+        if (cache.loadFromCache(allocator, cache_path)) |bytecode| {
+            defer allocator.free(bytecode);
+            global_cache_stats.recordHit();
+            const result = c.hermes_evaluate_bytecode(runtime, bytecode.ptr, bytecode.len);
+            if (result == null) {
+                const err_msg = c.hermes_get_exception_message(runtime);
+                std.debug.print("[JSI] Plugin error: {s}\n", .{err_msg});
+                return error.JSError;
+            }
+            defer c.hermes_value_destroy(result);
+            return;
+        } else |_| {
+            // Cache read failed - rebuild
+        }
+    }
+
+    // Bundle plugin with esbuild (resolves all imports into single file)
+    const bundled_js = esbuild.buildWithCacheDir(allocator, expanded_path, cache_dir) catch |err| {
+        std.log.err("esbuild bundle failed for plugin {s}: {}", .{ filepath, err });
+        return error.TranspileFailed;
+    };
+    defer allocator.free(bundled_js);
+
+    // Compile to Hermes bytecode
+    const bytecode = hermes.compile(allocator, bundled_js) catch |err| {
+        std.log.err("Hermes compilation failed for plugin {s}: {}", .{ filepath, err });
+        return error.CompileFailed;
+    };
     defer allocator.free(bytecode);
+
+    // Save to cache
+    if (loader_config.enable_cache) {
+        cache.saveToCache(cache_path, bytecode) catch {};
+    }
+    global_cache_stats.recordMiss(bytecode.len);
 
     // Execute bytecode
     const result = c.hermes_evaluate_bytecode(runtime, bytecode.ptr, bytecode.len);

@@ -508,6 +508,27 @@ const char* hermes_get_version(void);
  */
 bool hermes_is_bytecode(const uint8_t* data, size_t len);
 
+/**
+ * Drain the microtask queue (process pending Promise callbacks)
+ *
+ * Hermes schedules Promise .then() callbacks as microtasks. These microtasks
+ * must be explicitly drained after native code resolves promises.
+ *
+ * Call this after:
+ * - Processing async fetch callbacks (resolve/reject)
+ * - Any native code that resolves JavaScript Promises
+ *
+ * @param runtime The Hermes runtime
+ * @param max_hint Maximum number of microtasks to process (-1 for unlimited)
+ * @return true if all microtasks were processed, false if more remain
+ *
+ * Example:
+ *   // After resolving a Promise from native code
+ *   hermes_call_function(runtime, resolve_callback, ...);
+ *   hermes_drain_microtasks(runtime, -1);  // Process .then() callbacks
+ */
+bool hermes_drain_microtasks(OVHermesRuntime* runtime, int max_hint);
+
 //
 // Chrome DevTools Protocol (CDP) Support
 //

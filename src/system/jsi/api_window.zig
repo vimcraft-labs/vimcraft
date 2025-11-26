@@ -214,6 +214,22 @@ pub export fn apiWinSetCursor(
     return c.hermes_value_create_undefined(rt);
 }
 
+/// Safe conversion of f64 to i32, handling NaN, Infinity, and out-of-range values
+/// Returns null if the value cannot be safely converted
+fn safeFloatToInt(value: f64) ?i32 {
+    // Check for NaN
+    if (std.math.isNan(value)) return null;
+    // Check for Infinity
+    if (std.math.isInf(value)) return null;
+    // Check bounds (i32 range)
+    if (value < @as(f64, @floatFromInt(std.math.minInt(i32))) or
+        value > @as(f64, @floatFromInt(std.math.maxInt(i32))))
+    {
+        return null;
+    }
+    return @intFromFloat(value);
+}
+
 /// vim.api.winIsValid(win) -> boolean
 /// Returns true if window handle is valid (exists in editor's windows)
 pub export fn apiWinIsValid(
@@ -230,7 +246,10 @@ pub export fn apiWinIsValid(
     if (count < 1) return c.hermes_value_create_boolean(rt, false);
 
     const win_handle_val = args[0] orelse return c.hermes_value_create_boolean(rt, false);
-    const win_handle = @as(i32, @intFromFloat(c.hermes_value_get_number(win_handle_val)));
+    const win_handle = safeFloatToInt(c.hermes_value_get_number(win_handle_val)) orelse {
+        // NaN, Infinity, or out-of-range values are always invalid
+        return c.hermes_value_create_boolean(rt, false);
+    };
 
     const ctx = global_ctx orelse {
         // Fallback: only window 0 is valid
@@ -883,6 +902,71 @@ pub export fn apiWinGetPosition(
 }
 
 // ============================================================================
+// Editor-level API Functions (Mode, etc.)
+// ============================================================================
+
+/// vim.api.getMode() -> {mode: string, blocking: boolean}
+/// Returns current mode (Neovim compatible: nvim_get_mode)
+/// Mode strings: "n" (normal), "i" (insert), "v" (visual), "c" (command)
+pub export fn apiGetMode(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+    _ = args;
+    _ = count;
+
+    const rt = runtime orelse return null;
+    const ctx = global_ctx orelse {
+        // Fallback: return normal mode
+        const result = c.hermes_value_create_object(rt) orelse return c.hermes_value_create_null(rt);
+        const mode_val = c.hermes_value_create_string(rt, "n", 1);
+        const blocking_val = c.hermes_value_create_boolean(rt, false);
+        if (mode_val) |mv| {
+            c.hermes_value_set_property(rt, result, "mode", mv);
+            c.hermes_value_destroy(mv);
+        }
+        if (blocking_val) |bv| {
+            c.hermes_value_set_property(rt, result, "blocking", bv);
+            c.hermes_value_destroy(bv);
+        }
+        return result;
+    };
+
+    // Get editor to access mode_manager
+    const editor = getEditorFromContext(ctx);
+
+    // Get mode string (Neovim short format: n, i, v, c)
+    const mode_char: []const u8 = if (editor) |e| blk: {
+        const mode = e.mode_manager.current_mode;
+        break :blk switch (mode) {
+            .normal => "n",
+            .insert => "i",
+            .visual => "v",
+            .command => "c",
+        };
+    } else "n"; // Default to normal
+
+    // Create result object
+    const result = c.hermes_value_create_object(rt) orelse return c.hermes_value_create_null(rt);
+    const mode_val = c.hermes_value_create_string(rt, mode_char.ptr, mode_char.len);
+    const blocking_val = c.hermes_value_create_boolean(rt, false); // Vimcraft never blocks
+
+    if (mode_val) |mv| {
+        c.hermes_value_set_property(rt, result, "mode", mv);
+        c.hermes_value_destroy(mv);
+    }
+    if (blocking_val) |bv| {
+        c.hermes_value_set_property(rt, result, "blocking", bv);
+        c.hermes_value_destroy(bv);
+    }
+
+    return result;
+}
+
+// ============================================================================
 // Registration
 // ============================================================================
 
@@ -944,6 +1028,9 @@ fn registerFunctions(runtime: *c.OVHermesRuntime) void {
 
     // Window navigation
     c.hermes_register_host_function(runtime, "vimWincmd", apiWincmd, null);
+
+    // Editor-level functions (mode)
+    c.hermes_register_host_function(runtime, "vimApiGetMode", apiGetMode, null);
 }
 
 /// Cleanup
@@ -1028,6 +1115,8 @@ fn getWindowFromHandle(ctx: *ApiWindowContext, handle: i32) ?*Window {
         // Handle 0 = current window
         break :blk editor.current_window_id orelse return null;
     } else blk: {
+        // Negative handles are invalid (can occur from JS NaN or out-of-range values)
+        if (handle < 0) return null;
         break :blk WindowId{ .id = @intCast(handle) };
     };
 

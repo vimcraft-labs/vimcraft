@@ -133,12 +133,24 @@ pub const ConfigPaths = struct {
         // Iterate over subdirectories in plugins/
         var iter = dir.iterate();
         while (try iter.next()) |entry| {
-            // Only process directories
-            if (entry.kind != .directory) continue;
-
             // Skip hidden directories and special names
             if (std.mem.startsWith(u8, entry.name, ".")) continue;
             if (std.mem.eql(u8, entry.name, "node_modules")) continue;
+
+            // Process directories and symlinks (follow symlinks to check target)
+            const is_dir = switch (entry.kind) {
+                .directory => true,
+                .sym_link => blk: {
+                    // Follow symlink and check if target is a directory
+                    const full_path = try std.fs.path.join(allocator, &[_][]const u8{ self.plugins_dir, entry.name });
+                    defer allocator.free(full_path);
+                    var target_dir = std.fs.openDirAbsolute(full_path, .{}) catch break :blk false;
+                    target_dir.close();
+                    break :blk true;
+                },
+                else => false,
+            };
+            if (!is_dir) continue;
 
             // Build path to potential index.ts
             const index_path = try std.fs.path.join(allocator, &[_][]const u8{ self.plugins_dir, entry.name, "index.ts" });

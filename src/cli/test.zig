@@ -23,6 +23,7 @@ const c_api = @import("../system/jsi/c_api.zig");
 const c = c_api.c;
 const event_loop = @import("../system/event_loop/libuv.zig");
 const timer_api = @import("../system/jsi/timer_api.zig");
+const fetch_api = @import("../system/jsi/fetch_api.zig");
 const e2e_api = @import("../system/jsi/e2e_api.zig");
 
 /// Global verbose flag for console.log output
@@ -103,7 +104,7 @@ pub const TestSummary = struct {
                 stdout.print("    {s} {s}\n", .{ status, result.name }) catch return;
             }
 
-            // Print error message for failed tests (on separate line, only if non-empty)
+            // Print error message and logs for failed tests
             if (!result.passed) {
                 if (result.error_message) |msg| {
                     if (msg.len > 0) {
@@ -112,6 +113,17 @@ pub const TestSummary = struct {
                         } else {
                             stdout.print("      {s}\n", .{msg}) catch return;
                         }
+                    }
+                }
+                // Print captured logs for failed tests (helps debugging)
+                if (result.logs.len > 0) {
+                    if (is_tty) {
+                        stdout.print("      \x1b[33mLogs:\x1b[0m\n", .{}) catch return;
+                    } else {
+                        stdout.print("      Logs:\n", .{}) catch return;
+                    }
+                    for (result.logs) |log| {
+                        stdout.print("        {s}\n", .{log}) catch return;
                     }
                 }
             }
@@ -356,7 +368,8 @@ pub fn execute(allocator: std.mem.Allocator, sandbox_path: []const u8, verbose: 
     defer c.hermes_runtime_destroy(runtime);
 
     // Initialize full JSI API (vim.motion, vim.cursor, vim.buffer, vim.e2e, etc.)
-    jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &options_mgr, &editor_ctx, &editor_ctx.display);
+    // CRITICAL: Pass &editor_ctx.editor (not &editor_ctx) to enable vim.cursor API
+    jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &options_mgr, &editor_ctx.editor, &editor_ctx.display);
     defer jsi_api.deinitJSI();
 
     // Initialize timer system for async tests
@@ -458,11 +471,14 @@ pub fn execute(allocator: std.mem.Allocator, sandbox_path: []const u8, verbose: 
             return error.TestTimeout;
         }
 
-        // Process libuv events (timers, etc.)
+        // Process libuv events (timers, fetch, etc.)
         _ = event_loop.runOnce();
 
         // Process timer callbacks (calls JavaScript)
         timer_api.processQueue(allocator);
+
+        // Process fetch callbacks (async HTTP responses)
+        fetch_api.processQueue(allocator);
 
         // Small sleep to prevent CPU spin
         std.Thread.sleep(1_000_000); // 1ms

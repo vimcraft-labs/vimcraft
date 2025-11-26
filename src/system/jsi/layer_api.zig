@@ -17,6 +17,10 @@ const animation_api = @import("animation_api.zig");
 /// Set during initialization
 var global_display: ?*Display = null;
 
+/// Global js_state_dirty pointer for triggering re-renders
+/// Set during initialization - when layers are modified, this triggers full render
+var global_js_state_dirty: ?*bool = null;
+
 /// Set the global display for layer operations
 pub fn setDisplay(display: ?*Display) void {
     global_display = display;
@@ -309,6 +313,10 @@ pub export fn renderVirtualText(
     // Clear layer before rendering new cells
     layer.clear();
 
+    // Get gutter width for filtering - cells in gutter area should not be rendered
+    // This is handled at Zig level so plugin developers don't need to worry about it
+    const gutter_width = display.gutter_manager.getTotalWidth();
+
     // Get array length using hermes_value_get_property
     const cells_val = args[1].?;
     const length_val = c.hermes_value_get_property(runtime, cells_val, "length");
@@ -365,6 +373,17 @@ pub export fn renderVirtualText(
         const row = @as(usize, @intFromFloat(row_f));
         const col = @as(usize, @intFromFloat(col_f));
 
+        // GUTTER CLIPPING: Skip cells in gutter area (Neovim-like compositor clipping)
+        // Neovim clips floating windows to visible area - we do the same for custom layers
+        // Future: separate vim.sign API for gutter rendering (like nvim_buf_set_extmark sign_text)
+        if (col < gutter_width) {
+            c.hermes_value_destroy(row_val);
+            c.hermes_value_destroy(col_val);
+            c.hermes_value_destroy(char_val);
+            c.hermes_value_destroy(cell_val);
+            continue;
+        }
+
         // Get character (could be number codepoint or string)
         var char: u21 = ' ';
         if (c.hermes_value_is_number(char_val)) {
@@ -376,7 +395,11 @@ pub export fn renderVirtualText(
             var char_len: usize = 0;
             const char_ptr = c.hermes_value_get_string(runtime, char_val, &char_len);
             if (char_ptr != null and char_len > 0) {
-                char = @intCast(char_ptr[0]);
+                // Properly decode UTF-8 to get Unicode codepoint
+                // Block characters like '█' (U+2588) are 3 bytes in UTF-8
+                const slice = char_ptr[0..char_len];
+                const decoded = std.unicode.utf8Decode(slice) catch ' ';
+                char = decoded;
             }
         }
 
@@ -437,6 +460,12 @@ pub export fn renderVirtualText(
     // This is safe because renderVirtualText ALWAYS renders content
     animation_api.markLayersModified();
 
+    // CRITICAL: Set js_state_dirty to bypass cursor-only render optimization
+    // Without this, backend.zig:881 sees no change and skips full render
+    if (global_js_state_dirty) |dirty| {
+        dirty.* = true;
+    }
+
     // Debug: Log rendering (to debug log, not terminal)
     debug_log.log("[JSI] renderVirtualText('{s}') - rendered {d} cells, marked dirty", .{ name, length });
 
@@ -495,6 +524,14 @@ pub export fn setLayerOpacity(
     // Update opacity
     layer.setOpacity(opacity);
 
+    // Mark layers modified to trigger re-render (for fade effects)
+    animation_api.markLayersModified();
+
+    // CRITICAL: Set js_state_dirty to bypass cursor-only render optimization
+    if (global_js_state_dirty) |dirty| {
+        dirty.* = true;
+    }
+
     return c.hermes_value_create_undefined(runtime);
 }
 
@@ -546,6 +583,10 @@ pub export fn clearLayer(
     // This prevents idle flickering when clearing already-empty layers
     if (had_content) {
         animation_api.markLayersModified();
+        // CRITICAL: Set js_state_dirty to bypass cursor-only render optimization
+        if (global_js_state_dirty) |dirty| {
+            dirty.* = true;
+        }
         debug_log.log("[JSI] clearLayer('{s}') - had content, marked dirty", .{name});
     } else {
         debug_log.log("[JSI] clearLayer('{s}') - was empty, NOT marking dirty", .{name});
@@ -670,9 +711,11 @@ pub export fn layerHostObjectEnumerator(
 
 /// Register layer API as HostObject (zero-copy, 3-5x faster)
 /// JavaScript usage: vim.layer.createLayer('name', opts), vim.layer.renderVirtualText('name', cells)
-pub fn register(runtime: *c.OVHermesRuntime, display: ?*Display) void {
+pub fn register(runtime: *c.OVHermesRuntime, display: ?*Display, js_state_dirty: ?*bool) void {
     // Set global display
     global_display = display;
+    // Set js_state_dirty pointer for triggering re-renders when layers change
+    global_js_state_dirty = js_state_dirty;
 
     c.hermes_register_host_object(
         runtime,

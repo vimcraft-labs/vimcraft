@@ -259,6 +259,123 @@ fn getLine(
     return helpers.returnUndefined(runtime);
 }
 
+/// vim.e2e.getLayers() -> array of layer objects
+/// Returns information about all display layers for debugging compositor state
+fn getLayersCmd(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        // No display available - return empty array
+        return c.hermes_array_create(runtime, 0);
+    };
+
+    // Get layers from layer manager
+    const layers = display.layer_manager.layers.items;
+
+    // Create result array
+    const result = c.hermes_array_create(runtime, layers.len) orelse return helpers.returnUndefined(runtime);
+
+    for (layers, 0..) |layer, i| {
+        // Create layer object
+        const layer_obj = c.hermes_value_create_object(runtime) orelse continue;
+
+        // id
+        const id_val = c.hermes_value_create_number(runtime, @floatFromInt(layer.id));
+        if (id_val) |v| {
+            c.hermes_value_set_property(runtime, layer_obj, "id", v);
+            c.hermes_value_destroy(v);
+        }
+
+        // name
+        const name_val = c.hermes_value_create_string(runtime, layer.name.ptr, layer.name.len);
+        if (name_val) |v| {
+            c.hermes_value_set_property(runtime, layer_obj, "name", v);
+            c.hermes_value_destroy(v);
+        }
+
+        // z_index
+        const z_val = c.hermes_value_create_number(runtime, @floatFromInt(layer.z_index));
+        if (z_val) |v| {
+            c.hermes_value_set_property(runtime, layer_obj, "zIndex", v);
+            c.hermes_value_destroy(v);
+        }
+
+        // enabled
+        const enabled_val = c.hermes_value_create_boolean(runtime, layer.enabled);
+        if (enabled_val) |v| {
+            c.hermes_value_set_property(runtime, layer_obj, "enabled", v);
+            c.hermes_value_destroy(v);
+        }
+
+        // opacity
+        const opacity_val = c.hermes_value_create_number(runtime, layer.opacity);
+        if (opacity_val) |v| {
+            c.hermes_value_set_property(runtime, layer_obj, "opacity", v);
+            c.hermes_value_destroy(v);
+        }
+
+        // dirty
+        const dirty_val = c.hermes_value_create_boolean(runtime, layer.dirty);
+        if (dirty_val) |v| {
+            c.hermes_value_set_property(runtime, layer_obj, "dirty", v);
+            c.hermes_value_destroy(v);
+        }
+
+        // width
+        const width_val = c.hermes_value_create_number(runtime, @floatFromInt(layer.grid.width));
+        if (width_val) |v| {
+            c.hermes_value_set_property(runtime, layer_obj, "width", v);
+            c.hermes_value_destroy(v);
+        }
+
+        // height
+        const height_val = c.hermes_value_create_number(runtime, @floatFromInt(layer.grid.height));
+        if (height_val) |v| {
+            c.hermes_value_set_property(runtime, layer_obj, "height", v);
+            c.hermes_value_destroy(v);
+        }
+
+        c.hermes_array_set(runtime, result, i, layer_obj);
+        c.hermes_value_destroy(layer_obj);
+    }
+
+    return result;
+}
+
+/// vim.e2e.getLogs(opts?) -> array of log strings
+/// Returns captured console.log entries from current test
+/// opts.level: optional filter by log level (not used for console.log captures)
+/// opts.maxBytes: optional max response size (default unlimited)
+fn getLogsCmd(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+
+    // Return the captured console.log entries from current test
+    const logs = current_test_logs.items;
+
+    // Create result array
+    const result = c.hermes_array_create(runtime, logs.len) orelse return helpers.returnUndefined(runtime);
+
+    for (logs, 0..) |log, i| {
+        const log_val = c.hermes_value_create_string(runtime, log.ptr, log.len);
+        if (log_val) |v| {
+            c.hermes_array_set(runtime, result, i, v);
+            c.hermes_value_destroy(v);
+        }
+    }
+
+    _ = ctx;
+    return result;
+}
+
 // ============================================================================
 // Command Functions
 // ============================================================================
@@ -291,6 +408,100 @@ fn keysCmd(
     // Mark state dirty for re-render
     if (ctx.js_state_dirty) |dirty| {
         dirty.* = true;
+    }
+
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.tick(iterations?) -> number
+/// Process event loop iterations (timers, animation frames)
+/// This allows setTimeout/setInterval callbacks to fire during tests
+/// Returns number of timer callbacks processed
+fn tickCmd(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+
+    // Get optional iteration count (default 10)
+    var iterations: usize = 10;
+    if (arg_count >= 1) {
+        if (args[0]) |arg| {
+            if (c.hermes_value_is_number(arg)) {
+                iterations = @intFromFloat(c.hermes_value_get_number(arg));
+            }
+        }
+    }
+
+    // Import timer, fetch, and event loop modules
+    const event_loop = @import("../event_loop/libuv.zig");
+    const timer_api = @import("timer_api.zig");
+    const fetch_api = @import("fetch_api.zig");
+
+    // Process event loop multiple times to give timers/fetch a chance to fire
+    for (0..iterations) |_| {
+        // Run libuv event loop (non-blocking)
+        // This handles OS-level async operations (including fetch HTTP requests)
+        _ = event_loop.runOnce();
+
+        // Process timer callbacks
+        timer_api.processQueue(ctx.allocator);
+
+        // Process fetch callbacks (async HTTP responses)
+        fetch_api.processQueue(ctx.allocator);
+
+        // Small sleep to allow timers/network requests to mature
+        std.Thread.sleep(1_000_000); // 1ms
+    }
+
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.wait(ms) -> void
+/// Wait for specified milliseconds while processing event loop
+/// More convenient than tick() for timing-based tests
+fn waitCmd(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+
+    // Get wait time in ms (default 50ms)
+    var wait_ms: u64 = 50;
+    if (arg_count >= 1) {
+        if (args[0]) |arg| {
+            if (c.hermes_value_is_number(arg)) {
+                wait_ms = @intFromFloat(c.hermes_value_get_number(arg));
+            }
+        }
+    }
+
+    // Import timer, fetch, and event loop modules
+    const event_loop = @import("../event_loop/libuv.zig");
+    const timer_api = @import("timer_api.zig");
+    const fetch_api = @import("fetch_api.zig");
+
+    const start = std.time.milliTimestamp();
+    const end_time = start + @as(i64, @intCast(wait_ms));
+
+    // Process event loop until time expires
+    while (std.time.milliTimestamp() < end_time) {
+        // Run libuv event loop (non-blocking)
+        // This handles OS-level async operations (including fetch HTTP requests)
+        _ = event_loop.runOnce();
+
+        // Process timer callbacks
+        timer_api.processQueue(ctx.allocator);
+
+        // Process fetch callbacks (async HTTP responses)
+        fetch_api.processQueue(ctx.allocator);
+
+        // Small sleep to prevent CPU spin
+        std.Thread.sleep(1_000_000); // 1ms
     }
 
     return helpers.returnUndefined(runtime);
@@ -1022,7 +1233,6 @@ fn assertEqual(
         return null;
     }
 
-    // For simple numeric comparison
     const actual = args[0];
     const expected = args[1];
 
@@ -1034,16 +1244,64 @@ fn assertEqual(
         if (actual_num != expected_num) {
             var msg_buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&msg_buf, "Expected {d}, got {d}", .{ expected_num, actual_num }) catch "Assertion failed";
-            // Null-terminate for C string compatibility
             if (msg.len < msg_buf.len) {
                 msg_buf[msg.len] = 0;
             }
             c.hermes_throw_error(runtime, msg.ptr);
             return null;
         }
+        return helpers.returnUndefined(runtime);
     }
 
-    return helpers.returnUndefined(runtime);
+    // Check if both are booleans
+    if (c.hermes_value_is_boolean(actual) and c.hermes_value_is_boolean(expected)) {
+        const actual_bool = c.hermes_value_get_boolean(actual);
+        const expected_bool = c.hermes_value_get_boolean(expected);
+
+        if (actual_bool != expected_bool) {
+            var msg_buf: [512]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "Expected {}, got {}", .{ expected_bool, actual_bool }) catch "Assertion failed";
+            if (msg.len < msg_buf.len) {
+                msg_buf[msg.len] = 0;
+            }
+            c.hermes_throw_error(runtime, msg.ptr);
+            return null;
+        }
+        return helpers.returnUndefined(runtime);
+    }
+
+    // Check if both are strings
+    if (c.hermes_value_is_string(actual) and c.hermes_value_is_string(expected)) {
+        var actual_len: usize = 0;
+        var expected_len: usize = 0;
+        const actual_ptr = c.hermes_value_get_string(runtime, actual, &actual_len);
+        const expected_ptr = c.hermes_value_get_string(runtime, expected, &expected_len);
+
+        if (actual_ptr != null and expected_ptr != null) {
+            const actual_str = actual_ptr[0..actual_len];
+            const expected_str = expected_ptr[0..expected_len];
+
+            if (!std.mem.eql(u8, actual_str, expected_str)) {
+                var msg_buf: [512]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "Expected '{s}', got '{s}'", .{ expected_str, actual_str }) catch "Assertion failed";
+                if (msg.len < msg_buf.len) {
+                    msg_buf[msg.len] = 0;
+                }
+                c.hermes_throw_error(runtime, msg.ptr);
+                return null;
+            }
+        }
+        return helpers.returnUndefined(runtime);
+    }
+
+    // Type mismatch - fail with descriptive error
+    var msg_buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "assert.equal: type mismatch between actual and expected values", .{}) catch "Type mismatch";
+    if (msg.len < msg_buf.len) {
+        msg_buf[msg.len] = 0;
+    }
+    c.hermes_throw_error(runtime, msg.ptr);
+    return null;
 }
 
 /// vim.e2e.assert.mode(expected_mode)
@@ -1302,8 +1560,12 @@ pub export fn vimE2EHostObjectGet(
         .{ "getState", getState },
         .{ "getBufferContent", getBufferContent },
         .{ "getLine", getLine },
+        .{ "getLayers", getLayersCmd },
+        .{ "getLogs", getLogsCmd },
         // Commands
         .{ "keys", keysCmd },
+        .{ "tick", tickCmd },
+        .{ "wait", waitCmd },
         // Test structure
         .{ "describe", describeCmd },
         .{ "test", testCmd },
@@ -1359,6 +1621,13 @@ fn createAssertObject(runtime: ?*c.OVHermesRuntime) ?*c.OVHermesValue {
     if (true_fn) |tf| {
         c.hermes_value_set_property(runtime, assert_obj, "true", tf);
         c.hermes_value_destroy(tf);
+    }
+
+    // Add assert.ok as alias for assert.true (common Jest/Mocha pattern)
+    const ok_fn = c.hermes_create_function(runtime, "ok", assertTrue, null);
+    if (ok_fn) |okf| {
+        c.hermes_value_set_property(runtime, assert_obj, "ok", okf);
+        c.hermes_value_destroy(okf);
     }
 
     const false_fn = c.hermes_create_function(runtime, "false", assertFalse, null);

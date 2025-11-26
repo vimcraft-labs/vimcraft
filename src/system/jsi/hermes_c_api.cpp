@@ -1156,6 +1156,25 @@ bool hermes_is_bytecode(const uint8_t* data, size_t len) {
     }
 }
 
+bool hermes_drain_microtasks(OVHermesRuntime* runtime, int max_hint) {
+    if (!runtime || !runtime->runtime) return true;
+
+    try {
+        // drainMicrotasks() processes pending Promise callbacks (microtasks)
+        // Returns true if all microtasks were processed, false if more remain
+        // max_hint of -1 means process all pending microtasks
+        return runtime->runtime->drainMicrotasks(max_hint);
+    } catch (const JSError& e) {
+        runtime->last_exception_message = e.what();
+        return false;
+    } catch (const std::exception& e) {
+        runtime->last_exception_message = e.what();
+        return false;
+    } catch (...) {
+        return false;
+    }
+}
+
 //
 // Chrome DevTools Protocol (CDP) Implementation
 //

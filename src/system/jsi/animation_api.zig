@@ -36,10 +36,21 @@ pub fn init(allocator: std.mem.Allocator, runtime: *c.OVHermesRuntime) void {
 
 /// Process all pending animation frame callbacks
 /// Called by editor before rendering
-/// Returns true if any callbacks were processed AND layers were modified
+/// Returns true if layers were modified (by RAF callbacks OR by timer callbacks via layer API)
 pub fn processFrames(allocator: std.mem.Allocator) bool {
     if (!animation_initialized or !animation_callbacks_initialized) return false;
-    if (animation_callbacks.items.len == 0) return false;
+
+    // IMPORTANT: Check flag even when no RAF callbacks are queued!
+    // Timer callbacks (setTimeout) can also modify layers via vim.layer.renderVirtualText()
+    if (animation_callbacks.items.len == 0) {
+        // Return current flag value and reset it
+        const modified = animation_frame_modified_layers;
+        animation_frame_modified_layers = false;
+        if (modified) {
+            debug_log.log("[ANIM] processFrames() returning TRUE (no RAF, but flag was set)", .{});
+        }
+        return modified;
+    }
 
     const rt = animation_runtime orelse return false;
 
@@ -163,6 +174,7 @@ export fn markAnimationFrameDirty(
 /// Public function to mark layers as modified (called by layer_api)
 pub fn markLayersModified() void {
     animation_frame_modified_layers = true;
+    debug_log.log("[ANIM] markLayersModified() called, flag now TRUE", .{});
 }
 
 /// Register animation frame API functions with runtime

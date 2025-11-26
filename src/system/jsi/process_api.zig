@@ -1,13 +1,70 @@
 /// Process API for JavaScript plugins
 /// Provides Node.js-style process information and child process spawning
+///
+/// Includes both synchronous spawn() and async spawnAsync() for LSP/long-running processes.
+/// Async implementation uses libuv for event-loop integration.
 const std = @import("std");
 const c = @import("c_api.zig").c;
 const builtin = @import("builtin");
+const event_loop = @import("../event_loop/libuv.zig");
+const uv = event_loop.uv;
 
 /// Context passed to all process functions
 pub const ProcessContext = struct {
     allocator: std.mem.Allocator,
+    runtime: ?*c.OVHermesRuntime = null,
 };
+
+// ============================================================================
+// Async Process Management (for LSP, long-running subprocesses)
+// ============================================================================
+
+/// Global context for async process callbacks
+var global_process_ctx: ?*ProcessContext = null;
+
+/// Async process handle - tracks a running subprocess
+const AsyncProcess = struct {
+    id: u32,
+    allocator: std.mem.Allocator,
+
+    // libuv handles
+    process: uv.uv_process_t,
+    stdin_pipe: uv.uv_pipe_t,
+    stdout_pipe: uv.uv_pipe_t,
+    stderr_pipe: uv.uv_pipe_t,
+
+    // Process state
+    running: bool = true,
+    exit_code: i64 = 0,
+    exit_signal: i32 = 0,
+
+    // Read buffers
+    stdout_buf: std.ArrayList(u8),
+    stderr_buf: std.ArrayList(u8),
+};
+
+/// Registry of active async processes
+var async_processes: std.AutoHashMapUnmanaged(u32, *AsyncProcess) = .empty;
+var next_process_id: u32 = 1;
+
+/// Pending events to deliver to JavaScript
+const ProcessEvent = struct {
+    process_id: u32,
+    event_type: EventType,
+    data: ?[]const u8,
+    code: i64,
+    signal: i32,
+
+    const EventType = enum {
+        stdout,
+        stderr,
+        exit,
+        @"error",
+    };
+};
+
+var pending_events: std.ArrayListUnmanaged(ProcessEvent) = .empty;
+var pending_events_allocator: ?std.mem.Allocator = null;
 
 // ============================================================================
 // Host Object Getter
@@ -49,6 +106,9 @@ pub export fn processHostObjectGet(
     const FunctionMap = std.StaticStringMap(*const fn (?*c.OVHermesRuntime, ?*anyopaque, [*c]?*c.OVHermesValue, usize) callconv(.c) ?*c.OVHermesValue).initComptime(.{
         .{ "cwd", cwd },
         .{ "spawn", spawn },
+        .{ "spawnAsync", spawnAsync },
+        .{ "killProcess", killProcess },
+        .{ "writeToProcess", writeToProcess },
         .{ "exit", exit },
     });
 

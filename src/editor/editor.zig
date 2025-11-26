@@ -198,6 +198,10 @@ pub const Editor = struct {
     // Set this to true when JavaScript APIs modify editor state to trigger re-render
     js_state_dirty: bool = false,
 
+    // Guard to prevent reentrant CursorMoved autocmd calls
+    // (plugin callbacks might trigger cursor operations that fire more CursorMoved)
+    firing_cursor_moved: bool = false,
+
     // Internal state
     pending_cmd: PendingCommand,
     pending_register: PendingRegister,
@@ -1057,6 +1061,11 @@ pub const Editor = struct {
     pub fn executeKeys(self: *Editor, keys: []const u8) anyerror!bool {
         var state_changed = false;
 
+        // Track cursor position before processing keys (for CursorMoved autocmd)
+        const buf = self.getCurrentBuffer();
+        const start_row = if (buf) |b| b.cursor.row else 0;
+        const start_col = if (buf) |b| b.cursor.col else 0;
+
         // Process each character/sequence
         var i: usize = 0;
         while (i < keys.len) {
@@ -1073,6 +1082,13 @@ pub const Editor = struct {
                 const changed = try self.processInput(input);
                 state_changed = state_changed or changed;
                 i += 1;
+            }
+        }
+
+        // Fire CursorMoved if cursor position changed
+        if (buf) |b| {
+            if (b.cursor.row != start_row or b.cursor.col != start_col) {
+                self.fireCursorMoved();
             }
         }
 
@@ -2704,6 +2720,35 @@ pub const Editor = struct {
         const c_args = [_]*c.OVHermesValue{args_obj};
         emitter.emit(event_name, &c_args) catch |err| {
             self.logger.err("Failed to emit autocommand '{s}': {}", .{ event_name, err }) catch {};
+        };
+    }
+
+    /// Fire CursorMoved autocmd event
+    /// Called from executeKeys when cursor position changes
+    /// This triggers vim.api.createAutocmd('CursorMoved', ...) callbacks
+    pub fn fireCursorMoved(self: *Editor) void {
+        // Prevent reentrancy - plugin callbacks might trigger cursor operations
+        if (self.firing_cursor_moved) return;
+        self.firing_cursor_moved = true;
+        defer self.firing_cursor_moved = false;
+
+        const autocmd_api = @import("../system/jsi/autocmd_api.zig");
+        const jsi_api = @import("../system/jsi/jsi_api.zig");
+
+        // Use global autocmd manager instead of self.autocmd_manager
+        // This avoids potential pointer corruption issues between Editor and JSI
+        const autocmd_mgr = jsi_api.global_autocmd_manager orelse return;
+
+        const buf = self.getCurrentBuffer() orelse return;
+        const file_path = buf.filepath orelse "";
+
+        // Execute CursorMoved autocmds - execAutocmds returns early if no handlers
+        autocmd_mgr.execAutocmds("CursorMoved", autocmd_api.AutocmdEventData{
+            .buf = 0, // Single buffer for now
+            .file = file_path,
+            .match = file_path,
+        }) catch |err| {
+            self.logger.err("Failed to fire CursorMoved: {}", .{err}) catch {};
         };
     }
 };
