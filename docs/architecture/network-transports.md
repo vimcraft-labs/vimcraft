@@ -4,7 +4,18 @@ This document describes the four network transports needed for a comprehensive p
 
 ## TODO
 
-### Phase 1: Async Subprocess (stdio) - HIGH PRIORITY
+### Phase 0: Sync Subprocess - COMPLETE
+- [x] Create `process_api.zig` with sync `spawn()` implementation
+- [x] Implement `process.spawn(cmd, args?, opts?)` JavaScript API
+- [x] Capture stdout/stderr/exit code
+- [x] Support working directory option
+- [x] Write E2E test (`tests/e2e/process-spawn/`)
+
+### Phase 1: Async Subprocess (stdio) - BLOCKED
+**Blocker**: Zig 0.15 `@cImport` cannot handle libuv's circular type dependencies
+(`uv_stream_t` ↔ `uv_read_cb`). See Implementation Notes above.
+
+When unblocked:
 - [ ] Add libuv `uv_spawn` bindings to Zig (`src/system/event_loop/`)
 - [ ] Implement `uv_pipe_t` for stdin/stdout/stderr handles
 - [ ] Create `process_api.zig` with spawnAsync implementation
@@ -14,7 +25,6 @@ This document describes the four network transports needed for a comprehensive p
 - [ ] Add `proc.onStdout()`, `proc.onStderr()`, `proc.onExit()` callbacks
 - [ ] Add `proc.kill()` for signal handling
 - [ ] Create LSP message framing helper (Content-Length parsing)
-- [ ] Write E2E test with simple subprocess (e.g., `cat`, `echo`)
 - [ ] Test with real LSP server (`typescript-language-server` or `zls`)
 
 ### Phase 2: TCP Sockets - MEDIUM PRIORITY
@@ -52,9 +62,25 @@ This document describes the four network transports needed for a comprehensive p
 | Transport | Status | Primary Use Case | Implementation |
 |-----------|--------|------------------|----------------|
 | **HTTP** | ✅ Implemented | REST APIs, one-shot requests | `fetch()` via libcurl + libuv |
-| **stdio** | ❌ Planned | Local LSP servers | Async subprocess via libuv |
+| **stdio (sync)** | ✅ Implemented | Simple commands | `process.spawn()` via `std.process.Child` |
+| **stdio (async)** | 🚧 Blocked | Local LSP servers | Blocked by Zig 0.15 libuv type issue |
 | **TCP** | ❌ Planned | Remote servers, custom protocols | `uv_tcp_t` via libuv |
 | **WebSocket** | ❌ Planned | Streaming, real-time collaboration | WebSocket protocol over TCP |
+
+### Implementation Notes
+
+**Sync subprocess (`process.spawn`)**: Fully implemented and tested. Supports:
+- Command execution with arguments
+- Working directory option
+- Capture stdout/stderr/exit code
+- See `tests/e2e/process-spawn/` for examples
+
+**Async subprocess (`process.spawnAsync`)**: Blocked by Zig 0.15 `@cImport` circular type dependency.
+The libuv headers have circular references between `uv_stream_t` and `uv_read_cb` that Zig 0.15's
+`@cImport` cannot resolve. Workarounds being investigated:
+1. Thread-based approach (like fetch_api.zig uses)
+2. Manual extern declarations instead of @cImport
+3. Wait for Zig fix
 
 ## 1. HTTP Transport
 

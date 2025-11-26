@@ -63,6 +63,16 @@ func esbuild_build(entry_point *C.char, out_file *C.char) *C.char {
 		return C.CString("Error: " + err.Error())
 	}
 
+	// Resolve symlinks so esbuild can find relative imports
+	// (e.g., ~/.config/vimcraft/plugins/my-plugin → /real/path/my-plugin)
+	realEntry, err := filepath.EvalSymlinks(absEntry)
+	if err != nil {
+		// If symlink resolution fails, use the absolute path
+		realEntry = absEntry
+	} else {
+		absEntry = realEntry
+	}
+
 	// Create temp directory for output if needed
 	outDir := filepath.Dir(outPath)
 	if err := os.MkdirAll(outDir, 0755); err != nil {
@@ -70,6 +80,8 @@ func esbuild_build(entry_point *C.char, out_file *C.char) *C.char {
 	}
 
 	// Bundle TypeScript files using Build API
+	// IMPORTANT: Use Define to map globals to globalThis.*
+	// This ensures bundled code can access vim, console, etc. from runtime.js
 	result := api.Build(api.BuildOptions{
 		EntryPoints: []string{absEntry},
 		Outfile:     outPath,
@@ -77,12 +89,28 @@ func esbuild_build(entry_point *C.char, out_file *C.char) *C.char {
 		Write:       true,              // Write to disk
 		Target:      api.ES2020,        // ES2020 target
 		Format:      api.FormatCommonJS, // CommonJS output
-		Platform:    api.PlatformNode,  // Node.js platform
+		Platform:    api.PlatformNeutral, // Neutral platform (not Node.js specific)
 		MinifyWhitespace: false,
 		MinifyIdentifiers: false,
 		MinifySyntax:     false,
 		Sourcemap:        api.SourceMapNone,
 		LogLevel:         api.LogLevelWarning,
+		// Map globals to globalThis.* so they work inside CommonJS module scope
+		// These are all defined by runtime.js before plugins load
+		Define: map[string]string{
+			"vim":           "globalThis.vim",
+			"console":       "globalThis.console",
+			"setTimeout":    "globalThis.setTimeout",
+			"setInterval":   "globalThis.setInterval",
+			"clearTimeout":  "globalThis.clearTimeout",
+			"clearInterval": "globalThis.clearInterval",
+			"fs":            "globalThis.fs",
+			"process":       "globalThis.process",
+			"fetch":         "globalThis.fetch",
+			"requestAnimationFrame":  "globalThis.requestAnimationFrame",
+			"cancelAnimationFrame":   "globalThis.cancelAnimationFrame",
+			"performance":   "globalThis.performance",
+		},
 	})
 
 	// Check for errors
