@@ -510,12 +510,35 @@ export interface VimOptions {
 
   /**
    * Characters to show for invisible characters when `list` is enabled.
-   * Format: key:chars pairs separated by commas.
+   * Each key specifies which invisible character to display and its replacement.
    *
    * @example
-   * vim.opt.listChars = 'tab:»·,trail:·,nbsp:·,eol:¬';
+   * vim.opt.listChars = { tab: '→ ', trail: '·', nbsp: '␣', eol: '¬' };
    */
-  listChars?: string;
+  listChars?: {
+    /** Two or three characters for tabs (e.g., "→ " or "<->") */
+    tab?: string;
+    /** Character for regular spaces */
+    space?: string;
+    /** Character for trailing spaces */
+    trail?: string;
+    /** Character for non-breaking spaces (0xA0) */
+    nbsp?: string;
+    /** Character at end of line */
+    eol?: string;
+    /** Character for leading spaces */
+    lead?: string;
+    /** Characters for multiple leading spaces */
+    leadmultispace?: string;
+    /** Characters for multiple spaces */
+    multispace?: string;
+    /** Character when line extends beyond screen (nowrap) */
+    extends?: string;
+    /** Character when line precedes screen (nowrap) */
+    precedes?: string;
+    /** Character for concealed text */
+    conceal?: string;
+  };
 
   /**
    * How text with "conceal" syntax attribute is shown.

@@ -183,6 +183,7 @@ pub const HighlightRegistry = struct {
         try self.set("Whitespace", .{ .fg = invisible_fg });
         try self.set("SpecialKey", .{ .fg = invisible_fg });
         try self.set("NonText", .{ .fg = invisible_fg });
+        try self.set("EndOfBuffer", .{ .fg = invisible_fg }); // Filler lines (~) - defaults to NonText
 
         // Yank flash
         try self.set("YankFlash", .{ .bg = yank_flash_bg });

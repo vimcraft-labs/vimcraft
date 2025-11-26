@@ -142,14 +142,34 @@ globalThis.vim = {
       if (prop === Symbol.toStringTag) return 'vim.opt';
       if (typeof prop === 'symbol') return undefined;
       // Direct HostObject property access (zero-copy JSI)
-      return vimOpt[prop];
+      const value = vimOpt[prop];
+
+      // Special handling for listchars: convert string to object format
+      if ((prop === 'listchars' || prop === 'listChars' || prop === 'lcs') && typeof value === 'string') {
+        // Convert "tab:> ,trail:-,nbsp:+" to { tab: "> ", trail: "-", nbsp: "+" }
+        const result = {};
+        for (const part of value.split(',')) {
+          const colonIdx = part.indexOf(':');
+          if (colonIdx > 0) {
+            const key = part.slice(0, colonIdx).trim();
+            const val = part.slice(colonIdx + 1);
+            result[key] = val;
+          }
+        }
+        return result;
+      }
+
+      return value;
     },
     set(target, prop, value) {
       if (typeof prop === 'symbol') return false;
 
-      // Special handling for listchars: convert object to string format
-      if ((prop === 'listchars' || prop === 'lcs') && typeof value === 'object' && value !== null) {
-        // Convert { tab: "→·", space: "·", trail: "~" } to "tab:→·,space:·,trail:~"
+      // Special handling for listchars: only accept objects (HashMap type)
+      if (prop === 'listchars' || prop === 'listChars' || prop === 'lcs') {
+        if (typeof value !== 'object' || value === null) {
+          throw new TypeError('vim.opt.listchars only accepts object type, e.g. { tab: "> ", trail: "-" }');
+        }
+        // Convert object to internal string format (implementation detail)
         const parts = [];
         for (const [key, val] of Object.entries(value)) {
           if (typeof val === 'string' && val.length > 0) {
@@ -214,13 +234,33 @@ globalThis.vim = {
       if (prop === Symbol.toStringTag) return 'vim.optLocal';
       if (typeof prop === 'symbol') return undefined;
       // Direct HostObject property access (zero-copy JSI)
-      return vimOptLocal[prop];
+      const value = vimOptLocal[prop];
+
+      // Special handling for listchars: convert string to object format
+      if ((prop === 'listchars' || prop === 'listChars' || prop === 'lcs') && typeof value === 'string') {
+        const result = {};
+        for (const part of value.split(',')) {
+          const colonIdx = part.indexOf(':');
+          if (colonIdx > 0) {
+            const key = part.slice(0, colonIdx).trim();
+            const val = part.slice(colonIdx + 1);
+            result[key] = val;
+          }
+        }
+        return result;
+      }
+
+      return value;
     },
     set(target, prop, value) {
       if (typeof prop === 'symbol') return false;
 
-      // Special handling for listchars: convert object to string format
-      if ((prop === 'listchars' || prop === 'lcs') && typeof value === 'object' && value !== null) {
+      // Special handling for listchars: only accept objects (HashMap type)
+      if (prop === 'listchars' || prop === 'listChars' || prop === 'lcs') {
+        if (typeof value !== 'object' || value === null) {
+          throw new TypeError('vim.optLocal.listchars only accepts object type, e.g. { tab: "> ", trail: "-" }');
+        }
+        // Convert object to internal string format (implementation detail)
         const parts = [];
         for (const [key, val] of Object.entries(value)) {
           if (typeof val === 'string' && val.length > 0) {
@@ -282,13 +322,33 @@ globalThis.vim = {
       if (prop === Symbol.toStringTag) return 'vim.optGlobal';
       if (typeof prop === 'symbol') return undefined;
       // Direct HostObject property access (zero-copy JSI)
-      return vimOptGlobal[prop];
+      const value = vimOptGlobal[prop];
+
+      // Special handling for listchars: convert string to object format
+      if ((prop === 'listchars' || prop === 'listChars' || prop === 'lcs') && typeof value === 'string') {
+        const result = {};
+        for (const part of value.split(',')) {
+          const colonIdx = part.indexOf(':');
+          if (colonIdx > 0) {
+            const key = part.slice(0, colonIdx).trim();
+            const val = part.slice(colonIdx + 1);
+            result[key] = val;
+          }
+        }
+        return result;
+      }
+
+      return value;
     },
     set(target, prop, value) {
       if (typeof prop === 'symbol') return false;
 
-      // Special handling for listchars: convert object to string format
-      if ((prop === 'listchars' || prop === 'lcs') && typeof value === 'object' && value !== null) {
+      // Special handling for listchars: only accept objects (HashMap type)
+      if (prop === 'listchars' || prop === 'listChars' || prop === 'lcs') {
+        if (typeof value !== 'object' || value === null) {
+          throw new TypeError('vim.optGlobal.listchars only accepts object type, e.g. { tab: "> ", trail: "-" }');
+        }
+        // Convert object to internal string format (implementation detail)
         const parts = [];
         for (const [key, val] of Object.entries(value)) {
           if (typeof val === 'string' && val.length > 0) {

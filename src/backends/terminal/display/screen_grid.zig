@@ -349,6 +349,21 @@ pub const ScreenGrid = struct {
         }
     }
 
+    /// Fill a range of columns in a single row with the same cell
+    /// This is useful for filling gutter areas, separators, etc.
+    /// Uses line_offset indirection for O(1) scroll support
+    pub fn fillRowRange(self: *ScreenGrid, row: usize, start_col: usize, end_col: usize, cell: Cell) void {
+        if (row >= self.height) return;
+        const physical_row = self.current_offset[row];
+        const c_start = @min(start_col, self.width);
+        const c_end = @min(end_col, self.width);
+
+        for (c_start..c_end) |col| {
+            self.current[physical_row][col] = cell;
+        }
+        self.dirty_lines.set(row);
+    }
+
     /// Set a string at a specific position (for rendering text)
     /// Returns the column position after the last character written
     /// Uses line_offset indirection for O(1) scroll support

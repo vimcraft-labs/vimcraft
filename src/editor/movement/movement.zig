@@ -507,21 +507,20 @@ pub fn moveToViewportBottom(buffer: *Buffer, viewport_top: usize, viewport_heigh
 
 /// Center current line in viewport (zz)
 /// Returns the new viewport_top position
+/// Neovim-style: allows scrolling past EOF to truly center cursor line
+/// (empty "~" lines will be shown below the last line of content)
 pub fn centerLineInViewport(cursor_row: usize, viewport_height: usize, buffer_line_count: usize) usize {
+    _ = buffer_line_count; // Not used - we allow scrolling past EOF for true centering
     const half_height = viewport_height / 2;
 
-    // Try to center the cursor line
+    // Center the cursor line - allow scrolling past EOF
+    // This enables Neovim's behavior where zz at end of file shows
+    // virtual "~" lines below to truly center the cursor
     if (cursor_row >= half_height) {
-        const new_top = cursor_row - half_height;
-        // Make sure we don't scroll past the end
-        const max_top = if (buffer_line_count > viewport_height)
-            buffer_line_count - viewport_height
-        else
-            0;
-        return @min(new_top, max_top);
+        return cursor_row - half_height;
     }
 
-    // Cursor is in the first half of the file, show from top
+    // Cursor is in the first half of the viewport, show from top
     return 0;
 }
 

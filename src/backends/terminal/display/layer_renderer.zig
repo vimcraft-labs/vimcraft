@@ -142,6 +142,13 @@ fn updateBaseLayer(
     const fg_color = if (normal_style.fg) |c| convertColor(c) else null;
     const bg_color = if (normal_style.bg) |c| convertColor(c) else null;
 
+    // Get EndOfBuffer highlight for ~ characters (Neovim: defaults to NonText)
+    // Fallback chain: EndOfBuffer → NonText → Normal
+    const eob_style = registry.get("EndOfBuffer");
+    const non_text_style = registry.get("NonText");
+    const eob_fg = if (eob_style.fg) |c| convertColor(c) else if (non_text_style.fg) |c| convertColor(c) else fg_color;
+    const eob_bg = if (eob_style.bg) |c| convertColor(c) else if (non_text_style.bg) |c| convertColor(c) else bg_color;
+
     // Pre-compute listchars colors once per frame (optimization)
     const lc_colors = if (list_enabled)
         computeListCharsColors(registry, fg_color, bg_color)
@@ -219,8 +226,8 @@ fn updateBaseLayer(
                 }
             }
         } else {
-            // Empty line indicator (~)
-            self.base_layer.grid.setCell(row, gutter_width, .{ .char = '~', .fg = fg_color, .bg = bg_color });
+            // Empty line indicator (~) - uses EndOfBuffer highlight group (defaults to NonText)
+            self.base_layer.grid.setCell(row, gutter_width, .{ .char = '~', .fg = eob_fg, .bg = eob_bg });
             for ((gutter_width + 1)..self.terminal_cols) |col| {
                 self.base_layer.grid.setCell(row, col, .{ .char = ' ', .bg = bg_color });
             }
@@ -240,11 +247,22 @@ fn updateGutterLayer(
     const gutter_width = self.gutter_manager.getTotalWidth();
     if (gutter_width == 0) return;
 
+    // Get LineNr style for background of empty gutter lines
+    const line_nr_style = registry.get("LineNr");
+    const empty_gutter_bg = if (line_nr_style.bg) |c| convertColor(c) else null;
+
     var row: usize = 0;
     while (row < text_rows) : (row += 1) {
         const line_num = self.viewport_top + row;
 
-        // Render gutter content
+        // Neovim behavior: lines beyond EOF have empty gutter (no line numbers)
+        if (line_num >= buffer.lineCount()) {
+            // Fill gutter with empty space for virtual lines (~ lines)
+            self.gutter_layer.grid.fillRowRange(row, 0, gutter_width, .{ .char = ' ', .bg = empty_gutter_bg });
+            continue;
+        }
+
+        // Render gutter content for actual buffer lines
         var gutter_buf: [32]u8 = undefined;
         const gutter_str_len = self.gutter_manager.renderLine(
             line_num,
@@ -255,13 +273,13 @@ fn updateGutterLayer(
 
         // Get line number highlights from unified registry
         const is_cursor_line = (line_num == buffer.cursor.row);
-        const line_nr_style = if (is_cursor_line)
+        const style = if (is_cursor_line)
             registry.get("CursorLineNr")
         else
-            registry.get("LineNr");
+            line_nr_style;
 
-        const gutter_fg = if (line_nr_style.fg) |c| convertColor(c) else null;
-        const gutter_bg = if (line_nr_style.bg) |c| convertColor(c) else null;
+        const gutter_fg = if (style.fg) |c| convertColor(c) else null;
+        const gutter_bg = if (style.bg) |c| convertColor(c) else empty_gutter_bg;
 
         // Render gutter characters
         var gutter_col: usize = 0;

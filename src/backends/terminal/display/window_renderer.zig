@@ -339,10 +339,13 @@ fn renderWindowGutterLayer(
 ) !void {
     if (gutter_width == 0) return;
 
-    // buffer is accessed via ctx when needed for line count bounds checking
-    _ = ctx.buffer;
+    const buffer = ctx.buffer;
     const window = ctx.window;
     const region = ctx.region;
+
+    // Get LineNr style for background of empty gutter lines
+    const line_nr_style = ctx.registry.get("LineNr");
+    const gutter_bg = if (line_nr_style.bg) |c| convertColor(c) else null;
 
     var row: usize = 0;
     while (row < region.height) : (row += 1) {
@@ -352,15 +355,22 @@ fn renderWindowGutterLayer(
         // Skip if outside layer bounds
         if (screen_row >= display.gutter_layer.grid.height) continue;
 
-        // Get line number style
+        // Neovim behavior: lines beyond EOF have empty gutter (no line numbers)
+        if (line_num >= buffer.lineCount()) {
+            // Fill gutter with empty space for virtual lines (~ lines)
+            display.gutter_layer.grid.fillRowRange(screen_row, region.col, region.col + gutter_width, .{ .char = ' ', .bg = gutter_bg });
+            continue;
+        }
+
+        // Get line number style for actual buffer lines
         const is_cursor_line = (line_num == window.cursor.row);
-        const line_nr_style = if (is_cursor_line)
+        const style = if (is_cursor_line)
             ctx.registry.get("CursorLineNr")
         else
-            ctx.registry.get("LineNr");
+            line_nr_style;
 
-        const gutter_fg = if (line_nr_style.fg) |c| convertColor(c) else null;
-        const gutter_bg = if (line_nr_style.bg) |c| convertColor(c) else null;
+        const gutter_fg = if (style.fg) |c| convertColor(c) else null;
+        const style_bg = if (style.bg) |c| convertColor(c) else gutter_bg;
 
         // Render line number
         if (window.options.number or window.options.relativenumber) {
@@ -381,7 +391,7 @@ fn renderWindowGutterLayer(
                 display.gutter_layer.grid.setCell(screen_row, region.col + gutter_col, .{
                     .char = ch,
                     .fg = gutter_fg,
-                    .bg = gutter_bg,
+                    .bg = style_bg,
                 });
                 gutter_col += 1;
             }
@@ -391,7 +401,7 @@ fn renderWindowGutterLayer(
                 display.gutter_layer.grid.setCell(screen_row, region.col + gutter_col, .{
                     .char = ' ',
                     .fg = gutter_fg,
-                    .bg = gutter_bg,
+                    .bg = style_bg,
                 });
             }
         }
