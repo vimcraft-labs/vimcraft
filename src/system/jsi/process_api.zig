@@ -38,6 +38,9 @@ const MAX_OUTPUT_SIZE: usize = 5 * 1024 * 1024;
 /// Maximum total output size (stdout + stderr combined, 8MB)
 const MAX_TOTAL_OUTPUT_SIZE: usize = 8 * 1024 * 1024;
 
+/// Maximum environment variables allowed
+const MAX_ENV_VARS: usize = 256;
+
 /// Allowlist of commands that can be executed directly
 /// Commands not in this list must be absolute paths or run via shell
 const ALLOWED_COMMANDS = std.StaticStringMap(void).initComptime(.{
@@ -311,8 +314,11 @@ fn spawn(
         }
     }
 
-    // Get options (cwd, timeout) - optional
+    // Get options (cwd, env, clearEnv, stdin, timeout) - optional
     var spawn_cwd: ?[]const u8 = null;
+    var env_obj: ?*c.OVHermesValue = null;
+    var clear_env: bool = false;
+    var stdin_null: bool = false;
     // Note: timeout not yet implemented for sync spawn (reserved for async)
 
     if (arg_count >= 3) {
@@ -329,8 +335,56 @@ fn spawn(
             }
             if (cwd_prop != null) c.hermes_value_destroy(cwd_prop);
 
+            // Get env option (object with key-value pairs)
+            const env_prop = c.hermes_value_get_property(runtime, opts_val, "env");
+            if (env_prop != null and c.hermes_value_is_object(env_prop)) {
+                env_obj = env_prop;
+                // Don't destroy env_prop - we keep it for buildEnvArray
+            } else if (env_prop != null) {
+                c.hermes_value_destroy(env_prop);
+            }
+
+            // Get clearEnv option (boolean)
+            const clear_env_prop = c.hermes_value_get_property(runtime, opts_val, "clearEnv");
+            if (clear_env_prop != null) {
+                if (c.hermes_value_is_boolean(clear_env_prop)) {
+                    clear_env = c.hermes_value_get_boolean(clear_env_prop);
+                }
+                c.hermes_value_destroy(clear_env_prop);
+            }
+
+            // Get stdin option (string: 'pipe', 'null', 'ignore')
+            const stdin_prop = c.hermes_value_get_property(runtime, opts_val, "stdin");
+            if (stdin_prop != null) {
+                if (c.hermes_value_is_string(stdin_prop)) {
+                    var stdin_len: usize = 0;
+                    const stdin_ptr = c.hermes_value_get_string(runtime, stdin_prop, &stdin_len);
+                    if (stdin_ptr != null and stdin_len > 0) {
+                        const stdin_str = stdin_ptr[0..stdin_len];
+                        if (std.mem.eql(u8, stdin_str, "null") or std.mem.eql(u8, stdin_str, "ignore")) {
+                            stdin_null = true;
+                        }
+                    }
+                }
+                c.hermes_value_destroy(stdin_prop);
+            }
+
             // Note: timeout option reserved for future async implementation
         }
+    }
+
+    // Build environment map (merges with current env unless clearEnv is true)
+    var env_map: ?std.process.EnvMap = null;
+    if (env_obj != null or clear_env) {
+        env_map = buildEnvMap(runtime, ctx.allocator, env_obj, clear_env);
+    }
+    defer {
+        if (env_map) |*em| em.deinit();
+    }
+
+    // Clean up env_obj now that we've extracted the data
+    if (env_obj) |obj| {
+        c.hermes_value_destroy(obj);
     }
 
     defer {
@@ -363,8 +417,18 @@ fn spawn(
         child.cwd = dir;
     }
 
+    // Set custom environment if provided
+    if (env_map) |*em| {
+        child.env_map = em;
+    }
+
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
+
+    // Set stdin behavior based on stdin option
+    if (stdin_null) {
+        child.stdin_behavior = .Ignore;
+    }
 
     child.spawn() catch |err| {
         var err_buf: [256]u8 = undefined;
@@ -606,6 +670,86 @@ fn createEnvObject(runtime: ?*c.OVHermesRuntime) ?*c.OVHermesValue {
     }
 
     return obj;
+}
+
+// ============================================================================
+// Environment Variable Helpers
+// ============================================================================
+
+/// Build environment map from JavaScript object for std.process.Child
+/// Returns an EnvMap populated with environment variables
+/// If clearEnv is false (default), starts with current environment
+fn buildEnvMap(
+    runtime: ?*c.OVHermesRuntime,
+    allocator: std.mem.Allocator,
+    env_obj: ?*c.OVHermesValue,
+    clear_env: bool,
+) std.process.EnvMap {
+    var env_map = std.process.EnvMap.init(allocator);
+
+    // Get current environment first (if not clearing)
+    if (!clear_env) {
+        const environ = std.c.environ;
+        var i: usize = 0;
+        while (environ[i]) |env_entry| : (i += 1) {
+            if (i >= MAX_ENV_VARS) break;
+            const entry_slice = std.mem.span(env_entry);
+            // Find the '=' separator
+            if (std.mem.indexOfScalar(u8, entry_slice, '=')) |eq_pos| {
+                const key = entry_slice[0..eq_pos];
+                const value = entry_slice[eq_pos + 1 ..];
+                env_map.put(key, value) catch continue;
+            }
+        }
+    }
+
+    // Add/override with custom env vars from JS object
+    if (env_obj) |obj| {
+        var key_buf: [256]u8 = undefined;
+
+        // Try to get properties by iterating (Hermes doesn't expose Object.keys easily)
+        // We use a workaround: try to get __keys property if set by JS wrapper
+        const keys_prop = c.hermes_value_get_property(runtime, obj, "__keys");
+        if (keys_prop != null and !c.hermes_value_is_undefined(keys_prop)) {
+            defer c.hermes_value_destroy(keys_prop);
+
+            // Iterate through keys array
+            var idx: usize = 0;
+            var idx_str_buf: [16]u8 = undefined;
+            while (idx < MAX_ENV_VARS) : (idx += 1) {
+                const idx_str = std.fmt.bufPrint(&idx_str_buf, "{d}", .{idx}) catch break;
+                idx_str_buf[idx_str.len] = 0;
+                const key_val = c.hermes_value_get_property(runtime, keys_prop, @ptrCast(&idx_str_buf));
+                if (key_val == null or c.hermes_value_is_undefined(key_val)) break;
+                defer c.hermes_value_destroy(key_val);
+
+                if (!c.hermes_value_is_string(key_val)) continue;
+
+                var key_len: usize = 0;
+                const key_ptr = c.hermes_value_get_string(runtime, key_val, &key_len);
+                if (key_ptr == null or key_len == 0 or key_len >= key_buf.len) continue;
+
+                // Get the value for this key
+                @memcpy(key_buf[0..key_len], key_ptr[0..key_len]);
+                key_buf[key_len] = 0;
+
+                const val_prop = c.hermes_value_get_property(runtime, obj, @ptrCast(&key_buf));
+                if (val_prop == null or c.hermes_value_is_undefined(val_prop)) continue;
+                defer c.hermes_value_destroy(val_prop);
+
+                if (!c.hermes_value_is_string(val_prop)) continue;
+
+                var val_len: usize = 0;
+                const val_ptr = c.hermes_value_get_string(runtime, val_prop, &val_len);
+                if (val_ptr == null) continue;
+
+                // Add to env map (automatically overrides existing)
+                env_map.put(key_ptr[0..key_len], val_ptr[0..val_len]) catch continue;
+            }
+        }
+    }
+
+    return env_map;
 }
 
 // ============================================================================

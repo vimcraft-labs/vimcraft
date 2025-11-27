@@ -54,9 +54,28 @@ pub fn stop() void {
     }
 }
 
+/// Callback for uv_walk to close all handles
+fn closeAllHandlesCallback(handle: [*c]uv.uv_handle_t, _: ?*anyopaque) callconv(.c) void {
+    if (handle != null and uv.uv_is_closing(handle) == 0) {
+        uv.uv_close(handle, null);
+    }
+}
+
 /// Clean up and close the event loop
+/// Properly closes all handles before calling uv_loop_close
 pub fn deinit() void {
     if (loop) |l| {
+        // First, close all active handles
+        uv.uv_walk(l, closeAllHandlesCallback, null);
+
+        // Run the loop until all handles are closed
+        // UV_RUN_DEFAULT will block until no more active handles
+        var iterations: u32 = 0;
+        while (uv.uv_loop_alive(l) != 0 and iterations < 1000) : (iterations += 1) {
+            _ = uv.uv_run(l, uv.UV_RUN_NOWAIT);
+        }
+
+        // Now safe to close the loop
         _ = uv.uv_loop_close(l);
         loop = null;
     }

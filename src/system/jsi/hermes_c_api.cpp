@@ -248,8 +248,12 @@ OVHermesValue* hermes_evaluate_bytecode(
 }
 
 bool hermes_has_exception(OVHermesRuntime* runtime) {
-    // Check both pending_throw (from host functions) and last_exception_message (from JS errors)
-    return runtime->pending_throw || !runtime->last_exception_message.empty();
+    // Only check pending_throw flag (set when host function wants to throw).
+    // DO NOT check last_exception_message - that is just storage for the message
+    // text and remains set even after JavaScript catches the exception.
+    // When JS catches an error with try/catch, the error is handled and we
+    // should NOT report it as an exception.
+    return runtime->pending_throw;
 }
 
 const char* hermes_get_exception_message(OVHermesRuntime* runtime) {

@@ -1671,6 +1671,814 @@ export interface FetchResponse {
 }
 
 /**
+ * Writable stream for subprocess stdin
+ */
+/**
+ * Writable stdin stream for a child process.
+ *
+ * Provides methods to write data to the subprocess stdin and signal EOF.
+ * This interface is only available when the process was spawned with
+ * `stdin: 'pipe'` (the default).
+ *
+ * @example
+ * ```typescript
+ * const proc = process.spawnAsync('cat');
+ * proc.stdin.write('Hello, ');
+ * proc.stdin.write('World!\n');
+ * proc.stdin.end();  // Signal EOF
+ * ```
+ *
+ * @see {@link ChildProcess} - Parent interface
+ * @see {@link SpawnAsyncOptions.stdin} - Control stdin mode
+ */
+export interface ChildProcessStdin {
+  /**
+   * Write string data to the subprocess stdin.
+   *
+   * Data is written asynchronously. Multiple writes are queued and sent
+   * in order. Returns immediately without waiting for the write to complete.
+   *
+   * **Note**: If the process was spawned with `stdin: 'null'`, this method
+   * returns false and has no effect.
+   *
+   * @param data - String data to write to stdin
+   * @returns `true` if the write was queued successfully, `false` if stdin
+   *          is not available or the process has exited
+   *
+   * @example
+   * ```typescript
+   * // Simple write
+   * proc.stdin.write('hello\n');
+   *
+   * // Multiple writes (sent in order)
+   * proc.stdin.write('line 1\n');
+   * proc.stdin.write('line 2\n');
+   * proc.stdin.write('line 3\n');
+   *
+   * // JSON-RPC style protocol (like LSP)
+   * const message = JSON.stringify({ jsonrpc: '2.0', method: 'initialize' });
+   * proc.stdin.write(`Content-Length: ${message.length}\r\n\r\n${message}`);
+   * ```
+   */
+  write(data: string): boolean;
+
+  /**
+   * Close stdin, signaling EOF to the subprocess.
+   *
+   * Many CLI tools read from stdin until EOF before processing. This method
+   * closes the stdin pipe, which sends EOF to the subprocess, triggering
+   * it to process any buffered input.
+   *
+   * **Common Use Cases**:
+   * - Code formatters (prettier, black, gofmt) that read source from stdin
+   * - Compilers that accept input via stdin
+   * - Tools that process piped input (grep, sed, awk)
+   * - Any program that uses `read()` until EOF
+   *
+   * **Important**: After calling `end()`, further `write()` calls will fail.
+   *
+   * @returns `true` if stdin was closed successfully, `false` if already
+   *          closed or stdin is not available
+   *
+   * @example
+   * ```typescript
+   * // Format code with prettier
+   * const prettier = process.spawnAsync('prettier', ['--stdin-filepath', 'file.ts']);
+   * prettier.onStdout((formatted) => {
+   *   vim.api.bufSetLines(0, 0, -1, false, formatted.split('\n'));
+   * });
+   * prettier.stdin.write(vim.api.bufGetLines(0, 0, -1, false).join('\n'));
+   * prettier.stdin.end();  // Prettier now processes and outputs
+   *
+   * // Pipe JSON to jq
+   * const jq = process.spawnAsync('jq', ['.']);
+   * jq.stdin.write('{"name": "test", "value": 42}');
+   * jq.stdin.end();  // jq parses and pretty-prints the JSON
+   *
+   * // Compile TypeScript from stdin
+   * const tsc = process.spawnAsync('tsc', ['--outFile', '/dev/stdout']);
+   * tsc.stdin.write(sourceCode);
+   * tsc.stdin.end();  // tsc compiles and outputs JavaScript
+   * ```
+   */
+  end(): boolean;
+}
+
+/**
+ * Child process handle returned by `process.spawnAsync()`.
+ *
+ * Represents a running subprocess with bidirectional stdio communication.
+ * Use this handle to:
+ * - Write to the process stdin
+ * - Receive stdout/stderr output via callbacks
+ * - Monitor process exit
+ * - Send signals to terminate or control the process
+ *
+ * ## Lifecycle
+ *
+ * ```
+ * spawnAsync() → ChildProcess created → callbacks registered
+ *                      ↓
+ *              stdin.write() / stdin.end()
+ *                      ↓
+ *              onStdout/onStderr callbacks fire
+ *                      ↓
+ *              Process exits → onExit callback fires
+ *                      ↓
+ *              ChildProcess handle becomes inactive
+ * ```
+ *
+ * ## Example: LSP Server Communication
+ *
+ * ```typescript
+ * const lsp = process.spawnAsync('typescript-language-server', ['--stdio']);
+ *
+ * // Handle responses
+ * lsp.onStdout((data) => {
+ *   const messages = parseJsonRpcMessages(data);
+ *   messages.forEach(handleLspResponse);
+ * });
+ *
+ * // Handle errors
+ * lsp.onStderr((error) => {
+ *   console.error('LSP error:', error);
+ * });
+ *
+ * // Handle exit
+ * lsp.onExit((code, signal) => {
+ *   if (code !== 0) {
+ *     vim.api.echoError(`LSP crashed: code=${code}, signal=${signal}`);
+ *   }
+ * });
+ *
+ * // Send initialize request
+ * const request = JSON.stringify({
+ *   jsonrpc: '2.0',
+ *   id: 1,
+ *   method: 'initialize',
+ *   params: { capabilities: {} }
+ * });
+ * lsp.stdin.write(`Content-Length: ${request.length}\r\n\r\n${request}`);
+ * ```
+ *
+ * @see {@link SpawnAsyncOptions} - Options for spawning
+ * @see {@link ChildProcessStdin} - stdin interface
+ * @since 0.7.0
+ */
+export interface ChildProcess {
+  /**
+   * Process ID (PID) of the spawned subprocess.
+   *
+   * The PID is assigned by the operating system and uniquely identifies
+   * the process. It's available immediately after `spawnAsync()` returns.
+   *
+   * **Use Cases**:
+   * - Logging/debugging which process is running
+   * - Sending signals via external tools (`kill` command)
+   * - Monitoring via external process managers
+   *
+   * @example
+   * ```typescript
+   * const proc = process.spawnAsync('long-running-task');
+   * console.log(`Started process with PID: ${proc.pid}`);
+   *
+   * // Log PID for external monitoring
+   * vim.fn.writefile([`${proc.pid}`], '/tmp/my-process.pid');
+   * ```
+   */
+  readonly pid: number;
+
+  /**
+   * Writable stdin stream for sending data to the subprocess.
+   *
+   * This property is always present, but `write()` will return false if
+   * the process was spawned with `stdin: 'null'`.
+   *
+   * @see {@link ChildProcessStdin} - Full stdin interface documentation
+   *
+   * @example
+   * ```typescript
+   * // Write and close
+   * proc.stdin.write('input data\n');
+   * proc.stdin.end();
+   *
+   * // Check if write succeeded
+   * if (!proc.stdin.write(data)) {
+   *   console.error('Failed to write to stdin');
+   * }
+   * ```
+   */
+  readonly stdin: ChildProcessStdin;
+
+  /**
+   * Send a signal to the subprocess.
+   *
+   * Signals are used to control or terminate processes. Common signals:
+   *
+   * | Signal | Number | Description |
+   * |--------|--------|-------------|
+   * | SIGTERM | 15 | Graceful termination (default) |
+   * | SIGKILL | 9 | Immediate termination (cannot be caught) |
+   * | SIGINT | 2 | Interrupt (like Ctrl+C) |
+   * | SIGHUP | 1 | Hangup (reload config in some programs) |
+   * | SIGUSR1 | 10 | User-defined signal 1 |
+   * | SIGUSR2 | 12 | User-defined signal 2 |
+   *
+   * **Best Practice**: Use SIGTERM first to allow graceful shutdown.
+   * Only use SIGKILL if the process doesn't respond to SIGTERM.
+   *
+   * @param signal - Signal to send. Can be:
+   *   - Signal name: `'SIGTERM'`, `'SIGKILL'`, `'SIGINT'`, `'TERM'`, `'KILL'`
+   *   - Signal number: `15`, `9`, `2` (1-31)
+   *   - Omitted: defaults to SIGTERM (15)
+   *
+   * @returns `true` if signal was sent successfully, `false` if process
+   *          has already exited or signal failed
+   *
+   * @example
+   * ```typescript
+   * // Graceful termination (default)
+   * proc.kill();  // Sends SIGTERM
+   *
+   * // Explicit signal by name
+   * proc.kill('SIGTERM');  // Graceful
+   * proc.kill('SIGKILL');  // Forceful
+   * proc.kill('SIGINT');   // Interrupt
+   *
+   * // Signal by number
+   * proc.kill(15);  // SIGTERM
+   * proc.kill(9);   // SIGKILL
+   *
+   * // Graceful shutdown with fallback
+   * proc.kill('SIGTERM');
+   * setTimeout(() => {
+   *   if (!processExited) {
+   *     proc.kill('SIGKILL');  // Force kill if still running
+   *   }
+   * }, 5000);
+   * ```
+   */
+  kill(signal?: number | string): boolean;
+
+  /**
+   * Register a callback for stdout data from the subprocess.
+   *
+   * **Streaming Mode** (default):
+   * The callback is called multiple times as output arrives. Each call
+   * receives a chunk of data (size varies based on OS buffering).
+   *
+   * **Buffered Mode** (`stdoutBuffered: true`):
+   * The callback is called once after the process exits, with all
+   * stdout data concatenated into a single string.
+   *
+   * **Important**: Register callbacks before writing to stdin or the
+   * process may produce output before you're ready to receive it.
+   *
+   * @param callback - Function called with stdout data string
+   *
+   * @example
+   * ```typescript
+   * // Streaming mode - accumulate output
+   * let output = '';
+   * proc.onStdout((chunk) => {
+   *   output += chunk;
+   *   // Optionally process chunks as they arrive
+   *   if (chunk.includes('READY')) {
+   *     console.log('Process is ready');
+   *   }
+   * });
+   *
+   * // Buffered mode - single callback
+   * const proc = process.spawnAsync('cmd', [], { stdoutBuffered: true });
+   * proc.onStdout((completeOutput) => {
+   *   // This is called once with all output
+   *   const result = JSON.parse(completeOutput);
+   * });
+   *
+   * // Real-time logging
+   * proc.onStdout((data) => {
+   *   vim.api.echo(data.trimEnd());
+   * });
+   * ```
+   */
+  onStdout(callback: (data: string) => void): void;
+
+  /**
+   * Register a callback for stderr data from the subprocess.
+   *
+   * Works identically to `onStdout()` but for the stderr stream.
+   * Many programs write error messages, warnings, and diagnostic
+   * information to stderr.
+   *
+   * **Note**: Some programs write non-error output to stderr (e.g.,
+   * progress indicators, debug info). Don't assume stderr means failure.
+   *
+   * @param callback - Function called with stderr data string
+   *
+   * @example
+   * ```typescript
+   * // Log errors
+   * proc.onStderr((error) => {
+   *   console.error('Process error:', error);
+   * });
+   *
+   * // Collect all errors
+   * let errors = '';
+   * proc.onStderr((chunk) => {
+   *   errors += chunk;
+   * });
+   * proc.onExit((code) => {
+   *   if (code !== 0 && errors) {
+   *     vim.api.echoError(errors);
+   *   }
+   * });
+   *
+   * // Buffered stderr for parsing
+   * const proc = process.spawnAsync('eslint', ['.'], { stderrBuffered: true });
+   * proc.onStderr((allErrors) => {
+   *   const diagnostics = parseEslintOutput(allErrors);
+   *   showDiagnostics(diagnostics);
+   * });
+   * ```
+   */
+  onStderr(callback: (data: string) => void): void;
+
+  /**
+   * Register a callback for process exit.
+   *
+   * Called when the subprocess terminates, either normally or due to
+   * a signal. This is guaranteed to be called exactly once for every
+   * spawned process.
+   *
+   * **Exit Code Meanings**:
+   * - `0`: Success (by convention)
+   * - `1-125`: Program-defined error codes
+   * - `124`: Timeout (when using `timeout` option)
+   * - `126`: Command found but not executable
+   * - `127`: Command not found
+   * - `128+N`: Killed by signal N (e.g., 137 = 128+9 = SIGKILL)
+   *
+   * **Signal Values**:
+   * When a process is killed by a signal, `signal` contains the signal
+   * name (e.g., `'SIGTERM'`, `'SIGKILL'`). If the process exited normally,
+   * `signal` is `null`.
+   *
+   * @param callback - Function called with exit code and signal
+   *   - `code`: Exit code (integer, 0-255)
+   *   - `signal`: Signal name if killed by signal, `null` otherwise
+   *
+   * @example
+   * ```typescript
+   * // Basic exit handling
+   * proc.onExit((code, signal) => {
+   *   if (code === 0) {
+   *     console.log('Process completed successfully');
+   *   } else if (signal) {
+   *     console.log(`Process killed by ${signal}`);
+   *   } else {
+   *     console.log(`Process failed with code ${code}`);
+   *   }
+   * });
+   *
+   * // Handle timeout
+   * const proc = process.spawnAsync('slow-cmd', [], { timeout: 5000 });
+   * proc.onExit((code) => {
+   *   if (code === 124) {
+   *     vim.api.echoWarning('Command timed out');
+   *   }
+   * });
+   *
+   * // Comprehensive error handling
+   * proc.onExit((code, signal) => {
+   *   switch (code) {
+   *     case 0:
+   *       onSuccess();
+   *       break;
+   *     case 124:
+   *       onTimeout();
+   *       break;
+   *     case 127:
+   *       vim.api.echoError('Command not found');
+   *       break;
+   *     default:
+   *       if (signal === 'SIGKILL') {
+   *         vim.api.echoError('Process was force-killed');
+   *       } else {
+   *         onError(code);
+   *       }
+   *   }
+   * });
+   * ```
+   */
+  onExit(callback: (code: number, signal: string | null) => void): void;
+}
+
+/**
+ * Options for spawn() (synchronous)
+ */
+export interface SpawnOptions {
+  /** Working directory for the subprocess */
+  cwd?: string;
+  /**
+   * Environment variables for the subprocess.
+   * These are merged with the current process environment unless clearEnv is true.
+   */
+  env?: Record<string, string>;
+  /**
+   * If true, do not inherit the current process environment.
+   * Only the variables specified in `env` will be available to the subprocess.
+   * @default false
+   */
+  clearEnv?: boolean;
+  /**
+   * How to handle stdin for the subprocess.
+   * - 'pipe': Connect stdin to a pipe (default for spawnAsync, not used for sync spawn)
+   * - 'null' or 'ignore': Connect stdin to /dev/null (no input)
+   * @default 'pipe' for spawnAsync, inherit for spawn
+   */
+  stdin?: 'pipe' | 'null' | 'ignore';
+}
+
+/**
+ * Options for `process.spawnAsync()` - Async subprocess spawning with full control.
+ *
+ * This interface provides Neovim-compatible process spawning options including
+ * timeout management, detached processes, and buffered I/O modes. These options
+ * give plugin authors fine-grained control over subprocess lifecycle and I/O handling.
+ *
+ * ## Basic Usage
+ *
+ * ```typescript
+ * // Simple command with working directory
+ * const proc = process.spawnAsync('npm', ['install'], { cwd: '/my/project' });
+ *
+ * // Command with custom environment
+ * const proc = process.spawnAsync('my-tool', [], {
+ *   env: { DEBUG: 'true', API_KEY: 'secret' }
+ * });
+ * ```
+ *
+ * ## Advanced Patterns
+ *
+ * ### Timeout for Long-Running Commands
+ * ```typescript
+ * // Auto-kill after 30 seconds
+ * const proc = process.spawnAsync('slow-build', [], { timeout: 30000 });
+ * proc.onExit((code) => {
+ *   if (code === 124) {
+ *     vim.api.notifyError('Build timed out after 30 seconds');
+ *   }
+ * });
+ * ```
+ *
+ * ### Buffered Output for Formatters
+ * ```typescript
+ * // Collect all output before processing (ideal for formatters)
+ * const prettier = process.spawnAsync('prettier', ['--stdin-filepath', 'file.ts'], {
+ *   stdoutBuffered: true  // Single callback with complete output
+ * });
+ * prettier.onStdout((formatted) => {
+ *   // `formatted` contains the entire formatted file
+ *   vim.api.bufSetLines(0, 0, -1, false, formatted.split('\n'));
+ * });
+ * prettier.stdin.write(currentBufferContent);
+ * prettier.stdin.end();
+ * ```
+ *
+ * ### Background Daemon
+ * ```typescript
+ * // Start a server that survives editor exit
+ * const server = process.spawnAsync('my-daemon', ['--port', '8080'], {
+ *   detach: true,
+ *   stdin: 'null'  // Daemon doesn't need stdin
+ * });
+ * console.log('Started daemon with PID:', server.pid);
+ * ```
+ *
+ * @see {@link ChildProcess} - The handle returned by spawnAsync()
+ * @see {@link SpawnOptions} - Options for synchronous spawn()
+ * @since 0.7.0
+ */
+export interface SpawnAsyncOptions {
+  /**
+   * Working directory for the subprocess.
+   *
+   * The subprocess will start with this directory as its current working directory.
+   * If not specified, inherits the editor's current working directory.
+   *
+   * @example
+   * ```typescript
+   * // Run npm install in a specific project
+   * const proc = process.spawnAsync('npm', ['install'], {
+   *   cwd: '/Users/me/projects/my-app'
+   * });
+   *
+   * // Run git commands in a repository
+   * const proc = process.spawnAsync('git', ['status'], {
+   *   cwd: vim.fn.expand('%:p:h')  // Directory of current file
+   * });
+   * ```
+   */
+  cwd?: string;
+
+  /**
+   * Environment variables for the subprocess.
+   *
+   * By default, these variables are **merged** with the current process environment,
+   * allowing you to add or override specific variables while keeping system defaults
+   * like PATH, HOME, etc.
+   *
+   * Set `clearEnv: true` to start with a clean environment containing only
+   * the variables you specify.
+   *
+   * @example
+   * ```typescript
+   * // Add/override specific variables (PATH, HOME, etc. still available)
+   * const proc = process.spawnAsync('my-tool', [], {
+   *   env: {
+   *     DEBUG: 'true',
+   *     NODE_ENV: 'development',
+   *     MY_CONFIG: '/path/to/config'
+   *   }
+   * });
+   *
+   * // Isolated environment (only specified variables)
+   * const proc = process.spawnAsync('my-tool', [], {
+   *   env: {
+   *     PATH: '/usr/local/bin:/usr/bin',
+   *     HOME: '/tmp',
+   *     MY_VAR: 'value'
+   *   },
+   *   clearEnv: true
+   * });
+   * ```
+   *
+   * @see {@link clearEnv} - Control environment inheritance
+   */
+  env?: Record<string, string>;
+
+  /**
+   * If true, do not inherit the current process environment.
+   *
+   * When `clearEnv` is false (default), the subprocess inherits all environment
+   * variables from the editor process, and `env` options are merged on top.
+   *
+   * When `clearEnv` is true, the subprocess starts with an empty environment
+   * and only has access to variables explicitly specified in `env`.
+   *
+   * **Warning**: Many programs expect certain environment variables to exist
+   * (PATH, HOME, USER, SHELL, TERM, etc.). Setting `clearEnv: true` without
+   * providing these may cause unexpected behavior.
+   *
+   * @default false
+   *
+   * @example
+   * ```typescript
+   * // Minimal environment for security-sensitive operations
+   * const proc = process.spawnAsync('/usr/bin/gpg', ['--decrypt', 'file.gpg'], {
+   *   env: {
+   *     PATH: '/usr/bin',
+   *     HOME: process.env.HOME,
+   *     GNUPGHOME: '/secure/gnupg'
+   *   },
+   *   clearEnv: true  // Don't leak other env vars to gpg
+   * });
+   * ```
+   */
+  clearEnv?: boolean;
+
+  /**
+   * How to handle stdin for the subprocess.
+   *
+   * - `'pipe'` (default): Create a writable pipe. Use `proc.stdin.write()` to send
+   *   data and `proc.stdin.end()` to signal EOF.
+   *
+   * - `'null'` or `'ignore'`: Connect stdin to /dev/null. The subprocess receives
+   *   immediate EOF on stdin. Use for commands that don't need input.
+   *
+   * When stdin is `'null'`, calling `proc.stdin.write()` will return false and
+   * have no effect.
+   *
+   * @default 'pipe'
+   *
+   * @example
+   * ```typescript
+   * // Interactive command - needs stdin pipe
+   * const repl = process.spawnAsync('node');
+   * repl.stdin.write('console.log("hello")\n');
+   * repl.stdin.write('.exit\n');
+   *
+   * // Non-interactive command - doesn't need stdin
+   * const proc = process.spawnAsync('ls', ['-la'], { stdin: 'null' });
+   * // proc.stdin.write() would return false
+   *
+   * // Formatter - needs stdin for input, then EOF
+   * const fmt = process.spawnAsync('prettier', ['--parser', 'typescript']);
+   * fmt.stdin.write(sourceCode);
+   * fmt.stdin.end();  // Signal EOF so prettier processes input
+   * ```
+   */
+  stdin?: 'pipe' | 'null' | 'ignore';
+
+  /**
+   * Timeout in milliseconds after which the process is automatically killed.
+   *
+   * When the timeout expires:
+   * 1. SIGTERM is sent to allow graceful shutdown
+   * 2. If the process doesn't exit, SIGKILL may be sent
+   * 3. The exit code is set to **124** (matching Neovim's `vim.system()` convention)
+   *
+   * This is essential for:
+   * - Preventing runaway processes from hanging the editor
+   * - Build/compile commands that might infinite loop
+   * - Network operations that might stall
+   * - Any command where you need guaranteed termination
+   *
+   * **Exit Code 124**: This convention comes from the `timeout` command and is
+   * also used by Neovim's `vim.system()`. It allows distinguishing timeout from
+   * other failures (code 1) or success (code 0).
+   *
+   * @example
+   * ```typescript
+   * // 5 second timeout for a build command
+   * const build = process.spawnAsync('npm', ['run', 'build'], {
+   *   timeout: 5000,
+   *   cwd: projectRoot
+   * });
+   *
+   * build.onExit((code, signal) => {
+   *   if (code === 124) {
+   *     vim.api.echoError('Build timed out after 5 seconds');
+   *   } else if (code === 0) {
+   *     vim.api.echo('Build succeeded');
+   *   } else {
+   *     vim.api.echoError(`Build failed with code ${code}`);
+   *   }
+   * });
+   *
+   * // Very short timeout for quick checks
+   * const ping = process.spawnAsync('curl', ['-s', '--max-time', '1', url], {
+   *   timeout: 2000  // Kill if curl doesn't respect its own timeout
+   * });
+   * ```
+   *
+   * @see Neovim's `vim.system()` timeout behavior: https://neovim.io/doc/user/lua.html#vim.system()
+   */
+  timeout?: number;
+
+  /**
+   * Spawn the child process in a detached state (process group leader).
+   *
+   * When `detach` is true:
+   * - The subprocess becomes a process group leader
+   * - It can continue running after the editor exits
+   * - It will NOT keep the editor's event loop alive (you can exit freely)
+   * - The subprocess is automatically disowned from the editor
+   *
+   * **Use Cases**:
+   * - Starting background daemons or servers
+   * - Launching external applications that should outlive the editor
+   * - Running long build processes that should continue if editor crashes
+   *
+   * **Important Notes**:
+   * - You can still receive `onExit` callbacks if the process exits while editor runs
+   * - `kill()` still works on detached processes
+   * - Consider using `stdin: 'null'` for detached processes that don't need input
+   *
+   * @default false
+   *
+   * @example
+   * ```typescript
+   * // Start a development server that survives editor exit
+   * const server = process.spawnAsync('npm', ['run', 'dev'], {
+   *   cwd: projectRoot,
+   *   detach: true,
+   *   stdin: 'null'
+   * });
+   * console.log(`Dev server started with PID ${server.pid}`);
+   * // Editor can exit, server keeps running
+   *
+   * // Start a file watcher daemon
+   * const watcher = process.spawnAsync('fswatch', ['-r', '.'], {
+   *   detach: true,
+   *   stdin: 'null'
+   * });
+   * // Watcher continues even if editor closes
+   *
+   * // Note: You can still kill it manually
+   * server.kill('SIGTERM');
+   * ```
+   */
+  detach?: boolean;
+
+  /**
+   * Buffer all stdout data until EOF before delivering to callback.
+   *
+   * **Streaming Mode** (default, `stdoutBuffered: false`):
+   * - `onStdout` is called multiple times as data arrives
+   * - Each call receives a chunk of output (size varies)
+   * - Good for real-time progress updates, logs, interactive output
+   *
+   * **Buffered Mode** (`stdoutBuffered: true`):
+   * - `onStdout` is called **once** after process exits
+   * - Single call receives the complete stdout output
+   * - Good for formatters, compilers, any command where you need complete output
+   *
+   * **Memory Consideration**: Buffered mode accumulates all output in memory.
+   * For commands that produce very large output (e.g., large file dumps),
+   * streaming mode is more memory-efficient.
+   *
+   * @default false (streaming mode)
+   *
+   * @example
+   * ```typescript
+   * // STREAMING MODE - Real-time build output
+   * const build = process.spawnAsync('npm', ['run', 'build']);
+   * build.onStdout((chunk) => {
+   *   // Called multiple times with partial output
+   *   vim.api.echo(chunk);  // Show progress in real-time
+   * });
+   *
+   * // BUFFERED MODE - Code formatter
+   * const prettier = process.spawnAsync('prettier', ['--stdin-filepath', 'file.ts'], {
+   *   stdoutBuffered: true
+   * });
+   * prettier.onStdout((completeOutput) => {
+   *   // Called ONCE with entire formatted file
+   *   const lines = completeOutput.trimEnd().split('\n');
+   *   vim.api.bufSetLines(0, 0, -1, false, lines);
+   * });
+   * prettier.stdin.write(vim.api.bufGetLines(0, 0, -1, false).join('\n'));
+   * prettier.stdin.end();
+   *
+   * // BUFFERED MODE - JSON output from CLI tool
+   * const cli = process.spawnAsync('my-tool', ['--json'], {
+   *   stdoutBuffered: true
+   * });
+   * cli.onStdout((json) => {
+   *   const data = JSON.parse(json);  // Safe - we have complete JSON
+   *   processData(data);
+   * });
+   * ```
+   *
+   * @see {@link stderrBuffered} - Same concept for stderr
+   */
+  stdoutBuffered?: boolean;
+
+  /**
+   * Buffer all stderr data until EOF before delivering to callback.
+   *
+   * Works identically to `stdoutBuffered` but for the stderr stream.
+   *
+   * **Streaming Mode** (default, `stderrBuffered: false`):
+   * - `onStderr` is called multiple times as errors/warnings arrive
+   * - Good for real-time error reporting during long operations
+   *
+   * **Buffered Mode** (`stderrBuffered: true`):
+   * - `onStderr` is called **once** after process exits
+   * - Single call receives all stderr output
+   * - Good when you need to parse complete error output
+   *
+   * @default false (streaming mode)
+   *
+   * @example
+   * ```typescript
+   * // STREAMING MODE - Show compiler errors in real-time
+   * const compile = process.spawnAsync('tsc', ['--noEmit']);
+   * compile.onStderr((error) => {
+   *   vim.api.echoError(error);  // Show each error as it's found
+   * });
+   *
+   * // BUFFERED MODE - Collect all linter warnings
+   * const lint = process.spawnAsync('eslint', ['.', '--format', 'json'], {
+   *   stderrBuffered: true
+   * });
+   * lint.onStderr((allErrors) => {
+   *   // Parse complete error output as JSON
+   *   const errors = JSON.parse(allErrors);
+   *   populateDiagnostics(errors);
+   * });
+   *
+   * // BOTH BUFFERED - Complete capture for analysis
+   * const tool = process.spawnAsync('my-tool', [], {
+   *   stdoutBuffered: true,
+   *   stderrBuffered: true
+   * });
+   * let stdout = '', stderr = '';
+   * tool.onStdout((data) => { stdout = data; });
+   * tool.onStderr((data) => { stderr = data; });
+   * tool.onExit((code) => {
+   *   // Both stdout and stderr are complete here
+   *   analyzeOutput(stdout, stderr, code);
+   * });
+   * ```
+   *
+   * @see {@link stdoutBuffered} - Same concept for stdout
+   */
+  stderrBuffered?: boolean;
+}
+
+/**
  * Process API (Node.js-style)
  * @future Phase 5+
  */
@@ -1678,14 +2486,73 @@ export interface Process {
   cwd(): string;
   env: Record<string, string>;
   platform: 'darwin' | 'linux' | 'windows';
-  spawn(command: string, args?: string[], options?: {
-    cwd?: string;
-    env?: Record<string, string>;
-  }): Promise<{
+
+  /**
+   * Spawn a subprocess and wait for it to complete (synchronous collection)
+   *
+   * @example
+   * ```typescript
+   * // Basic usage
+   * const result = await process.spawn('ls', ['-la']);
+   * console.log(result.stdout);
+   *
+   * // With custom environment
+   * const result = await process.spawn('env', [], {
+   *   env: { MY_VAR: 'hello' }
+   * });
+   *
+   * // With isolated environment (no inherited variables)
+   * const result = await process.spawn('env', [], {
+   *   env: { PATH: '/usr/bin', MY_VAR: 'hello' },
+   *   clearEnv: true
+   * });
+   * ```
+   *
+   * @param command - Command to execute
+   * @param args - Arguments to pass to the command
+   * @param options - Spawn options (cwd, env, clearEnv)
+   * @returns Promise resolving to stdout, stderr, and exit code
+   */
+  spawn(command: string, args?: string[], options?: SpawnOptions): Promise<{
     stdout: string;
     stderr: string;
     code: number;
   }>;
+
+  /**
+   * Spawn a long-running subprocess with bidirectional stdio communication
+   * Ideal for LSP servers, language servers, and other persistent processes
+   *
+   * @example
+   * ```typescript
+   * const lsp = vim.process.spawnAsync('typescript-language-server', ['--stdio']);
+   *
+   * lsp.onStdout((data) => {
+   *   console.log('LSP response:', data);
+   * });
+   *
+   * lsp.onStderr((data) => {
+   *   console.error('LSP error:', data);
+   * });
+   *
+   * lsp.onExit((code, signal) => {
+   *   console.log('LSP exited:', code, signal);
+   * });
+   *
+   * // Send JSON-RPC request
+   * const request = JSON.stringify({ jsonrpc: '2.0', method: 'initialize', ... });
+   * lsp.stdin.write(`Content-Length: ${request.length}\r\n\r\n${request}`);
+   *
+   * // Kill when done
+   * lsp.kill('SIGTERM');
+   * ```
+   *
+   * @param command - Command to execute
+   * @param args - Arguments to pass to the command
+   * @param options - Spawn options (cwd, env, clearEnv)
+   * @returns ChildProcess handle with stdin, kill, and event callbacks
+   */
+  spawnAsync(command: string, args?: string[], options?: SpawnAsyncOptions): ChildProcess;
 }
 
 // ============================================================================

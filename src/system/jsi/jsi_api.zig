@@ -34,6 +34,7 @@ pub const usercommand_api = @import("usercommand_api.zig");
 pub const loader = @import("loader.zig");
 pub const fs_api = @import("fs_api.zig");
 pub const process_api = @import("process_api.zig");
+pub const process_async_api = @import("process_async_api.zig");
 pub const fetch_api = @import("fetch_api.zig");
 pub const e2e_api = @import("e2e_api.zig");
 pub const api_buffer = @import("api_buffer.zig");
@@ -60,6 +61,7 @@ pub var global_usercommand_ctx: ?*usercommand_api.UserCommandContext = null;
 pub var global_allocator: ?std.mem.Allocator = null;
 pub var global_fs_ctx: ?*fs_api.FsContext = null;
 pub var global_process_ctx: ?*process_api.ProcessContext = null;
+pub var global_process_async_ctx: ?*process_async_api.AsyncProcessContext = null;
 pub var global_fetch_ctx: ?*fetch_api.FetchContext = null;
 pub var global_e2e_ctx: ?*e2e_api.E2EContext = null;
 
@@ -319,6 +321,14 @@ pub fn initJSI(
     global_process_ctx = proc_ctx;
     process_api.register(runtime, proc_ctx);
 
+    // Register async process API (process.spawnAsync for persistent subprocesses with stdio)
+    const proc_async_ctx = allocator.create(process_async_api.AsyncProcessContext) catch @panic("Failed to allocate AsyncProcessContext");
+    proc_async_ctx.* = process_async_api.AsyncProcessContext{
+        .allocator = allocator,
+    };
+    global_process_async_ctx = proc_async_ctx;
+    process_async_api.register(runtime, proc_async_ctx);
+
     // Register fetch API (global fetch function)
     const fetch_ctx = allocator.create(fetch_api.FetchContext) catch @panic("Failed to allocate FetchContext");
     fetch_ctx.* = fetch_api.FetchContext{
@@ -484,6 +494,14 @@ pub fn deinitJSI() void {
             alloc.destroy(ctx);
         }
         global_process_ctx = null;
+    }
+    // Clean up async process context (kills all running processes)
+    process_async_api.deinit();
+    if (global_process_async_ctx) |ctx| {
+        if (global_allocator) |alloc| {
+            alloc.destroy(ctx);
+        }
+        global_process_async_ctx = null;
     }
     // Clean up fetch context and module state (queue, in-flight tracker)
     fetch_api.deinit(); // CRITICAL: Clean up fetch queue and in-flight requests
