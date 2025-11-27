@@ -2213,6 +2213,164 @@ if (typeof __spawnAsync !== 'undefined') {
 }
 
 // ============================================================================
+// PTY (Pseudo-Terminal) API - Interactive Terminal Programs
+// ============================================================================
+// Provides PTY spawning for programs that need a real terminal (fzf, htop, shells)
+// React Native pattern: JS manages event callbacks, native triggers them
+//
+// process.spawnPty(cmd, args?, opts?) -> PtyProcess
+//   Spawn a process in a pseudo-terminal (PTY)
+//
+//   cmd: string - Command to execute (e.g., 'fzf', 'htop', '/bin/bash')
+//   args: string[] - Arguments (optional)
+//   opts: object (optional)
+//     - cwd: string - Working directory
+//     - rows: number - Initial terminal rows (default 24)
+//     - cols: number - Initial terminal columns (default 80)
+//     - term: string - TERM env var (default 'xterm-256color')
+//     - timeout: number - Timeout in ms (exit code 124 on timeout)
+//     - env: object - Environment variables
+//     - clearEnv: boolean - Don't inherit environment
+//
+//   PtyProcess: object
+//     - pid: number - Process ID
+//     - write(data) -> boolean - Write to PTY (send input)
+//     - resize(rows, cols) -> void - Resize terminal
+//     - kill(signal?) -> boolean - Kill process (default: SIGTERM)
+//     - onData(callback) - Handle PTY output (merged stdout/stderr)
+//     - onExit(callback) - Handle process exit
+//
+// Examples:
+//   // Interactive file picker
+//   const fzf = process.spawnPty('fzf', ['--height', '40%'], {
+//     rows: 20, cols: 80
+//   });
+//   fzf.onData((data) => renderToFloatingWindow(data));
+//   fzf.onExit((code) => {
+//     if (code === 0) openSelectedFile();
+//   });
+//
+//   // Shell session
+//   const shell = process.spawnPty('/bin/zsh', [], { rows: 24, cols: 80 });
+//   shell.write('ls -la\n');
+//   shell.resize(40, 120);  // Handle window resize
+
+// PTY callback registry (React Native pattern)
+globalThis._ptyCallbacks = {};
+
+// Called by native code when PTY events occur
+globalThis.__handlePtyEvent = function(id, event, data) {
+  const callbacks = globalThis._ptyCallbacks[id];
+  if (!callbacks) return;
+
+  try {
+    if (event === 'data' && callbacks.onData) {
+      callbacks.onData(data.data);
+    } else if (event === 'exit') {
+      if (callbacks.onExit) {
+        callbacks.onExit(data.code, data.signal);
+      }
+      // Clean up callbacks on exit
+      delete globalThis._ptyCallbacks[id];
+    }
+  } catch (e) {
+    console.log('[process.spawnPty] Callback error:', e);
+  }
+};
+
+// Add spawnPty to process object if native functions available
+if (typeof __spawnPty !== 'undefined') {
+  // Extend existing process object
+  const existingProcess = globalThis.process || {};
+
+  globalThis.process = Object.assign({}, existingProcess, {
+    spawnPty: function(cmd, args, opts) {
+      if (typeof cmd !== 'string' || cmd.length === 0) {
+        throw new Error('spawnPty requires a command string');
+      }
+
+      // Prepare options for native - convert env object to array of "KEY=VALUE" strings
+      const nativeOpts = opts ? { ...opts } : {};
+      if (nativeOpts.env && typeof nativeOpts.env === 'object') {
+        // Convert env object to array format expected by Zig: ["KEY=VALUE", ...]
+        nativeOpts.envArray = Object.keys(nativeOpts.env).map(function(key) {
+          return key + '=' + String(nativeOpts.env[key]);
+        });
+        delete nativeOpts.env; // Remove original to avoid confusion
+      }
+
+      // Spawn the PTY process
+      let id;
+      try {
+        id = __spawnPty(cmd, args || [], nativeOpts);
+      } catch (e) {
+        throw new Error('Failed to spawn PTY: ' + (e && e.message ? e.message : String(e)));
+      }
+
+      if (id === undefined || id === null) {
+        throw new Error('Failed to spawn PTY: unknown error');
+      }
+
+      // Get PID from native
+      const pid = __ptyGetPid(id);
+
+      // Initialize callbacks for this PTY
+      globalThis._ptyCallbacks[id] = {
+        onData: null,
+        onExit: null,
+      };
+
+      // Create PtyProcess object
+      const ptyProcess = {
+        pid: pid,
+
+        write: function(data) {
+          if (typeof data !== 'string') {
+            data = String(data);
+          }
+          return __ptyWrite(id, data);
+        },
+
+        resize: function(rows, cols) {
+          return __ptyResize(id, rows, cols);
+        },
+
+        kill: function(signal) {
+          let sigNum = 15; // Default SIGTERM
+          if (typeof signal === 'number') {
+            sigNum = signal;
+          } else if (typeof signal === 'string') {
+            return __ptyKill(id, signal);
+          }
+          return __ptyKill(id, sigNum);
+        },
+
+        onData: function(callback) {
+          if (globalThis._ptyCallbacks[id]) {
+            globalThis._ptyCallbacks[id].onData = callback;
+          }
+          return this;
+        },
+
+        onExit: function(callback) {
+          if (globalThis._ptyCallbacks[id]) {
+            globalThis._ptyCallbacks[id].onExit = callback;
+          }
+          return this;
+        },
+      };
+
+      return ptyProcess;
+    }
+  });
+
+  // Re-freeze if it was frozen before
+  if (Object.isFrozen(existingProcess)) {
+    Object.freeze(globalThis.process);
+  }
+}
+
+// ============================================================================
 // Vim Option Enums (Runtime Constants)
 // ============================================================================
 // These are available globally for TypeScript configs without imports

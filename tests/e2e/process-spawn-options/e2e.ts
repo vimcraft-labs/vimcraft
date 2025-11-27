@@ -1,8 +1,8 @@
-// E2E tests for process.spawnAsync new options: timeout, detach, stdoutBuffered
+// E2E tests for process.spawn options: timeout, detach, stdoutBuffered
 //
-// Tests the new Neovim-compatible features added to process.spawnAsync
+// Tests the Neovim-compatible features added to process.spawn
 
-vim.e2e.describe("process.spawnAsync options", function() {
+vim.e2e.describe("process.spawn options", function() {
 
     vim.e2e.test("timeout option kills process after specified ms", function() {
         let exitCode: number | null = null;
@@ -10,7 +10,7 @@ vim.e2e.describe("process.spawnAsync options", function() {
         let exited = false;
 
         // Start a long-running process with 500ms timeout
-        const proc = process.spawnAsync("sleep", ["10"], { timeout: 500 });
+        const proc = process.spawn("sleep", ["10"], { timeout: 500 });
 
         proc.onExit((code: number, signal: string | null) => {
             exited = true;
@@ -31,7 +31,7 @@ vim.e2e.describe("process.spawnAsync options", function() {
         let exited = false;
 
         // Echo multiple lines with small delays - buffered mode should collect all
-        const proc = process.spawnAsync("sh", ["-c", "echo line1; sleep 0.05; echo line2; sleep 0.05; echo line3"], {
+        const proc = process.spawn("sh", ["-c", "echo line1; sleep 0.05; echo line2; sleep 0.05; echo line3"], {
             stdoutBuffered: true
         });
 
@@ -60,7 +60,7 @@ vim.e2e.describe("process.spawnAsync options", function() {
         let exitCode: number | null = null;
 
         // Spawn a short-lived detached process
-        const proc = process.spawnAsync("sleep", ["0.1"], { detach: true });
+        const proc = process.spawn("sleep", ["0.1"], { detach: true });
 
         proc.onExit((code: number) => {
             exited = true;
@@ -80,7 +80,7 @@ vim.e2e.describe("process.spawnAsync options", function() {
         let exited = false;
 
         // Echo to stderr with small delays
-        const proc = process.spawnAsync("sh", ["-c", "echo err1 >&2; sleep 0.05; echo err2 >&2; sleep 0.05; echo err3 >&2"], {
+        const proc = process.spawn("sh", ["-c", "echo err1 >&2; sleep 0.05; echo err2 >&2; sleep 0.05; echo err3 >&2"], {
             stderrBuffered: true
         });
 
@@ -107,7 +107,7 @@ vim.e2e.describe("process.spawnAsync options", function() {
         let exited = false;
 
         // Same command but WITHOUT buffered mode - should get multiple callbacks
-        const proc = process.spawnAsync("sh", ["-c", "echo line1; sleep 0.1; echo line2; sleep 0.1; echo line3"]);
+        const proc = process.spawn("sh", ["-c", "echo line1; sleep 0.1; echo line2; sleep 0.1; echo line3"]);
 
         proc.onStdout(() => {
             callbackCount++;

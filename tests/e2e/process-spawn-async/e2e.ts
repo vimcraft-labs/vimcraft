@@ -1,15 +1,15 @@
-// E2E tests for process.spawnAsync() - async subprocess with stdio
+// E2E tests for process.spawn() - async subprocess with stdio
 //
 // Tests the libuv-based async subprocess API for persistent processes
 // with bidirectional stdio communication (e.g., for LSP servers).
 
-vim.e2e.describe("process.spawnAsync", function() {
+vim.e2e.describe("process.spawn", function() {
 
     vim.e2e.test("spawns process and receives stdout", function() {
         let output = "";
         let exitCode: number | null = null;
 
-        const proc = process.spawnAsync("echo", ["hello async"]);
+        const proc = process.spawn("echo", ["hello async"]);
 
         proc.onStdout((data: string) => {
             output += data;
@@ -31,7 +31,7 @@ vim.e2e.describe("process.spawnAsync", function() {
         let exitCode: number | null = null;
 
         // Use sh -c to write to stderr
-        const proc = process.spawnAsync("sh", ["-c", "echo error >&2"]);
+        const proc = process.spawn("sh", ["-c", "echo error >&2"]);
 
         proc.onStderr((data: string) => {
             stderr += data;
@@ -52,7 +52,7 @@ vim.e2e.describe("process.spawnAsync", function() {
         let exitCode: number | null = null;
 
         // Use cat to echo stdin back to stdout
-        const proc = process.spawnAsync("cat");
+        const proc = process.spawn("cat");
 
         proc.onStdout((data: string) => {
             output += data;
@@ -81,7 +81,7 @@ vim.e2e.describe("process.spawnAsync", function() {
         let exited = false;
 
         // Start a long-running process
-        const proc = process.spawnAsync("sleep", ["10"]);
+        const proc = process.spawn("sleep", ["10"]);
 
         proc.onExit((code: number, signal: string | null) => {
             exited = true;
@@ -104,7 +104,7 @@ vim.e2e.describe("process.spawnAsync", function() {
     vim.e2e.test("kill with default signal (SIGTERM)", function() {
         let exited = false;
 
-        const proc = process.spawnAsync("sleep", ["10"]);
+        const proc = process.spawn("sleep", ["10"]);
 
         proc.onExit(() => {
             exited = true;
@@ -121,7 +121,7 @@ vim.e2e.describe("process.spawnAsync", function() {
     });
 
     vim.e2e.test("process.pid is set", function() {
-        const proc = process.spawnAsync("sleep", ["1"]);
+        const proc = process.spawn("sleep", ["1"]);
 
         // pid should be set immediately after spawn
         vim.e2e.assert.true(proc.pid > 0, "pid should be positive");
@@ -135,7 +135,7 @@ vim.e2e.describe("process.spawnAsync", function() {
         let errorMessage = "";
 
         try {
-            process.spawnAsync("/nonexistent/command/12345");
+            process.spawn("/nonexistent/command/12345");
         } catch (e: any) {
             threw = true;
             errorMessage = e?.message || String(e);
@@ -154,8 +154,8 @@ vim.e2e.describe("process.spawnAsync", function() {
         let output2 = "";
         let exits = 0;
 
-        const proc1 = process.spawnAsync("echo", ["proc1"]);
-        const proc2 = process.spawnAsync("echo", ["proc2"]);
+        const proc1 = process.spawn("echo", ["proc1"]);
+        const proc2 = process.spawn("echo", ["proc2"]);
 
         proc1.onStdout((data: string) => { output1 += data; });
         proc2.onStdout((data: string) => { output2 += data; });
@@ -173,7 +173,7 @@ vim.e2e.describe("process.spawnAsync", function() {
     vim.e2e.test("cwd option changes working directory", function() {
         let output = "";
 
-        const proc = process.spawnAsync("pwd", [], { cwd: "/tmp" });
+        const proc = process.spawn("pwd", [], { cwd: "/tmp" });
 
         proc.onStdout((data: string) => {
             output += data;
@@ -193,7 +193,7 @@ vim.e2e.describe("process.spawnAsync", function() {
         let exitCode: number | null = null;
 
         // Use a simple shell script that echoes with prefix
-        const proc = process.spawnAsync("sh", ["-c", "while read line; do echo \"got: $line\"; done"]);
+        const proc = process.spawn("sh", ["-c", "while read line; do echo \"got: $line\"; done"]);
 
         proc.onStdout((data: string) => {
             responses.push(data.trim());
