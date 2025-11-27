@@ -1740,10 +1740,10 @@ if (typeof __fs !== 'undefined') {
 //   Get current working directory
 //   Example: const cwd = process.cwd();
 //
-// process.spawn(command, args?, options?) -> { stdout, stderr, code }
-//   Spawn a child process and wait for completion
+// process.exec(command, args?, options?) -> { stdout, stderr, code }
+//   Execute a child process and wait for completion (Promise-based)
 //   Example:
-//     const result = process.spawn('ls', ['-la']);
+//     const result = await process.exec('ls', ['-la']);
 //     console.log(result.stdout);
 //     console.log('Exit code:', result.code);
 //
@@ -1754,15 +1754,15 @@ if (typeof __fs !== 'undefined') {
 //   Exit the editor with given code (default 0)
 //   Example: process.exit(1);
 //
-//   Options (spawn):
+//   Options (exec):
 //     - cwd: string (working directory for subprocess)
 //     - env: object (environment variables to set/override)
 //     - clearEnv: boolean (if true, don't inherit current environment)
 if (typeof __process !== 'undefined') {
   // Wrap __process to add __keys to env for Zig iteration
-  const originalSpawn = __process.spawn;
+  const originalExec = __process.spawn;  // Native function is still named spawn
   globalThis.process = Object.assign({}, __process, {
-    spawn: function(cmd, args, opts) {
+    exec: function(cmd, args, opts) {
       // Prepare options for native - add __keys to env for Zig iteration
       let nativeOpts = opts;
       if (opts && opts.env && typeof opts.env === 'object') {
@@ -1770,7 +1770,7 @@ if (typeof __process !== 'undefined') {
         // (Hermes doesn't expose Object.keys easily to native code)
         nativeOpts = { ...opts, env: { ...opts.env, __keys: Object.keys(opts.env) } };
       }
-      return originalSpawn.call(__process, cmd, args, nativeOpts);
+      return originalExec.call(__process, cmd, args, nativeOpts);
     }
   });
   Object.freeze(globalThis.process);
@@ -2041,7 +2041,7 @@ if (typeof __nativeFetch !== 'undefined') {
 // Provides async subprocess spawning for LSP servers, formatters, etc.
 // React Native pattern: JS manages event callbacks, native triggers them
 //
-// process.spawnAsync(cmd, args?, opts?) -> ChildProcess
+// process.spawn(cmd, args?, opts?) -> ChildProcess
 //   Spawn a persistent subprocess with stdio pipes (non-blocking!)
 //
 //   cmd: string - Command to execute (e.g., 'node', 'python')
@@ -2059,14 +2059,14 @@ if (typeof __nativeFetch !== 'undefined') {
 //
 // Examples:
 //   // Spawn LSP server
-//   const lsp = process.spawnAsync('typescript-language-server', ['--stdio']);
+//   const lsp = process.spawn('typescript-language-server', ['--stdio']);
 //   lsp.onStdout((data) => console.log('LSP:', data));
 //   lsp.onStderr((data) => console.error('LSP error:', data));
 //   lsp.onExit((code, signal) => console.log('LSP exited:', code));
 //   lsp.stdin.write(JSON.stringify(initRequest) + '\n');
 //
 //   // Formatter that needs EOF to process input
-//   const prettier = process.spawnAsync('prettier', ['--stdin-filepath', 'file.js']);
+//   const prettier = process.spawn('prettier', ['--stdin-filepath', 'file.js']);
 //   prettier.onStdout((formatted) => console.log(formatted));
 //   prettier.stdin.write(code);
 //   prettier.stdin.end();  // Signal EOF - prettier processes and outputs
@@ -2096,19 +2096,19 @@ globalThis.__handleProcessEvent = function(id, event, data) {
       delete globalThis._processCallbacks[id];
     }
   } catch (e) {
-    console.log('[process.spawnAsync] Callback error:', e);
+    console.log('[process.spawn] Callback error:', e);
   }
 };
 
-// Add spawnAsync to process object if native functions available
+// Add spawn to process object if native functions available
 if (typeof __spawnAsync !== 'undefined') {
   // Extend existing process object or create new one
   const existingProcess = globalThis.process || {};
 
   globalThis.process = Object.assign({}, existingProcess, {
-    spawnAsync: function(cmd, args, opts) {
+    spawn: function(cmd, args, opts) {
       if (typeof cmd !== 'string' || cmd.length === 0) {
-        throw new Error('spawnAsync requires a command string');
+        throw new Error('spawn requires a command string');
       }
 
       // Prepare options for native - add __keys to env for Zig iteration
@@ -2151,7 +2151,7 @@ if (typeof __spawnAsync !== 'undefined') {
         stdin: {
           write: function(data) {
             if (stdinDisabled) {
-              console.log('[process.spawnAsync] Warning: Cannot write to stdin - process spawned with stdin: "' + opts.stdin + '"');
+              console.log('[process.spawn] Warning: Cannot write to stdin - process spawned with stdin: "' + opts.stdin + '"');
               return false;
             }
             if (typeof data !== 'string') {
@@ -2161,7 +2161,7 @@ if (typeof __spawnAsync !== 'undefined') {
           },
           end: function() {
             if (stdinDisabled) {
-              console.log('[process.spawnAsync] Warning: Cannot close stdin - process spawned with stdin: "' + opts.stdin + '"');
+              console.log('[process.spawn] Warning: Cannot close stdin - process spawned with stdin: "' + opts.stdin + '"');
               return false;
             }
             return __processCloseStdin(id);

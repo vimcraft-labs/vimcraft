@@ -1682,14 +1682,14 @@ export interface FetchResponse {
  *
  * @example
  * ```typescript
- * const proc = process.spawnAsync('cat');
+ * const proc = process.spawn('cat');
  * proc.stdin.write('Hello, ');
  * proc.stdin.write('World!\n');
  * proc.stdin.end();  // Signal EOF
  * ```
  *
  * @see {@link ChildProcess} - Parent interface
- * @see {@link SpawnAsyncOptions.stdin} - Control stdin mode
+ * @see {@link SpawnOptions.stdin} - Control stdin mode
  */
 export interface ChildProcessStdin {
   /**
@@ -1743,7 +1743,7 @@ export interface ChildProcessStdin {
    * @example
    * ```typescript
    * // Format code with prettier
-   * const prettier = process.spawnAsync('prettier', ['--stdin-filepath', 'file.ts']);
+   * const prettier = process.spawn('prettier', ['--stdin-filepath', 'file.ts']);
    * prettier.onStdout((formatted) => {
    *   vim.api.bufSetLines(0, 0, -1, false, formatted.split('\n'));
    * });
@@ -1751,12 +1751,12 @@ export interface ChildProcessStdin {
    * prettier.stdin.end();  // Prettier now processes and outputs
    *
    * // Pipe JSON to jq
-   * const jq = process.spawnAsync('jq', ['.']);
+   * const jq = process.spawn('jq', ['.']);
    * jq.stdin.write('{"name": "test", "value": 42}');
    * jq.stdin.end();  // jq parses and pretty-prints the JSON
    *
    * // Compile TypeScript from stdin
-   * const tsc = process.spawnAsync('tsc', ['--outFile', '/dev/stdout']);
+   * const tsc = process.spawn('tsc', ['--outFile', '/dev/stdout']);
    * tsc.stdin.write(sourceCode);
    * tsc.stdin.end();  // tsc compiles and outputs JavaScript
    * ```
@@ -1765,7 +1765,7 @@ export interface ChildProcessStdin {
 }
 
 /**
- * Child process handle returned by `process.spawnAsync()`.
+ * Child process handle returned by `process.spawn()`.
  *
  * Represents a running subprocess with bidirectional stdio communication.
  * Use this handle to:
@@ -1777,7 +1777,7 @@ export interface ChildProcessStdin {
  * ## Lifecycle
  *
  * ```
- * spawnAsync() → ChildProcess created → callbacks registered
+ * spawn() → ChildProcess created → callbacks registered
  *                      ↓
  *              stdin.write() / stdin.end()
  *                      ↓
@@ -1791,7 +1791,7 @@ export interface ChildProcessStdin {
  * ## Example: LSP Server Communication
  *
  * ```typescript
- * const lsp = process.spawnAsync('typescript-language-server', ['--stdio']);
+ * const lsp = process.spawn('typescript-language-server', ['--stdio']);
  *
  * // Handle responses
  * lsp.onStdout((data) => {
@@ -1821,7 +1821,7 @@ export interface ChildProcessStdin {
  * lsp.stdin.write(`Content-Length: ${request.length}\r\n\r\n${request}`);
  * ```
  *
- * @see {@link SpawnAsyncOptions} - Options for spawning
+ * @see {@link SpawnOptions} - Options for spawning
  * @see {@link ChildProcessStdin} - stdin interface
  * @since 0.7.0
  */
@@ -1830,7 +1830,7 @@ export interface ChildProcess {
    * Process ID (PID) of the spawned subprocess.
    *
    * The PID is assigned by the operating system and uniquely identifies
-   * the process. It's available immediately after `spawnAsync()` returns.
+   * the process. It's available immediately after `spawn()` returns.
    *
    * **Use Cases**:
    * - Logging/debugging which process is running
@@ -1839,7 +1839,7 @@ export interface ChildProcess {
    *
    * @example
    * ```typescript
-   * const proc = process.spawnAsync('long-running-task');
+   * const proc = process.spawn('long-running-task');
    * console.log(`Started process with PID: ${proc.pid}`);
    *
    * // Log PID for external monitoring
@@ -1949,7 +1949,7 @@ export interface ChildProcess {
    * });
    *
    * // Buffered mode - single callback
-   * const proc = process.spawnAsync('cmd', [], { stdoutBuffered: true });
+   * const proc = process.spawn('cmd', [], { stdoutBuffered: true });
    * proc.onStdout((completeOutput) => {
    *   // This is called once with all output
    *   const result = JSON.parse(completeOutput);
@@ -1994,7 +1994,7 @@ export interface ChildProcess {
    * });
    *
    * // Buffered stderr for parsing
-   * const proc = process.spawnAsync('eslint', ['.'], { stderrBuffered: true });
+   * const proc = process.spawn('eslint', ['.'], { stderrBuffered: true });
    * proc.onStderr((allErrors) => {
    *   const diagnostics = parseEslintOutput(allErrors);
    *   showDiagnostics(diagnostics);
@@ -2041,7 +2041,7 @@ export interface ChildProcess {
    * });
    *
    * // Handle timeout
-   * const proc = process.spawnAsync('slow-cmd', [], { timeout: 5000 });
+   * const proc = process.spawn('slow-cmd', [], { timeout: 5000 });
    * proc.onExit((code) => {
    *   if (code === 124) {
    *     vim.api.echoWarning('Command timed out');
@@ -2071,12 +2071,45 @@ export interface ChildProcess {
    * ```
    */
   onExit(callback: (code: number, signal: string | null) => void): void;
+
+  /**
+   * **[PLANNED - Phase 5a]** Resize the PTY terminal dimensions.
+   *
+   * Only available when the process was spawned with `pty: true`.
+   * Sends SIGWINCH to notify the subprocess of the new terminal size.
+   *
+   * **Neovim Compatibility**: Matches `jobsend()` with resize command or
+   * `chanresize(chan, rows, cols)`.
+   *
+   * @param rows - New terminal height in character rows
+   * @param cols - New terminal width in character columns
+   * @returns true if resize succeeded, false if not in PTY mode or failed
+   *
+   * @example
+   * ```typescript
+   * // [PLANNED] Handle window resize event
+   * const shell = process.spawn('/bin/bash', [], {
+   *   pty: true,
+   *   rows: 24,
+   *   cols: 80
+   * });
+   *
+   * // When editor window resizes
+   * vim.autocmd.on('VimResized', () => {
+   *   const { rows, cols } = vim.ui.getTerminalSize();
+   *   shell.resize(rows, cols);
+   * });
+   * ```
+   *
+   * @since [Phase 5a - Planned]
+   */
+  resize?(rows: number, cols: number): boolean;
 }
 
 /**
- * Options for spawn() (synchronous)
+ * Options for exec() (synchronous, Promise-based)
  */
-export interface SpawnOptions {
+export interface ExecOptions {
   /** Working directory for the subprocess */
   cwd?: string;
   /**
@@ -2092,15 +2125,15 @@ export interface SpawnOptions {
   clearEnv?: boolean;
   /**
    * How to handle stdin for the subprocess.
-   * - 'pipe': Connect stdin to a pipe (default for spawnAsync, not used for sync spawn)
+   * - 'pipe': Connect stdin to a pipe (default for spawn, not used for sync exec)
    * - 'null' or 'ignore': Connect stdin to /dev/null (no input)
-   * @default 'pipe' for spawnAsync, inherit for spawn
+   * @default 'pipe' for spawn, inherit for exec
    */
   stdin?: 'pipe' | 'null' | 'ignore';
 }
 
 /**
- * Options for `process.spawnAsync()` - Async subprocess spawning with full control.
+ * Options for `process.spawn()` - Async subprocess spawning with full control.
  *
  * This interface provides Neovim-compatible process spawning options including
  * timeout management, detached processes, and buffered I/O modes. These options
@@ -2110,10 +2143,10 @@ export interface SpawnOptions {
  *
  * ```typescript
  * // Simple command with working directory
- * const proc = process.spawnAsync('npm', ['install'], { cwd: '/my/project' });
+ * const proc = process.spawn('npm', ['install'], { cwd: '/my/project' });
  *
  * // Command with custom environment
- * const proc = process.spawnAsync('my-tool', [], {
+ * const proc = process.spawn('my-tool', [], {
  *   env: { DEBUG: 'true', API_KEY: 'secret' }
  * });
  * ```
@@ -2123,7 +2156,7 @@ export interface SpawnOptions {
  * ### Timeout for Long-Running Commands
  * ```typescript
  * // Auto-kill after 30 seconds
- * const proc = process.spawnAsync('slow-build', [], { timeout: 30000 });
+ * const proc = process.spawn('slow-build', [], { timeout: 30000 });
  * proc.onExit((code) => {
  *   if (code === 124) {
  *     vim.api.notifyError('Build timed out after 30 seconds');
@@ -2134,7 +2167,7 @@ export interface SpawnOptions {
  * ### Buffered Output for Formatters
  * ```typescript
  * // Collect all output before processing (ideal for formatters)
- * const prettier = process.spawnAsync('prettier', ['--stdin-filepath', 'file.ts'], {
+ * const prettier = process.spawn('prettier', ['--stdin-filepath', 'file.ts'], {
  *   stdoutBuffered: true  // Single callback with complete output
  * });
  * prettier.onStdout((formatted) => {
@@ -2148,18 +2181,18 @@ export interface SpawnOptions {
  * ### Background Daemon
  * ```typescript
  * // Start a server that survives editor exit
- * const server = process.spawnAsync('my-daemon', ['--port', '8080'], {
+ * const server = process.spawn('my-daemon', ['--port', '8080'], {
  *   detach: true,
  *   stdin: 'null'  // Daemon doesn't need stdin
  * });
  * console.log('Started daemon with PID:', server.pid);
  * ```
  *
- * @see {@link ChildProcess} - The handle returned by spawnAsync()
- * @see {@link SpawnOptions} - Options for synchronous spawn()
+ * @see {@link ChildProcess} - The handle returned by spawn()
+ * @see {@link ExecOptions} - Options for synchronous exec()
  * @since 0.7.0
  */
-export interface SpawnAsyncOptions {
+export interface SpawnOptions {
   /**
    * Working directory for the subprocess.
    *
@@ -2169,12 +2202,12 @@ export interface SpawnAsyncOptions {
    * @example
    * ```typescript
    * // Run npm install in a specific project
-   * const proc = process.spawnAsync('npm', ['install'], {
+   * const proc = process.spawn('npm', ['install'], {
    *   cwd: '/Users/me/projects/my-app'
    * });
    *
    * // Run git commands in a repository
-   * const proc = process.spawnAsync('git', ['status'], {
+   * const proc = process.spawn('git', ['status'], {
    *   cwd: vim.fn.expand('%:p:h')  // Directory of current file
    * });
    * ```
@@ -2194,7 +2227,7 @@ export interface SpawnAsyncOptions {
    * @example
    * ```typescript
    * // Add/override specific variables (PATH, HOME, etc. still available)
-   * const proc = process.spawnAsync('my-tool', [], {
+   * const proc = process.spawn('my-tool', [], {
    *   env: {
    *     DEBUG: 'true',
    *     NODE_ENV: 'development',
@@ -2203,7 +2236,7 @@ export interface SpawnAsyncOptions {
    * });
    *
    * // Isolated environment (only specified variables)
-   * const proc = process.spawnAsync('my-tool', [], {
+   * const proc = process.spawn('my-tool', [], {
    *   env: {
    *     PATH: '/usr/local/bin:/usr/bin',
    *     HOME: '/tmp',
@@ -2235,7 +2268,7 @@ export interface SpawnAsyncOptions {
    * @example
    * ```typescript
    * // Minimal environment for security-sensitive operations
-   * const proc = process.spawnAsync('/usr/bin/gpg', ['--decrypt', 'file.gpg'], {
+   * const proc = process.spawn('/usr/bin/gpg', ['--decrypt', 'file.gpg'], {
    *   env: {
    *     PATH: '/usr/bin',
    *     HOME: process.env.HOME,
@@ -2264,16 +2297,16 @@ export interface SpawnAsyncOptions {
    * @example
    * ```typescript
    * // Interactive command - needs stdin pipe
-   * const repl = process.spawnAsync('node');
+   * const repl = process.spawn('node');
    * repl.stdin.write('console.log("hello")\n');
    * repl.stdin.write('.exit\n');
    *
    * // Non-interactive command - doesn't need stdin
-   * const proc = process.spawnAsync('ls', ['-la'], { stdin: 'null' });
+   * const proc = process.spawn('ls', ['-la'], { stdin: 'null' });
    * // proc.stdin.write() would return false
    *
    * // Formatter - needs stdin for input, then EOF
-   * const fmt = process.spawnAsync('prettier', ['--parser', 'typescript']);
+   * const fmt = process.spawn('prettier', ['--parser', 'typescript']);
    * fmt.stdin.write(sourceCode);
    * fmt.stdin.end();  // Signal EOF so prettier processes input
    * ```
@@ -2301,7 +2334,7 @@ export interface SpawnAsyncOptions {
    * @example
    * ```typescript
    * // 5 second timeout for a build command
-   * const build = process.spawnAsync('npm', ['run', 'build'], {
+   * const build = process.spawn('npm', ['run', 'build'], {
    *   timeout: 5000,
    *   cwd: projectRoot
    * });
@@ -2317,7 +2350,7 @@ export interface SpawnAsyncOptions {
    * });
    *
    * // Very short timeout for quick checks
-   * const ping = process.spawnAsync('curl', ['-s', '--max-time', '1', url], {
+   * const ping = process.spawn('curl', ['-s', '--max-time', '1', url], {
    *   timeout: 2000  // Kill if curl doesn't respect its own timeout
    * });
    * ```
@@ -2350,7 +2383,7 @@ export interface SpawnAsyncOptions {
    * @example
    * ```typescript
    * // Start a development server that survives editor exit
-   * const server = process.spawnAsync('npm', ['run', 'dev'], {
+   * const server = process.spawn('npm', ['run', 'dev'], {
    *   cwd: projectRoot,
    *   detach: true,
    *   stdin: 'null'
@@ -2359,7 +2392,7 @@ export interface SpawnAsyncOptions {
    * // Editor can exit, server keeps running
    *
    * // Start a file watcher daemon
-   * const watcher = process.spawnAsync('fswatch', ['-r', '.'], {
+   * const watcher = process.spawn('fswatch', ['-r', '.'], {
    *   detach: true,
    *   stdin: 'null'
    * });
@@ -2393,14 +2426,14 @@ export interface SpawnAsyncOptions {
    * @example
    * ```typescript
    * // STREAMING MODE - Real-time build output
-   * const build = process.spawnAsync('npm', ['run', 'build']);
+   * const build = process.spawn('npm', ['run', 'build']);
    * build.onStdout((chunk) => {
    *   // Called multiple times with partial output
    *   vim.api.echo(chunk);  // Show progress in real-time
    * });
    *
    * // BUFFERED MODE - Code formatter
-   * const prettier = process.spawnAsync('prettier', ['--stdin-filepath', 'file.ts'], {
+   * const prettier = process.spawn('prettier', ['--stdin-filepath', 'file.ts'], {
    *   stdoutBuffered: true
    * });
    * prettier.onStdout((completeOutput) => {
@@ -2412,7 +2445,7 @@ export interface SpawnAsyncOptions {
    * prettier.stdin.end();
    *
    * // BUFFERED MODE - JSON output from CLI tool
-   * const cli = process.spawnAsync('my-tool', ['--json'], {
+   * const cli = process.spawn('my-tool', ['--json'], {
    *   stdoutBuffered: true
    * });
    * cli.onStdout((json) => {
@@ -2444,13 +2477,13 @@ export interface SpawnAsyncOptions {
    * @example
    * ```typescript
    * // STREAMING MODE - Show compiler errors in real-time
-   * const compile = process.spawnAsync('tsc', ['--noEmit']);
+   * const compile = process.spawn('tsc', ['--noEmit']);
    * compile.onStderr((error) => {
    *   vim.api.echoError(error);  // Show each error as it's found
    * });
    *
    * // BUFFERED MODE - Collect all linter warnings
-   * const lint = process.spawnAsync('eslint', ['.', '--format', 'json'], {
+   * const lint = process.spawn('eslint', ['.', '--format', 'json'], {
    *   stderrBuffered: true
    * });
    * lint.onStderr((allErrors) => {
@@ -2460,7 +2493,7 @@ export interface SpawnAsyncOptions {
    * });
    *
    * // BOTH BUFFERED - Complete capture for analysis
-   * const tool = process.spawnAsync('my-tool', [], {
+   * const tool = process.spawn('my-tool', [], {
    *   stdoutBuffered: true,
    *   stderrBuffered: true
    * });
@@ -2476,6 +2509,287 @@ export interface SpawnAsyncOptions {
    * @see {@link stdoutBuffered} - Same concept for stdout
    */
   stderrBuffered?: boolean;
+
+}
+
+// ============================================================================
+// PTY (Pseudo-Terminal) Process - Phase 5a
+// ============================================================================
+
+/**
+ * Options for spawning a process in PTY (pseudo-terminal) mode.
+ *
+ * PTY mode enables proper terminal emulation for interactive CLI tools like
+ * `fzf`, `htop`, shells, and other TUI programs that require raw terminal access.
+ *
+ * **Key Differences from `SpawnOptions`**:
+ * - Stdin/stdout/stderr are merged into a single bidirectional PTY stream
+ * - Supports terminal resize via `resize(rows, cols)`
+ * - Handles terminal signals (SIGWINCH, SIGINT via Ctrl+C, etc.)
+ * - Programs see a real TTY (isatty() returns true)
+ *
+ * @since Phase 5a
+ */
+export interface SpawnPtyOptions {
+  /**
+   * Working directory for the subprocess.
+   *
+   * @example
+   * ```typescript
+   * const shell = process.spawnPty('/bin/zsh', [], { cwd: '/home/user/projects' });
+   * ```
+   */
+  cwd?: string;
+
+  /**
+   * Environment variables for the subprocess.
+   *
+   * By default, merged with the current process environment.
+   * Set `clearEnv: true` to start with only the specified variables.
+   *
+   * @example
+   * ```typescript
+   * const shell = process.spawnPty('/bin/bash', [], {
+   *   env: { TERM: 'xterm-256color', COLORTERM: 'truecolor' }
+   * });
+   * ```
+   */
+  env?: Record<string, string>;
+
+  /**
+   * If true, do not inherit the current process environment.
+   *
+   * @default false
+   */
+  clearEnv?: boolean;
+
+  /**
+   * Initial number of rows (height) for the PTY.
+   *
+   * This sets the terminal height in character rows. Can be changed later
+   * via `pty.resize(rows, cols)`.
+   *
+   * @default 24
+   *
+   * @example
+   * ```typescript
+   * // Small terminal for popup picker
+   * const fzf = process.spawnPty('fzf', [], { rows: 10, cols: 60 });
+   *
+   * // Full-size terminal
+   * const shell = process.spawnPty('/bin/zsh', [], { rows: 40, cols: 120 });
+   * ```
+   */
+  rows?: number;
+
+  /**
+   * Initial number of columns (width) for the PTY.
+   *
+   * This sets the terminal width in character columns. Can be changed later
+   * via `pty.resize(rows, cols)`.
+   *
+   * @default 80
+   */
+  cols?: number;
+
+  /**
+   * TERM environment variable value for the PTY.
+   *
+   * This tells programs what terminal capabilities are available.
+   * Common values: `'xterm-256color'`, `'screen-256color'`, `'vt100'`.
+   *
+   * @default 'xterm-256color'
+   *
+   * @example
+   * ```typescript
+   * // Force basic terminal for compatibility
+   * const shell = process.spawnPty('/bin/sh', [], { term: 'vt100' });
+   * ```
+   */
+  term?: string;
+
+  /**
+   * Timeout in milliseconds after which the process is automatically killed.
+   *
+   * When the timeout expires, the process is terminated and the exit code
+   * is set to 124 (matching Neovim's convention).
+   *
+   * @example
+   * ```typescript
+   * // 30 second timeout for interactive command
+   * const fzf = process.spawnPty('fzf', [], { timeout: 30000 });
+   * ```
+   */
+  timeout?: number;
+}
+
+/**
+ * Handle for a process running in PTY (pseudo-terminal) mode.
+ *
+ * Unlike `ChildProcess` which has separate stdin/stdout/stderr streams,
+ * `PtyProcess` has a single bidirectional data stream that combines all I/O.
+ * This matches how real terminals work.
+ *
+ * **Use Cases**:
+ * - Interactive pickers (`fzf`, `sk`)
+ * - TUI applications (`htop`, `vim`, `less`)
+ * - Shell sessions
+ * - Any program that requires a real TTY
+ *
+ * @since Phase 5a
+ *
+ * @example
+ * ```typescript
+ * // Run fzf as a file picker
+ * const fzf = process.spawnPty('fzf', ['--height', '40%']);
+ *
+ * let output = '';
+ * fzf.onData((data) => {
+ *   output += data;
+ *   // Render terminal output to a floating window
+ * });
+ *
+ * fzf.onExit((code) => {
+ *   if (code === 0) {
+ *     const selectedFile = output.trim();
+ *     vim.cmd.edit(selectedFile);
+ *   }
+ * });
+ *
+ * // Handle keyboard input from user
+ * vim.keymap.set('t', '<C-c>', () => fzf.kill('SIGINT'));
+ * ```
+ */
+export interface PtyProcess {
+  /**
+   * Process ID (PID) of the spawned subprocess.
+   *
+   * @example
+   * ```typescript
+   * const shell = process.spawnPty('/bin/zsh');
+   * console.log(`Shell PID: ${shell.pid}`);
+   * ```
+   */
+  readonly pid: number;
+
+  /**
+   * Write data to the PTY (send input to the process).
+   *
+   * This is the equivalent of typing on a keyboard in a terminal.
+   * The data is sent directly to the process's stdin through the PTY.
+   *
+   * @param data - String data to write (can include escape sequences)
+   * @returns `true` if write succeeded, `false` otherwise
+   *
+   * @example
+   * ```typescript
+   * const shell = process.spawnPty('/bin/bash');
+   *
+   * // Send commands
+   * shell.write('ls -la\n');
+   * shell.write('cd /tmp\n');
+   *
+   * // Send Ctrl+C (SIGINT)
+   * shell.write('\x03');
+   *
+   * // Send Ctrl+D (EOF)
+   * shell.write('\x04');
+   *
+   * // Send escape sequence
+   * shell.write('\x1b[A');  // Up arrow
+   * ```
+   */
+  write(data: string): boolean;
+
+  /**
+   * Resize the PTY terminal dimensions.
+   *
+   * This sends a SIGWINCH signal to the process, notifying it that the
+   * terminal size has changed. Programs like vim, htop, and shells will
+   * redraw themselves to fit the new size.
+   *
+   * @param rows - New number of rows (height)
+   * @param cols - New number of columns (width)
+   *
+   * @example
+   * ```typescript
+   * const shell = process.spawnPty('/bin/zsh', [], { rows: 24, cols: 80 });
+   *
+   * // User resizes the window
+   * vim.autocmd.create('VimResized', () => {
+   *   const newRows = vim.api.getOption('lines');
+   *   const newCols = vim.api.getOption('columns');
+   *   shell.resize(newRows - 2, newCols);  // Leave room for statusline
+   * });
+   * ```
+   */
+  resize(rows: number, cols: number): void;
+
+  /**
+   * Send a signal to the subprocess.
+   *
+   * @param signal - Signal to send (default: SIGTERM)
+   * @returns `true` if signal was sent, `false` if process already exited
+   *
+   * @example
+   * ```typescript
+   * // Graceful termination
+   * pty.kill('SIGTERM');
+   *
+   * // Force kill
+   * pty.kill('SIGKILL');
+   *
+   * // Interrupt (like Ctrl+C, but bypassing PTY)
+   * pty.kill('SIGINT');
+   * ```
+   */
+  kill(signal?: number | string): boolean;
+
+  /**
+   * Register a callback for PTY data (combined stdout/stderr).
+   *
+   * In PTY mode, stdout and stderr are merged into a single stream,
+   * just like in a real terminal. The callback receives all output
+   * including ANSI escape sequences for colors, cursor movement, etc.
+   *
+   * @param callback - Function called when data is received
+   *
+   * @example
+   * ```typescript
+   * const htop = process.spawnPty('htop');
+   *
+   * htop.onData((data) => {
+   *   // data includes ANSI sequences for colors, cursor positioning, etc.
+   *   // Render to a terminal emulator widget or floating window
+   *   terminalWidget.write(data);
+   * });
+   * ```
+   */
+  onData(callback: (data: string) => void): void;
+
+  /**
+   * Register a callback for process exit.
+   *
+   * @param callback - Function called when process exits
+   *   - `code`: Exit code (0 = success, 124 = timeout, other = error)
+   *   - `signal`: Signal name if killed by signal (e.g., 'SIGTERM'), null otherwise
+   *
+   * @example
+   * ```typescript
+   * const fzf = process.spawnPty('fzf');
+   *
+   * fzf.onExit((code, signal) => {
+   *   if (code === 0) {
+   *     // User selected something
+   *   } else if (code === 130) {
+   *     // User pressed Ctrl+C (128 + SIGINT=2)
+   *   } else if (signal === 'SIGKILL') {
+   *     // Process was force-killed
+   *   }
+   * });
+   * ```
+   */
+  onExit(callback: (code: number, signal: string | null) => void): void;
 }
 
 /**
@@ -2488,21 +2802,21 @@ export interface Process {
   platform: 'darwin' | 'linux' | 'windows';
 
   /**
-   * Spawn a subprocess and wait for it to complete (synchronous collection)
+   * Execute a subprocess and wait for it to complete (Promise-based)
    *
    * @example
    * ```typescript
    * // Basic usage
-   * const result = await process.spawn('ls', ['-la']);
+   * const result = await process.exec('ls', ['-la']);
    * console.log(result.stdout);
    *
    * // With custom environment
-   * const result = await process.spawn('env', [], {
+   * const result = await process.exec('env', [], {
    *   env: { MY_VAR: 'hello' }
    * });
    *
    * // With isolated environment (no inherited variables)
-   * const result = await process.spawn('env', [], {
+   * const result = await process.exec('env', [], {
    *   env: { PATH: '/usr/bin', MY_VAR: 'hello' },
    *   clearEnv: true
    * });
@@ -2510,10 +2824,10 @@ export interface Process {
    *
    * @param command - Command to execute
    * @param args - Arguments to pass to the command
-   * @param options - Spawn options (cwd, env, clearEnv)
+   * @param options - Exec options (cwd, env, clearEnv)
    * @returns Promise resolving to stdout, stderr, and exit code
    */
-  spawn(command: string, args?: string[], options?: SpawnOptions): Promise<{
+  exec(command: string, args?: string[], options?: ExecOptions): Promise<{
     stdout: string;
     stderr: string;
     code: number;
@@ -2525,7 +2839,7 @@ export interface Process {
    *
    * @example
    * ```typescript
-   * const lsp = vim.process.spawnAsync('typescript-language-server', ['--stdio']);
+   * const lsp = process.spawn('typescript-language-server', ['--stdio']);
    *
    * lsp.onStdout((data) => {
    *   console.log('LSP response:', data);
@@ -2549,10 +2863,69 @@ export interface Process {
    *
    * @param command - Command to execute
    * @param args - Arguments to pass to the command
-   * @param options - Spawn options (cwd, env, clearEnv)
+   * @param options - Spawn options (cwd, env, timeout, detach, etc.)
    * @returns ChildProcess handle with stdin, kill, and event callbacks
    */
-  spawnAsync(command: string, args?: string[], options?: SpawnAsyncOptions): ChildProcess;
+  spawn(command: string, args?: string[], options?: SpawnOptions): ChildProcess;
+
+  /**
+   * Spawn a process in PTY (pseudo-terminal) mode for interactive programs
+   *
+   * PTY mode is required for programs that need a real terminal, such as:
+   * - Interactive pickers: `fzf`, `sk`, `peco`
+   * - TUI applications: `htop`, `vim`, `less`, `man`
+   * - Shell sessions: `/bin/bash`, `/bin/zsh`
+   * - Any program that checks `isatty()` or needs terminal capabilities
+   *
+   * **Key Differences from `spawn()`**:
+   * - Single bidirectional stream (use `onData` instead of `onStdout`/`onStderr`)
+   * - Supports terminal resize via `resize(rows, cols)`
+   * - Process sees a real TTY (enables colors, interactive features)
+   *
+   * @example
+   * ```typescript
+   * // Interactive file picker with fzf
+   * const fzf = process.spawnPty('fzf', ['--preview', 'cat {}'], {
+   *   rows: 20,
+   *   cols: 80
+   * });
+   *
+   * let result = '';
+   * fzf.onData((data) => {
+   *   result += data;
+   *   renderToFloatingWindow(data);
+   * });
+   *
+   * fzf.onExit((code) => {
+   *   if (code === 0) {
+   *     vim.cmd.edit(result.trim());
+   *   }
+   * });
+   *
+   * // Forward keyboard input
+   * vim.keymap.set('t', '<CR>', () => fzf.write('\r'));
+   * vim.keymap.set('t', '<C-c>', () => fzf.kill('SIGINT'));
+   *
+   * // Shell session
+   * const shell = process.spawnPty('/bin/zsh', [], {
+   *   rows: 24,
+   *   cols: 80,
+   *   env: { TERM: 'xterm-256color' }
+   * });
+   *
+   * shell.write('ls -la\n');
+   * shell.resize(40, 120);  // Handle terminal resize
+   * ```
+   *
+   * @param command - Command to execute
+   * @param args - Arguments to pass to the command
+   * @param options - PTY spawn options (rows, cols, term, etc.)
+   * @returns PtyProcess handle with write, resize, kill, and event callbacks
+   *
+   * @since Phase 5a
+   * @see Neovim's `jobstart()` with `{ pty: true }`
+   */
+  spawnPty(command: string, args?: string[], options?: SpawnPtyOptions): PtyProcess;
 }
 
 // ============================================================================
