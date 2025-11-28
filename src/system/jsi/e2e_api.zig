@@ -21,6 +21,7 @@ const ModeManager = @import("../../editor/mode/mode.zig").ModeManager;
 const VisualState = @import("../../editor/visual/visual.zig").VisualState;
 const RegisterManager = @import("../../editor/register/register.zig").RegisterManager;
 const Display = @import("../../backends/terminal/display/display.zig").Display;
+const animation_api = @import("animation_api.zig");
 
 /// E2E Context - holds references to editor state
 pub const E2EContext = struct {
@@ -499,6 +500,10 @@ fn waitCmd(
 
         // Process fetch callbacks (async HTTP responses)
         fetch_api.processQueue(ctx.allocator);
+
+        // Process animation frames (requestAnimationFrame callbacks)
+        // This is critical for testing animation plugins like smear cursor
+        _ = animation_api.processFrames(ctx.allocator);
 
         // Small sleep to prevent CPU spin
         std.Thread.sleep(1_000_000); // 1ms
@@ -1227,6 +1232,11 @@ fn ptyRender(
     // Get default listchars
     var listchars = ListChars{};
 
+    // Process pending requestAnimationFrame callbacks (for smear cursor animation, etc.)
+    // This is critical for testing plugins that use animation - without this,
+    // the animation callbacks never execute during E2E tests
+    _ = animation_api.processFrames(ctx.allocator);
+
     // Trigger a render cycle
     // When capture mode is active (for PTY testing), always use full render
     // to generate ANSI escape codes. Otherwise, use headless for clean output.
@@ -1257,6 +1267,15 @@ fn ptyRender(
             c.hermes_throw_error(runtime, msg.ptr);
             return null;
         };
+
+        // CRITICAL FIX: Match backend.render() behavior after display.render()
+        // backend.render() calls showCursor() to re-show cursor after rendering cells.
+        // Without this, cursor is hidden by display.render() but never shown again!
+        // This was causing the E2E tests to see 0 showCursor codes.
+        display.showCursor() catch {};
+        display.endSynchronizedUpdate() catch {};
+        // NOTE: Don't call flush() in E2E tests - stdout may not be a real terminal
+        // and fsync() returns ENOTSUP (errno 45) on non-fsync-able file descriptors
     } else {
         // Headless render: Update compositor state WITHOUT writing to stdout
         // This keeps stdout clean for JSON test results
@@ -2056,6 +2075,7 @@ pub export fn vimE2EHostObjectGet(
         .{ "keys", keysCmd },
         .{ "tick", tickCmd },
         .{ "wait", waitCmd },
+        .{ "sleep", waitCmd }, // Alias for wait
         // Test structure
         .{ "describe", describeCmd },
         .{ "test", testCmd },

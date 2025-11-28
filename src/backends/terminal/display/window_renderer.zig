@@ -111,6 +111,9 @@ pub fn renderWindow(
         try renderWindowYankLayer(display, ctx, gutter_width);
     }
 
+    // Render extmark virtual text (Neovim-style virt_text)
+    try renderWindowVirtualText(display, ctx, gutter_width);
+
     // Mark window as rendered
     window.needs_redraw = false;
 }
@@ -635,6 +638,142 @@ fn renderWindowYankLayer(
     }
 
     display.yank_layer.markDirty();
+}
+
+/// Render extmark virtual text to virtual_text_layer
+/// Supports virt_text_pos: eol (end of line), overlay (at position), rightAlign, inline
+/// This is the Neovim-compatible extmarks API for displaying diagnostic messages, hints, etc.
+fn renderWindowVirtualText(
+    display: *Display,
+    ctx: *const WindowRenderContext,
+    gutter_width: usize,
+) !void {
+    const buffer = ctx.buffer;
+    const window = ctx.window;
+    const region = ctx.region;
+    const buf_handle = ctx.buffer_handle;
+
+    // Get extmarks for this buffer
+    const buf_exts = namespace_api.getBufferExtmarks(buf_handle) orelse return;
+    const extmarks = buf_exts.getAll();
+
+    // Process each extmark with virt_text
+    for (extmarks) |ext| {
+        const virt_text = ext.virt_text orelse continue;
+        if (virt_text.len == 0) continue;
+
+        // Check if extmark line is visible in viewport
+        if (ext.line < window.viewport.top_line or
+            ext.line >= window.viewport.top_line + region.height)
+        {
+            continue;
+        }
+
+        const screen_row = region.row + (ext.line - window.viewport.top_line);
+
+        // Skip if outside layer bounds
+        if (screen_row >= display.virtual_text_layer.grid.height) continue;
+
+        // Calculate starting screen column based on virt_text_pos
+        var screen_col: usize = switch (ext.virt_text_pos) {
+            .eol => blk: {
+                // End of line: after all text content
+                if (ext.line < buffer.lineCount()) {
+                    const line = buffer.getLine(ext.line) orelse break :blk region.col + gutter_width;
+                    defer buffer.allocator.free(line);
+
+                    const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
+                        line[0 .. line.len - 1]
+                    else
+                        line;
+
+                    // Calculate display width of line (accounting for wide chars)
+                    const line_display_width = char_width.stringWidth(line_without_newline);
+
+                    // Apply horizontal scroll offset
+                    const visible_width = if (line_display_width > window.viewport.left_col)
+                        line_display_width - window.viewport.left_col
+                    else
+                        0;
+
+                    // Position after line content + 1 space separator
+                    break :blk region.col + gutter_width + visible_width + 1;
+                }
+                break :blk region.col + gutter_width;
+            },
+            .overlay => blk: {
+                // Overlay: at extmark column position
+                break :blk region.col + gutter_width + (ext.col -| window.viewport.left_col);
+            },
+            .rightAlign => blk: {
+                // Right align: calculate total virt_text width and align to right edge
+                var total_width: usize = 0;
+                for (virt_text) |chunk| {
+                    total_width += char_width.stringWidth(chunk.text);
+                }
+                const right_edge = region.col + region.width;
+                break :blk if (right_edge > total_width) right_edge - total_width else region.col + gutter_width;
+            },
+            .@"inline" => blk: {
+                // Inline: at extmark column position (same as overlay for now)
+                // Full inline support would require shifting text, which is complex
+                break :blk region.col + gutter_width + (ext.col -| window.viewport.left_col);
+            },
+        };
+
+        // Render each chunk of virtual text
+        for (virt_text) |chunk| {
+            // Get highlight colors for this chunk
+            var fg_color: ?highlights.Color = null;
+            var bg_color: ?highlights.Color = null;
+
+            if (chunk.hl_group) |hl_group| {
+                const style = ctx.registry.get(hl_group);
+                if (style.fg) |c| fg_color = convertColor(c);
+                if (style.bg) |c| bg_color = convertColor(c);
+            }
+
+            // Render each character in the chunk
+            var byte_idx: usize = 0;
+            while (byte_idx < chunk.text.len and screen_col < region.col + region.width) {
+                const char_len = std.unicode.utf8ByteSequenceLength(chunk.text[byte_idx]) catch 1;
+                if (byte_idx + char_len > chunk.text.len) break;
+
+                const codepoint = std.unicode.utf8Decode(chunk.text[byte_idx..][0..char_len]) catch ' ';
+                const display_width = char_width.codepointWidth(codepoint);
+
+                // Skip zero-width characters
+                if (display_width == 0) {
+                    byte_idx += char_len;
+                    continue;
+                }
+
+                // Set cell in virtual text layer
+                if (screen_col >= region.col and screen_col < region.col + region.width) {
+                    display.virtual_text_layer.grid.setCell(screen_row, screen_col, .{
+                        .char = codepoint,
+                        .fg = fg_color,
+                        .bg = bg_color,
+                    });
+
+                    // Handle wide characters
+                    if (display_width == 2 and screen_col + 1 < region.col + region.width) {
+                        display.virtual_text_layer.grid.setCell(screen_row, screen_col + 1, .{
+                            .char = ' ',
+                            .fg = fg_color,
+                            .bg = bg_color,
+                            .is_continuation = true,
+                        });
+                    }
+                }
+
+                screen_col += display_width;
+                byte_idx += char_len;
+            }
+        }
+    }
+
+    display.virtual_text_layer.markDirty();
 }
 
 /// Render window statusline

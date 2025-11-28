@@ -570,6 +570,13 @@ pub fn getBufferHighlights(buf_handle: i64) ?*const BufferHighlights {
     return ctx.buffer_highlights.get(buf_handle);
 }
 
+/// Get buffer extmarks for rendering (called by display)
+/// Returns all extmarks for the given buffer
+pub fn getBufferExtmarks(buf_handle: i64) ?*const BufferExtmarks {
+    const ctx = global_ctx orelse return null;
+    return ctx.buffer_extmarks.get(buf_handle);
+}
+
 /// Get the global namespace context (for compositor integration)
 pub fn getContext() ?*NamespaceContext {
     return global_ctx;
@@ -607,6 +614,15 @@ pub const VirtTextPos = enum {
     @"inline",
 };
 
+/// A single virtual text chunk [text, hlGroup] - Neovim format
+/// Used in nvim_buf_set_extmark's virt_text option
+pub const VirtTextChunk = struct {
+    /// The text to display
+    text: []const u8,
+    /// Highlight group name (e.g., "Error", "Comment"), optional
+    hl_group: ?[]const u8 = null,
+};
+
 /// A single extmark with position and metadata
 pub const Extmark = struct {
     id: u32,
@@ -618,6 +634,9 @@ pub const Extmark = struct {
     hl_group: ?[]const u8 = null,
     priority: u32 = 0,
     virt_text_pos: VirtTextPos = .eol,
+    /// Virtual text chunks [[text, hlGroup], ...] - Neovim format
+    /// When set, this extmark displays virtual text at virt_text_pos
+    virt_text: ?[]VirtTextChunk = null,
 };
 
 /// Buffer extmark storage
@@ -637,8 +656,27 @@ pub const BufferExtmarks = struct {
     pub fn deinit(self: *BufferExtmarks) void {
         for (self.extmarks.items) |ext| {
             if (ext.hl_group) |hg| self.allocator.free(hg);
+            // Free virt_text chunks
+            if (ext.virt_text) |chunks| {
+                for (chunks) |chunk| {
+                    self.allocator.free(chunk.text);
+                    if (chunk.hl_group) |hg| self.allocator.free(hg);
+                }
+                self.allocator.free(chunks);
+            }
         }
         self.extmarks.deinit(self.allocator);
+    }
+
+    /// Helper to free virt_text chunks
+    fn freeVirtText(self: *BufferExtmarks, virt_text: ?[]VirtTextChunk) void {
+        if (virt_text) |chunks| {
+            for (chunks) |chunk| {
+                self.allocator.free(chunk.text);
+                if (chunk.hl_group) |hg| self.allocator.free(hg);
+            }
+            self.allocator.free(chunks);
+        }
     }
 
     /// Set or update an extmark
@@ -652,6 +690,8 @@ pub const BufferExtmarks = struct {
         end_col: ?usize,
         hl_group: ?[]const u8,
         priority: u32,
+        virt_text: ?[]const VirtTextChunk,
+        virt_text_pos: VirtTextPos,
     ) !u32 {
         const id = custom_id orelse blk: {
             const new_id = self.next_id;
@@ -660,10 +700,12 @@ pub const BufferExtmarks = struct {
         };
 
         // Check if updating existing extmark
-        for (self.extmarks.items, 0..) |*ext, i| {
+        for (self.extmarks.items) |*ext| {
             if (ext.id == id and ext.ns_id == ns_id) {
                 // Free old hl_group if exists
                 if (ext.hl_group) |hg| self.allocator.free(hg);
+                // Free old virt_text if exists
+                self.freeVirtText(ext.virt_text);
 
                 // Update in place
                 ext.line = line;
@@ -672,10 +714,11 @@ pub const BufferExtmarks = struct {
                 ext.end_col = end_col;
                 ext.hl_group = if (hl_group) |hg| try self.allocator.dupe(u8, hg) else null;
                 ext.priority = priority;
+                ext.virt_text = try self.dupeVirtText(virt_text);
+                ext.virt_text_pos = virt_text_pos;
 
                 // Re-sort
                 self.sort();
-                _ = i;
                 return id;
             }
         }
@@ -683,6 +726,9 @@ pub const BufferExtmarks = struct {
         // Create new extmark
         const hl_group_copy = if (hl_group) |hg| try self.allocator.dupe(u8, hg) else null;
         errdefer if (hl_group_copy) |hg| self.allocator.free(hg);
+
+        const virt_text_copy = try self.dupeVirtText(virt_text);
+        errdefer self.freeVirtText(virt_text_copy);
 
         try self.extmarks.append(self.allocator, .{
             .id = id,
@@ -693,6 +739,8 @@ pub const BufferExtmarks = struct {
             .end_col = end_col,
             .hl_group = hl_group_copy,
             .priority = priority,
+            .virt_text = virt_text_copy,
+            .virt_text_pos = virt_text_pos,
         });
 
         // Update next_id if custom_id was used
@@ -706,16 +754,49 @@ pub const BufferExtmarks = struct {
         return id;
     }
 
+    /// Helper to duplicate virt_text chunks
+    fn dupeVirtText(self: *BufferExtmarks, virt_text: ?[]const VirtTextChunk) !?[]VirtTextChunk {
+        const chunks = virt_text orelse return null;
+        if (chunks.len == 0) return null;
+
+        const result = try self.allocator.alloc(VirtTextChunk, chunks.len);
+        errdefer self.allocator.free(result);
+
+        var i: usize = 0;
+        errdefer {
+            // Free partially allocated chunks on error
+            for (result[0..i]) |chunk| {
+                self.allocator.free(chunk.text);
+                if (chunk.hl_group) |hg| self.allocator.free(hg);
+            }
+        }
+
+        while (i < chunks.len) : (i += 1) {
+            result[i] = .{
+                .text = try self.allocator.dupe(u8, chunks[i].text),
+                .hl_group = if (chunks[i].hl_group) |hg| try self.allocator.dupe(u8, hg) else null,
+            };
+        }
+
+        return result;
+    }
+
     /// Delete extmark by ID
     pub fn delete(self: *BufferExtmarks, ns_id: NamespaceId, id: u32) bool {
         for (self.extmarks.items, 0..) |ext, i| {
             if (ext.id == id and ext.ns_id == ns_id) {
                 if (ext.hl_group) |hg| self.allocator.free(hg);
+                self.freeVirtText(ext.virt_text);
                 _ = self.extmarks.orderedRemove(i);
                 return true;
             }
         }
         return false;
+    }
+
+    /// Get all extmarks (for rendering)
+    pub fn getAll(self: *const BufferExtmarks) []const Extmark {
+        return self.extmarks.items;
     }
 
     /// Get extmark by ID
@@ -837,12 +918,98 @@ pub export fn apiBufSetExtmark(
         }
     }
 
+    // Parse virtText option: [[text, hlGroup], [text, hlGroup], ...]
+    // Uses stack buffer for small arrays, allocates for larger
+    var virt_text_buf: [32]VirtTextChunk = undefined;
+    var virt_text_slice: ?[]const VirtTextChunk = null;
+    var virt_text_allocated: ?[]VirtTextChunk = null;
+
+    if (c.hermes_value_get_property(rt, opts_val, "virtText")) |vt_val| {
+        if (c.hermes_value_is_array(rt, vt_val)) {
+            const vt_len = c.hermes_array_length(rt, vt_val);
+            if (vt_len > 0) {
+                // Use stack buffer if small enough, otherwise allocate
+                var chunks: []VirtTextChunk = undefined;
+                if (vt_len <= virt_text_buf.len) {
+                    chunks = virt_text_buf[0..vt_len];
+                } else {
+                    chunks = ctx.allocator.alloc(VirtTextChunk, vt_len) catch {
+                        return c.hermes_value_create_number(rt, 0);
+                    };
+                    virt_text_allocated = chunks;
+                }
+
+                var valid_count: usize = 0;
+                for (0..vt_len) |i| {
+                    const chunk_val = c.hermes_array_get(rt, vt_val, i) orelse continue;
+                    if (!c.hermes_value_is_array(rt, chunk_val)) continue;
+
+                    const chunk_len = c.hermes_array_length(rt, chunk_val);
+                    if (chunk_len < 1) continue;
+
+                    // Get text (required)
+                    const text_val = c.hermes_array_get(rt, chunk_val, 0) orelse continue;
+                    if (!c.hermes_value_is_string(text_val)) continue;
+
+                    var text_len: usize = 0;
+                    const text_ptr = c.hermes_value_get_string(rt, text_val, &text_len);
+                    if (text_ptr == null) continue;
+
+                    // Get hlGroup (optional, second element)
+                    var chunk_hl_group: ?[]const u8 = null;
+                    if (chunk_len >= 2) {
+                        const hl_val = c.hermes_array_get(rt, chunk_val, 1) orelse null;
+                        if (hl_val != null and c.hermes_value_is_string(hl_val)) {
+                            var hl_len: usize = 0;
+                            const hl_ptr = c.hermes_value_get_string(rt, hl_val, &hl_len);
+                            if (hl_ptr != null and hl_len > 0) {
+                                chunk_hl_group = hl_ptr[0..hl_len];
+                            }
+                        }
+                    }
+
+                    chunks[valid_count] = .{
+                        .text = text_ptr[0..text_len],
+                        .hl_group = chunk_hl_group,
+                    };
+                    valid_count += 1;
+                }
+
+                if (valid_count > 0) {
+                    virt_text_slice = chunks[0..valid_count];
+                }
+            }
+        }
+    }
+    defer if (virt_text_allocated) |alloc| ctx.allocator.free(alloc);
+
+    // Parse virtTextPos option: "eol" | "overlay" | "rightAlign" | "inline"
+    var virt_text_pos: VirtTextPos = .eol;
+    if (c.hermes_value_get_property(rt, opts_val, "virtTextPos")) |vtp_val| {
+        if (c.hermes_value_is_string(vtp_val)) {
+            var vtp_len: usize = 0;
+            const vtp_ptr = c.hermes_value_get_string(rt, vtp_val, &vtp_len);
+            if (vtp_ptr != null and vtp_len > 0) {
+                const vtp_str = vtp_ptr[0..vtp_len];
+                if (std.mem.eql(u8, vtp_str, "eol")) {
+                    virt_text_pos = .eol;
+                } else if (std.mem.eql(u8, vtp_str, "overlay")) {
+                    virt_text_pos = .overlay;
+                } else if (std.mem.eql(u8, vtp_str, "rightAlign") or std.mem.eql(u8, vtp_str, "right_align")) {
+                    virt_text_pos = .rightAlign;
+                } else if (std.mem.eql(u8, vtp_str, "inline")) {
+                    virt_text_pos = .@"inline";
+                }
+            }
+        }
+    }
+
     // Get or create buffer extmarks
     const buf_exts = ctx.getOrCreateBufferExtmarks(buf_handle) catch {
         return c.hermes_value_create_number(rt, 0);
     };
 
-    const id = buf_exts.set(ns_id, line, col, custom_id, end_line, end_col, hl_group, priority) catch {
+    const id = buf_exts.set(ns_id, line, col, custom_id, end_line, end_col, hl_group, priority, virt_text_slice, virt_text_pos) catch {
         return c.hermes_value_create_number(rt, 0);
     };
 

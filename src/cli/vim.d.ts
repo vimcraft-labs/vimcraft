@@ -1816,6 +1816,26 @@ export interface VimFunctions {
   /** Expand wildcards and special keywords */
   expand(expr: string): string;
 
+  /**
+   * Get current working directory
+   * @returns The current working directory path
+   * @example
+   * const cwd = vim.fn.getCwd();
+   * console.log('Working in:', cwd);
+   */
+  getCwd(): string;
+
+  /**
+   * Check if command exists in PATH
+   * @param cmd - Command name to check
+   * @returns 1 if executable exists, 0 otherwise
+   * @example
+   * if (vim.fn.executable('node')) {
+   *   console.log('Node.js is installed');
+   * }
+   */
+  executable(cmd: string): number;
+
   /** Get character at cursor */
   getchar(): number;
 
@@ -3151,11 +3171,11 @@ export interface Process {
  * const client = await vim.lsp.start({
  *   name: 'typescript-language-server',
  *   cmd: ['typescript-language-server', '--stdio'],
- *   root_dir: '/path/to/project',
+ *   rootDir: '/path/to/project',
  *   capabilities: {
  *     textDocument: { completion: { snippetSupport: true } }
  *   },
- *   on_attach: (client, bufnr) => {
+ *   onAttach: (client, bufnr) => {
  *     console.log('LSP attached to buffer', bufnr);
  *   },
  * });
@@ -3169,7 +3189,7 @@ export interface LspClientOptions {
   cmd: string[];
 
   /** Project root directory (sent as rootUri to server) */
-  root_dir?: string;
+  rootDir?: string;
 
   /** Client capabilities to advertise to server */
   capabilities?: Record<string, any>;
@@ -3178,14 +3198,14 @@ export interface LspClientOptions {
   settings?: Record<string, any>;
 
   /** Callback when client attaches to a buffer */
-  on_attach?: (client: LspClient, bufnr: number) => void;
+  onAttach?: (client: LspClient, bufnr: number) => void;
 
   /** Callback when server exits */
-  on_exit?: (code: number, signal: string | null) => void;
+  onExit?: (code: number, signal: string | null) => void;
 }
 
 /**
- * Filter options for vim.lsp.get_clients().
+ * Filter options for vim.lsp.getClients().
  */
 export interface LspClientFilter {
   /** Filter by attached buffer number */
@@ -3206,7 +3226,7 @@ export interface LspClientFilter {
  * const client = await vim.lsp.start({
  *   name: 'tsserver',
  *   cmd: ['typescript-language-server', '--stdio'],
- *   root_dir: process.cwd(),
+ *   rootDir: process.cwd(),
  * });
  *
  * // Handle diagnostics
@@ -3240,10 +3260,10 @@ export interface LspClient {
   readonly initialized: boolean;
 
   /** Server capabilities received from initialize response */
-  readonly server_capabilities: Record<string, any>;
+  readonly serverCapabilities: Record<string, any>;
 
   /** List of attached buffer numbers */
-  readonly attached_buffers: number[];
+  readonly attachedBuffers: number[];
 
   /**
    * Send a request to the LSP server and wait for response.
@@ -3396,8 +3416,8 @@ export interface LspFramer {
  * const client = await vim.lsp.start({
  *   name: 'tsserver',
  *   cmd: ['typescript-language-server', '--stdio'],
- *   root_dir: '/path/to/project',
- *   on_attach: (client, bufnr) => {
+ *   rootDir: '/path/to/project',
+ *   onAttach: (client, bufnr) => {
  *     // Setup keymaps when LSP attaches
  *     vim.keymap.set('n', 'K', async () => {
  *       const hover = await vim.lsp.buf_hover(bufnr, uri, line, col);
@@ -3407,13 +3427,13 @@ export interface LspFramer {
  * });
  *
  * // Get all active clients
- * const clients = vim.lsp.get_clients();
+ * const clients = vim.lsp.getClients();
  *
  * // Get clients for a specific buffer
- * const bufferClients = vim.lsp.get_clients({ bufnr: 0 });
+ * const bufferClients = vim.lsp.getClients({ bufnr: 0 });
  *
  * // Stop a client
- * vim.lsp.stop_client(client);
+ * vim.lsp.stopClient(client);
  * ```
  */
 export interface LSP {
@@ -3432,7 +3452,7 @@ export interface LSP {
    * const client = await vim.lsp.start({
    *   name: 'rust-analyzer',
    *   cmd: ['rust-analyzer'],
-   *   root_dir: process.cwd(),
+   *   rootDir: process.cwd(),
    * });
    * ```
    */
@@ -3447,30 +3467,30 @@ export interface LSP {
    * @example
    * ```typescript
    * // All clients
-   * const all = vim.lsp.get_clients();
+   * const all = vim.lsp.getClients();
    *
    * // Clients attached to buffer 0
-   * const forBuf = vim.lsp.get_clients({ bufnr: 0 });
+   * const forBuf = vim.lsp.getClients({ bufnr: 0 });
    *
    * // Clients by name
-   * const rust = vim.lsp.get_clients({ name: 'rust-analyzer' });
+   * const rust = vim.lsp.getClients({ name: 'rust-analyzer' });
    * ```
    */
-  get_clients(filter?: LspClientFilter): LspClient[];
+  getClients(filter?: LspClientFilter): LspClient[];
 
   /**
    * Stop an LSP client.
    *
-   * @param client_or_id - Client instance or client ID
+   * @param clientOrId - Client instance or client ID
    * @param force - If true, send SIGKILL instead of graceful shutdown
    *
    * @example
    * ```typescript
-   * vim.lsp.stop_client(client);
-   * vim.lsp.stop_client(1, true);  // Force kill client ID 1
+   * vim.lsp.stopClient(client);
+   * vim.lsp.stopClient(1, true);  // Force kill client ID 1
    * ```
    */
-  stop_client(client_or_id: LspClient | number, force?: boolean): void;
+  stopClient(clientOrId: LspClient | number, force?: boolean): void;
 
   /**
    * Get client by ID.
@@ -3478,7 +3498,7 @@ export interface LSP {
    * @param id - Client ID
    * @returns Client or undefined if not found
    */
-  get_client_by_id(id: number): LspClient | undefined;
+  getClientById(id: number): LspClient | undefined;
 
   // ========== Buffer-level helpers ==========
 
@@ -5265,7 +5285,7 @@ export interface Vim {
    * const client = await vim.lsp.start({
    *   name: 'tsserver',
    *   cmd: ['typescript-language-server', '--stdio'],
-   *   root_dir: '/path/to/project',
+   *   rootDir: '/path/to/project',
    * });
    *
    * client.on('textDocument/publishDiagnostics', (params) => {

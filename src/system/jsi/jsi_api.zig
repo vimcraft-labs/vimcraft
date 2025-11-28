@@ -176,6 +176,12 @@ pub fn initJSI(
     // Register layer API (createLayer, renderVirtualText, setLayerOpacity, etc.)
     // Pass js_state_dirty_ptr so layer changes trigger full render (not cursor-only optimization)
     layer_api.register(runtime, display, js_state_dirty_ptr);
+    layer_api.registerLegacy(runtime, display); // Register global functions for smear plugin backwards compat
+
+    // Register cursor API legacy functions (getCursorPosition as global) for smear plugin backwards compat
+    if (T == *Editor) {
+        cursor_api.registerLegacy(runtime, editor_or_context);
+    }
 
     // Register motion API (vim.motion.* functions)
     // Register for both Editor and EditorContext

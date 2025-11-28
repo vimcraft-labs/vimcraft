@@ -669,10 +669,9 @@ pub const Display = struct {
             self.flush() catch {};
         }
 
-        // CRITICAL FIX: Hide cursor during rendering to prevent flickering
-        // Without this, user sees cursor at "last cell" position before final cursor positioning
-        // This happens because output_renderer.renderUpdates() moves cursor to each cell as it renders
-        try self.hideCursor();
+        // NOTE: Cursor hiding is deferred until after we know if there are updates.
+        // This prevents flickering during animation frames where cursor hasn't moved.
+        // See CURSOR FLICKER FIX comment below.
 
         // O4: Apply terminal scroll optimization if viewport changed
         // This uses native terminal scroll commands (CSI S/T) which is 10-100x faster
@@ -704,7 +703,20 @@ pub const Display = struct {
         const updates = try output.diff(self.allocator);
         defer self.allocator.free(updates);
 
-        // STEP 4: Render only changed cells (cursor invisible, so no flickering)
+        // CURSOR FLICKER FIX: Only hide cursor when there are cells to render
+        // renderUpdates() moves cursor to each cell position as it renders, which would
+        // cause cursor to visibly jump around. But if updates.len == 0, there's no cell
+        // rendering, so cursor doesn't jump, and we don't need to hide/show at all.
+        //
+        // SIMPLIFIED LOGIC (PE1 Review): Always hide when updates.len > 0.
+        // The hideCursor() function has a boolean guard (last_cursor_visible) that prevents
+        // redundant hide codes. showCursor() in backend.render() also has a guard.
+        // This handles edge cases like viewport scroll where cursor screen position is unchanged.
+        if (updates.len > 0) {
+            try self.hideCursor();
+        }
+
+        // STEP 4: Render only changed cells
         try output_renderer.renderUpdates(self, updates);
 
         // STEP 4.5: Render status line on the last row (terminal_rows - 1)
@@ -920,7 +932,11 @@ pub const Display = struct {
         // renderUpdates() moves cursor to each cell position as it renders, which would
         // cause cursor to visibly jump around. But if updates.len == 0, there's no cell
         // rendering, so cursor doesn't jump, and we don't need to hide/show at all.
-        // This eliminates rapid hide/show codes during cursor-only movement (hjkl).
+        //
+        // SIMPLIFIED LOGIC (PE1 Review): Always hide when updates.len > 0.
+        // The hideCursor() function has a boolean guard (last_cursor_visible) that prevents
+        // redundant hide codes. showCursor() in backend.render() also has a guard.
+        // This handles edge cases like viewport scroll where cursor screen position is unchanged.
         if (updates.len > 0) {
             try self.hideCursor();
         }

@@ -926,6 +926,58 @@ const vimFn = {
     }
     return 0;
   },
+
+  // LSP prerequisites - needed for vim.lsp.start() to work
+  getCwd(): string {
+    if (typeof __process !== 'undefined' && typeof __process.cwd === 'function') {
+      return __process.cwd();
+    }
+    return '';
+  },
+
+  executable(cmd: string): number {
+    // Check if command exists in PATH
+    // On Unix-like systems, we can check common paths
+    if (typeof __fs === 'undefined') return 0;
+
+    const fs = __fs as { existsSync?: (path: string) => boolean };
+    if (typeof fs.existsSync !== 'function') return 0;
+
+    // If it's an absolute path, check directly
+    if (cmd.startsWith('/')) {
+      return fs.existsSync(cmd) ? 1 : 0;
+    }
+
+    // Check common binary directories
+    const paths = [
+      '/usr/local/bin',
+      '/usr/bin',
+      '/bin',
+      '/opt/homebrew/bin',  // macOS ARM homebrew
+      '/usr/local/sbin',
+      '/usr/sbin',
+      '/sbin',
+    ];
+
+    // Also check PATH environment variable if available
+    if (typeof __process !== 'undefined' && __process.env && __process.env.PATH) {
+      const envPaths = __process.env.PATH.split(':');
+      for (const p of envPaths) {
+        if (p && paths.indexOf(p) === -1) {
+          paths.push(p);
+        }
+      }
+    }
+
+    for (const dir of paths) {
+      const fullPath = dir + '/' + cmd;
+      if (fs.existsSync(fullPath)) {
+        return 1;
+      }
+    }
+
+    return 0;
+  },
 };
 
 Object.freeze(vimFn);
@@ -1777,11 +1829,11 @@ LspFramer.encode = function(message: object): string {
 interface LspClientOptions {
   name?: string;
   cmd: string[];
-  root_dir?: string;
+  rootDir?: string;
   capabilities?: object;
   settings?: object;
-  on_attach?: (client: LspClientInstance, bufnr: number) => void;
-  on_exit?: (code: number, signal: string) => void;
+  onAttach?: (client: LspClientInstance, bufnr: number) => void;
+  onExit?: (code: number, signal: string) => void;
 }
 
 interface PendingRequest {
@@ -1794,11 +1846,11 @@ interface PendingRequest {
 interface LspClientInstance {
   name: string;
   cmd: string[];
-  root_dir: string | null;
+  rootDir: string | null;
   capabilities: object;
   settings: object;
-  on_attach: ((client: LspClientInstance, bufnr: number) => void) | null;
-  on_exit_callback: ((code: number, signal: string) => void) | null;
+  onAttach: ((client: LspClientInstance, bufnr: number) => void) | null;
+  onExitCallback: ((code: number, signal: string) => void) | null;
   _id: number;
   _requestId: number;
   _pendingRequests: Record<number, PendingRequest>;
@@ -1807,11 +1859,11 @@ interface LspClientInstance {
   _process: any;
   _initialized: boolean;
   _serverCapabilities: object;
-  _attached_buffers: Record<number, boolean>;
+  _attachedBuffers: Record<number, boolean>;
   id: number;
-  server_capabilities: object;
+  serverCapabilities: object;
   initialized: boolean;
-  attached_buffers: number[];
+  attachedBuffers: number[];
   start(): Promise<LspClientInstance>;
   request(method: string, params?: object): Promise<any>;
   notify(method: string, params?: object): void;
@@ -1844,11 +1896,11 @@ interface LspClientConstructor {
 const LspClient = function(this: LspClientInstance, opts: LspClientOptions): void {
   this.name = opts.name || 'lsp';
   this.cmd = opts.cmd;
-  this.root_dir = opts.root_dir || null;
+  this.rootDir = opts.rootDir || null;
   this.capabilities = opts.capabilities || {};
   this.settings = opts.settings || {};
-  this.on_attach = opts.on_attach || null;
-  this.on_exit_callback = opts.on_exit || null;
+  this.onAttach = opts.onAttach || null;
+  this.onExitCallback = opts.onExit || null;
   this._id = LspClient._nextId++;
   this._requestId = 1;
   this._pendingRequests = {};
@@ -1857,7 +1909,7 @@ const LspClient = function(this: LspClientInstance, opts: LspClientOptions): voi
   this._process = null;
   this._initialized = false;
   this._serverCapabilities = {};
-  this._attached_buffers = {};
+  this._attachedBuffers = {};
 } as unknown as LspClientConstructor;
 
 // Static properties
@@ -1871,7 +1923,7 @@ Object.defineProperty(LspClient.prototype, 'id', {
   configurable: true
 });
 
-Object.defineProperty(LspClient.prototype, 'server_capabilities', {
+Object.defineProperty(LspClient.prototype, 'serverCapabilities', {
   get: function(this: LspClientInstance): object { return this._serverCapabilities; },
   enumerable: true,
   configurable: true
@@ -1883,9 +1935,9 @@ Object.defineProperty(LspClient.prototype, 'initialized', {
   configurable: true
 });
 
-Object.defineProperty(LspClient.prototype, 'attached_buffers', {
+Object.defineProperty(LspClient.prototype, 'attachedBuffers', {
   get: function(this: LspClientInstance): number[] {
-    return Object.keys(this._attached_buffers).map(k => parseInt(k, 10));
+    return Object.keys(this._attachedBuffers).map(k => parseInt(k, 10));
   },
   enumerable: true,
   configurable: true
@@ -1900,8 +1952,8 @@ LspClient.prototype.start = function(this: LspClientInstance): Promise<LspClient
   const cmd = this.cmd[0];
   const args = this.cmd.slice(1);
   const spawnOpts: any = {};
-  if (this.root_dir) {
-    spawnOpts.cwd = this.root_dir;
+  if (this.rootDir) {
+    spawnOpts.cwd = this.rootDir;
   }
 
   this._process = (globalThis as any).process.spawn(cmd, args, spawnOpts);
@@ -1913,8 +1965,8 @@ LspClient.prototype.start = function(this: LspClientInstance): Promise<LspClient
 
   return this.request('initialize', {
     processId: null,
-    rootUri: this.root_dir ? 'file://' + this.root_dir : null,
-    rootPath: this.root_dir || null,
+    rootUri: this.rootDir ? 'file://' + this.rootDir : null,
+    rootPath: this.rootDir || null,
     capabilities: this._buildCapabilities(),
     initializationOptions: this.settings,
     trace: 'off',
@@ -1977,11 +2029,11 @@ LspClient.prototype._handleExit = function(this: LspClientInstance, code: number
     LspClient._clients.splice(idx, 1);
   }
 
-  if (this.on_exit_callback) {
+  if (this.onExitCallback) {
     try {
-      this.on_exit_callback(code, signal);
+      this.onExitCallback(code, signal);
     } catch (e) {
-      consoleAPI.log('[LSP:' + this.name + '] on_exit callback error:', e);
+      consoleAPI.log('[LSP:' + this.name + '] onExit callback error:', e);
     }
   }
 };
@@ -2122,23 +2174,23 @@ LspClient.prototype.supports = function(this: LspClientInstance, capability: str
 };
 
 LspClient.prototype.attachBuffer = function(this: LspClientInstance, bufnr: number): void {
-  if (this._attached_buffers[bufnr]) return;
-  this._attached_buffers[bufnr] = true;
-  if (this.on_attach) {
+  if (this._attachedBuffers[bufnr]) return;
+  this._attachedBuffers[bufnr] = true;
+  if (this.onAttach) {
     try {
-      this.on_attach(this, bufnr);
+      this.onAttach(this, bufnr);
     } catch (e) {
-      consoleAPI.log('[LSP:' + this.name + '] on_attach error:', e);
+      consoleAPI.log('[LSP:' + this.name + '] onAttach error:', e);
     }
   }
 };
 
 LspClient.prototype.detachBuffer = function(this: LspClientInstance, bufnr: number): void {
-  delete this._attached_buffers[bufnr];
+  delete this._attachedBuffers[bufnr];
 };
 
 LspClient.prototype.hasBuffer = function(this: LspClientInstance, bufnr: number): boolean {
-  return !!this._attached_buffers[bufnr];
+  return !!this._attachedBuffers[bufnr];
 };
 
 // vim.lsp API
@@ -2160,7 +2212,7 @@ const vimLsp = {
     });
   },
 
-  get_clients(filter?: { bufnr?: number; name?: string }): LspClientInstance[] {
+  getClients(filter?: { bufnr?: number; name?: string }): LspClientInstance[] {
     let clients = LspClient._clients.slice();
 
     if (filter) {
@@ -2177,7 +2229,7 @@ const vimLsp = {
     return clients;
   },
 
-  stop_client(clientOrId: number | LspClientInstance, force?: boolean): void {
+  stopClient(clientOrId: number | LspClientInstance, force?: boolean): void {
     let client: LspClientInstance | undefined;
     if (typeof clientOrId === 'number') {
       for (const c of LspClient._clients) {
@@ -2199,7 +2251,7 @@ const vimLsp = {
     }
   },
 
-  get_client_by_id(id: number): LspClientInstance | undefined {
+  getClientById(id: number): LspClientInstance | undefined {
     for (const c of LspClient._clients) {
       if (c.id === id) return c;
     }
