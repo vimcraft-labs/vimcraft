@@ -1015,6 +1015,72 @@ vim.api = {
     return vimApiGetHighlight(ns_id, name);
   },
 
+  // === Namespace Functions ===
+
+  // vim.api.createNamespace(name) -> number
+  //   name: string - Namespace name (e.g., "my-plugin", "lsp-diagnostics")
+  //   returns: number (namespace ID, > 0)
+  //
+  // Creates or gets a namespace ID for grouping highlights, extmarks, and diagnostics.
+  // Namespaces allow plugins to manage decorations independently.
+  //
+  // Example:
+  //   const ns = vim.api.createNamespace('my-plugin');
+  //   vim.api.bufAddHighlight(0, ns, 'Error', 0, 0, 5);
+  //   vim.api.bufClearNamespace(0, ns, 0, -1);
+  createNamespace: function(name) {
+    if (typeof vimApiCreateNamespace !== 'undefined') {
+      return vimApiCreateNamespace(name);
+    }
+    throw new Error('createNamespace not available');
+  },
+
+  // vim.api.bufAddHighlight(buffer, ns_id, hl_group, line, col_start, col_end) -> number
+  //   buffer: number - Buffer handle (0 = current)
+  //   ns_id: number - Namespace ID from createNamespace() (0 = global)
+  //   hl_group: string - Highlight group name (e.g., "Error", "Comment")
+  //   line: number - Line number (0-indexed)
+  //   col_start: number - Start column (0-indexed, byte offset)
+  //   col_end: number - End column (0-indexed, exclusive, -1 = end of line)
+  //   returns: number (highlight ID)
+  //
+  // Adds a highlight to a buffer region. Used for:
+  // - LSP diagnostics (errors, warnings)
+  // - Search result highlighting
+  // - Custom plugin decorations
+  //
+  // Example:
+  //   const ns = vim.api.createNamespace('lsp');
+  //   vim.api.bufAddHighlight(0, ns, 'DiagnosticError', 5, 0, 10);
+  bufAddHighlight: function(buffer, ns_id, hl_group, line, col_start, col_end) {
+    if (typeof vimApiBufAddHighlight !== 'undefined') {
+      return vimApiBufAddHighlight(buffer, ns_id, hl_group, line, col_start, col_end);
+    }
+    throw new Error('bufAddHighlight not available');
+  },
+
+  // vim.api.bufClearNamespace(buffer, ns_id, line_start, line_end) -> void
+  //   buffer: number - Buffer handle (0 = current)
+  //   ns_id: number - Namespace ID to clear (0 = clear all namespaces)
+  //   line_start: number - Start line (0-indexed)
+  //   line_end: number - End line (exclusive, -1 = end of buffer)
+  //
+  // Clears highlights in a namespace within a line range.
+  // Used for clearing old decorations before adding new ones.
+  //
+  // Example:
+  //   // Clear all LSP diagnostics in buffer
+  //   vim.api.bufClearNamespace(0, lsp_ns, 0, -1);
+  //
+  //   // Clear highlights on specific lines
+  //   vim.api.bufClearNamespace(0, ns, 5, 10);
+  bufClearNamespace: function(buffer, ns_id, line_start, line_end) {
+    if (typeof vimApiBufClearNamespace !== 'undefined') {
+      return vimApiBufClearNamespace(buffer, ns_id, line_start, line_end);
+    }
+    throw new Error('bufClearNamespace not available');
+  },
+
   // vim.api.createAutocmd(event, opts)
   //   event: string | string[] - Event name(s) to trigger on
   //   opts: object - Configuration options
@@ -1264,6 +1330,11 @@ vim.api.nvim_get_hl = function(ns_id, opts) {
   }
   return vim.api.getHighlight(ns_id, opts);
 };
+
+// Namespace functions
+vim.api.nvim_create_namespace = vim.api.createNamespace;
+vim.api.nvim_buf_add_highlight = vim.api.bufAddHighlight;
+vim.api.nvim_buf_clear_namespace = vim.api.bufClearNamespace;
 
 // Autocommand functions
 vim.api.nvim_create_autocmd = vim.api.createAutocmd;

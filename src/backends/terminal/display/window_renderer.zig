@@ -22,6 +22,9 @@ const Syntax = @import("../../../editor/treesitter/syntax.zig").Syntax;
 const SyntaxHighlighter = @import("../../../editor/treesitter/syntax_highlighter.zig").SyntaxHighlighter;
 const Range = @import("../../../editor/treesitter/highlight.zig").Range;
 
+// Namespace highlights (LSP diagnostics, plugin highlights)
+const namespace_api = @import("../../../system/jsi/namespace_api.zig");
+
 // ============================================================================
 // Window Renderer
 // ============================================================================
@@ -49,6 +52,8 @@ pub const WindowRenderContext = struct {
     window: *Window,
     /// Buffer displayed in window
     buffer: *Buffer,
+    /// Buffer ID for namespace highlight lookups (0 = use buffer_id from window)
+    buffer_handle: i64 = 0,
     /// Window region on screen
     region: WindowRegion,
     /// Whether this is the active (focused) window
@@ -269,14 +274,34 @@ fn renderWindowBaseLayer(
 
                 // Look up syntax highlight for this character
                 const syntax_style = highlight_map.get(byte_idx);
-                const char_fg = if (syntax_style) |style|
+                var char_fg = if (syntax_style) |style|
                     if (style.fg) |c| convertColor(c) else fg_color
                 else
                     fg_color;
-                const char_bg = if (syntax_style) |style|
+                var char_bg = if (syntax_style) |style|
                     if (style.bg) |c| convertColor(c) else bg_color
                 else
                     bg_color;
+
+                // Apply namespace highlights (LSP diagnostics, plugin highlights)
+                // These overlay on top of syntax highlighting
+                // Buffer handle 0 = current buffer (Neovim convention)
+                const buf_handle = ctx.buffer_handle;
+                if (namespace_api.getBufferHighlights(buf_handle)) |buf_hls| {
+                    var hl_iter = buf_hls.iterHighlightsForLine(line_num);
+                    while (hl_iter.next()) |hl| {
+                        // Check if this byte position is within the highlight range
+                        const buffer_col = start_byte + byte_idx;
+                        if (buffer_col >= hl.col_start and buffer_col < hl.col_end) {
+                            // Look up highlight group style from registry
+                            const hl_style = ctx.registry.get(hl.hl_group);
+                            // Apply highlight colors (overwrite syntax highlighting)
+                            if (hl_style.fg) |c| char_fg = convertColor(c);
+                            if (hl_style.bg) |c| char_bg = convertColor(c);
+                            break; // First matching highlight wins
+                        }
+                    }
+                }
 
                 // Clip to window bounds
                 if (screen_col >= region.col + gutter_width and screen_col < region.col + region.width) {

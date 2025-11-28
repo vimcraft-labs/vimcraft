@@ -3070,6 +3070,108 @@ export interface E2EAssert {
    * vim.e2e.assert.bufferContains('Hello');
    */
   bufferContains(text: string, message?: string): void;
+
+  // ============================================================================
+  // Frame Assertion Helpers (for animation testing)
+  // ============================================================================
+
+  /**
+   * Assert the number of captured frames matches expected.
+   * Use after calling pty.captureFrame() multiple times.
+   *
+   * @param expected - Expected number of frames
+   * @param message - Optional failure message
+   *
+   * @example
+   * vim.e2e.pty.startFrameCapture();
+   * for (let i = 0; i < 5; i++) {
+   *   vim.e2e.keys('l');
+   *   vim.e2e.pty.render();
+   *   vim.e2e.pty.captureFrame();
+   * }
+   * vim.e2e.assert.frameCount(5);
+   */
+  frameCount(expected: number, message?: string): void;
+
+  /**
+   * Assert all frame timestamps are strictly increasing.
+   * Verifies animation progresses forward in time.
+   *
+   * @param message - Optional failure message
+   *
+   * @example
+   * vim.e2e.pty.startFrameCapture();
+   * // ... capture frames with waits between them ...
+   * vim.e2e.assert.framesIncreasing('Timestamps should increase');
+   */
+  framesIncreasing(message?: string): void;
+
+  /**
+   * Assert all captured frames have non-empty output.
+   * Validates that each frame actually rendered something.
+   *
+   * @param message - Optional failure message
+   *
+   * @example
+   * vim.e2e.pty.startFrameCapture();
+   * // ... capture frames ...
+   * vim.e2e.assert.framesNotEmpty('All frames should have output');
+   */
+  framesNotEmpty(message?: string): void;
+
+  /**
+   * Assert all captured frames have unique output.
+   * Detects animation progression (each frame should differ).
+   *
+   * @param message - Optional failure message
+   *
+   * @example
+   * vim.e2e.pty.startFrameCapture();
+   * for (let i = 0; i < 3; i++) {
+   *   vim.e2e.keys('l');
+   *   vim.e2e.pty.render();
+   *   vim.e2e.pty.captureFrame();
+   * }
+   * vim.e2e.assert.framesUnique('Each frame should show cursor at different position');
+   */
+  framesUnique(message?: string): void;
+
+  /**
+   * Assert total animation duration is within expected bounds.
+   * Validates animation timing is reasonable.
+   *
+   * @param minMs - Minimum expected duration in milliseconds
+   * @param maxMs - Maximum expected duration in milliseconds
+   * @param message - Optional failure message
+   *
+   * @example
+   * vim.e2e.pty.startFrameCapture();
+   * for (let i = 0; i < 5; i++) {
+   *   vim.e2e.keys('l');
+   *   vim.e2e.pty.render();
+   *   vim.e2e.pty.captureFrame();
+   *   vim.e2e.wait(16);  // ~60fps
+   * }
+   * vim.e2e.assert.frameDuration(50, 200, 'Animation should take 50-200ms');
+   */
+  frameDuration(minMs: number, maxMs: number, message?: string): void;
+
+  /**
+   * Assert a specific frame contains a pattern.
+   * Validates specific animation frame content.
+   *
+   * @param frameIndex - Zero-based frame index
+   * @param pattern - Text pattern to search for
+   * @param message - Optional failure message
+   *
+   * @example
+   * vim.e2e.keys('iTestContent<Esc>');
+   * vim.e2e.pty.startFrameCapture();
+   * vim.e2e.pty.render();
+   * vim.e2e.pty.captureFrame();
+   * vim.e2e.assert.frameContains(0, 'TestContent', 'Frame should show typed text');
+   */
+  frameContains(frameIndex: number, pattern: string, message?: string): void;
 }
 
 /**
@@ -3134,6 +3236,27 @@ export interface E2ELayer {
   dirty: boolean;
   /** Number of cells in the layer */
   cells: number;
+}
+
+/**
+ * Captured animation frame with timestamp and terminal output.
+ *
+ * Used by the animation frame capture API to record sequences of
+ * render frames for testing animations (like smear-cursor).
+ *
+ * @example
+ * vim.e2e.pty.startFrameCapture();
+ * vim.e2e.keys('lllll');  // Trigger animation
+ * vim.e2e.wait(500);       // Let animation run
+ * const frames = vim.e2e.pty.getFrames();
+ * console.log(`Captured ${frames.length} frames`);
+ * frames.forEach(f => console.log(`t=${f.timestamp}ms: ${f.output.length} bytes`));
+ */
+export interface CapturedFrame {
+  /** Milliseconds since frame capture started */
+  timestamp: number;
+  /** Raw ANSI terminal output for this frame */
+  output: string;
 }
 
 /**
@@ -3273,6 +3396,145 @@ export interface E2EPTY {
    * @returns Statistics about rendering operations
    */
   getRenderStats(): E2ERenderStats;
+
+  // ============================================================================
+  // Animation Frame Capture API
+  // ============================================================================
+
+  /**
+   * Start capturing animation frames.
+   * Each render cycle will create a new timestamped frame.
+   * Use this for testing animations like smear-cursor.
+   *
+   * @example
+   * vim.e2e.pty.startFrameCapture();
+   * vim.e2e.keys('lllll');  // Move cursor (triggers animation)
+   * vim.e2e.wait(500);       // Let animation run
+   * const frames = vim.e2e.pty.getFrames();
+   * vim.e2e.pty.stopFrameCapture();
+   */
+  startFrameCapture(): void;
+
+  /**
+   * Stop capturing animation frames.
+   * @returns Number of frames captured
+   *
+   * @example
+   * vim.e2e.pty.startFrameCapture();
+   * vim.e2e.keys('jjjjj');
+   * vim.e2e.wait(200);
+   * const count = vim.e2e.pty.stopFrameCapture();
+   * console.log(`Captured ${count} frames`);
+   */
+  stopFrameCapture(): number;
+
+  /**
+   * Manually capture the current render output as a frame.
+   * Frames are also captured automatically during render when
+   * frame capture mode is active, but this allows explicit control.
+   *
+   * @example
+   * vim.e2e.pty.startFrameCapture();
+   * vim.e2e.pty.render();
+   * vim.e2e.pty.captureFrame();  // Explicitly save this frame
+   * vim.e2e.keys('j');
+   * vim.e2e.pty.render();
+   * vim.e2e.pty.captureFrame();  // Another explicit frame
+   */
+  captureFrame(): void;
+
+  /**
+   * Get all captured animation frames.
+   * Each frame contains a timestamp (ms since capture started) and
+   * the raw ANSI terminal output.
+   *
+   * @returns Array of captured frames with timestamps
+   *
+   * @example
+   * const frames = vim.e2e.pty.getFrames();
+   * vim.e2e.assert.true(frames.length >= 5, 'Should capture multiple frames');
+   *
+   * // Check animation progression
+   * for (let i = 1; i < frames.length; i++) {
+   *   vim.e2e.assert.true(
+   *     frames[i].timestamp > frames[i-1].timestamp,
+   *     'Timestamps should increase'
+   *   );
+   * }
+   */
+  getFrames(): CapturedFrame[];
+
+  /**
+   * Get the number of captured frames.
+   * @returns Number of frames in the capture buffer
+   *
+   * @example
+   * vim.e2e.pty.startFrameCapture();
+   * vim.e2e.keys('lllll');
+   * vim.e2e.wait(300);
+   * const count = vim.e2e.pty.getFrameCount();
+   * vim.e2e.assert.true(count > 0, 'Should have captured frames');
+   */
+  getFrameCount(): number;
+
+  /**
+   * Check if frame capture mode is currently active.
+   * @returns true if capturing frames
+   *
+   * @example
+   * vim.e2e.assert.false(vim.e2e.pty.isCapturingFrames());
+   * vim.e2e.pty.startFrameCapture();
+   * vim.e2e.assert.true(vim.e2e.pty.isCapturingFrames());
+   */
+  isCapturingFrames(): boolean;
+
+  // ============================================================================
+  // Terminal Size Control
+  // ============================================================================
+
+  /**
+   * Set the terminal size for E2E testing.
+   * This allows testing different terminal dimensions without a real PTY.
+   * Useful for testing responsive layouts, text wrapping, viewport behavior.
+   *
+   * Note: This controls the Display's internal grid size, not a real PTY.
+   * For real PTY operations (external processes), use process.spawnPty().resize().
+   *
+   * @param rows - Number of terminal rows (height), must be 1-1000
+   * @param cols - Number of terminal columns (width), must be 1-1000
+   * @returns true on success
+   *
+   * @example
+   * // Test rendering at 80x24 terminal (classic size)
+   * vim.e2e.pty.setSize(24, 80);
+   * vim.e2e.pty.render();
+   * vim.e2e.assert.cursorAt(0, 0);
+   *
+   * @example
+   * // Test responsive behavior at small size
+   * vim.e2e.pty.setSize(10, 40);
+   * vim.e2e.keys('iHello World<Esc>');
+   * vim.e2e.pty.render();
+   * // Assert layout behavior at smaller terminal
+   */
+  setSize(rows: number, cols: number): boolean;
+
+  /**
+   * Get the current terminal size.
+   * @returns Object with rows and cols properties
+   *
+   * @example
+   * const size = vim.e2e.pty.getSize();
+   * console.log(`Terminal: ${size.cols}x${size.rows}`);
+   *
+   * @example
+   * // Verify size after setSize()
+   * vim.e2e.pty.setSize(30, 100);
+   * const size = vim.e2e.pty.getSize();
+   * vim.e2e.assert.equal(size.rows, 30);
+   * vim.e2e.assert.equal(size.cols, 100);
+   */
+  getSize(): { rows: number; cols: number };
 }
 
 /**

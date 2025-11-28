@@ -40,6 +40,7 @@ pub const fetch_api = @import("fetch_api.zig");
 pub const e2e_api = @import("e2e_api.zig");
 pub const api_buffer = @import("api_buffer.zig");
 pub const api_window = @import("api_window.zig");
+pub const namespace_api = @import("namespace_api.zig");
 
 // Import new transpiler system
 const transpiler = @import("../transpiler/loader.zig");
@@ -400,6 +401,14 @@ pub fn initJSI(
         api_window.registerForEditorContext(runtime, editor_or_context, allocator);
     }
 
+    // Register namespace API (createNamespace, bufAddHighlight, bufClearNamespace)
+    // These are required for LSP diagnostics and plugins that need to highlight buffer regions
+    if (T == *Editor) {
+        namespace_api.registerForEditor(runtime, editor_or_context, allocator, js_state_dirty_ptr);
+    } else if (T == *EditorContext) {
+        namespace_api.registerForEditorContext(runtime, editor_or_context, allocator);
+    }
+
     // JSI functions registered (silent mode)
 }
 
@@ -541,6 +550,8 @@ pub fn deinitJSI() void {
     api_buffer.deinit();
     // Clean up api_window context
     api_window.deinit();
+    // Clean up namespace context
+    namespace_api.deinit();
     global_allocator = null;
 }
 
@@ -583,20 +594,18 @@ pub const deinitFetch = fetch_api.deinit;
 
 /// Load plugin file (NO wrapper - assumes runtime.js already loaded)
 /// Uses esbuild bundling to resolve imports (e.g., './src/index')
-/// Uses new transpiler system for TypeScript support and WyHash caching
+///
+/// Cache invalidation strategy: DIRECTORY-BASED MTIME TRACKING
+/// - Scans ALL .ts/.js files in plugin directory (recursively)
+/// - Uses latest mtime across all source files as cache key
+/// - Only bundles on cache miss (fast path: ~0.5ms stat calls vs ~10-50ms bundle)
+///
+/// This fixes the bug where editing src/cursor.ts wouldn't invalidate cache
+/// because the old mtime-based caching only checked index.ts mtime.
 pub fn loadPlugin(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: std.mem.Allocator) !void {
     // Get cache directory from global state (initialized in main.zig)
     const cache_dir = global_cache_dir orelse return error.CacheNotInitialized;
 
-    // Setup loader config
-    const loader_config = transpiler.LoaderConfig{
-        .cache_dir = cache_dir,
-        .enable_cache = true,
-        .stats = &global_cache_stats,
-    };
-
-    // Use bundling to resolve imports (plugins often have imports like './src/index')
-    // This is different from loadConfig which also wraps with runtime.js
     const esbuild = @import("../transpiler/esbuild.zig");
     const hermes = @import("../transpiler/hermes.zig");
     const cache = @import("../transpiler/cache.zig");
@@ -608,52 +617,73 @@ pub fn loadPlugin(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
     } else try allocator.dupe(u8, filepath);
     defer allocator.free(expanded_path);
 
-    // Check cache first (based on mtime)
-    const cache_key = cache.computeCacheKey(allocator, expanded_path) catch return error.CacheFailed;
+    // STEP 1: Get plugin directory (parent of index.ts)
+    const plugin_dir = std.fs.path.dirname(expanded_path) orelse {
+        std.log.err("Cannot determine plugin directory for: {s}", .{filepath});
+        return error.InvalidPath;
+    };
+
+    // STEP 2: Scan ALL source files in plugin directory and find latest mtime
+    // This ensures cache invalidates when ANY .ts/.js file changes
+    const latest_mtime: i128 = blk: {
+        if (getLatestMtimeInDir(plugin_dir, allocator)) |mtime_opt| {
+            if (mtime_opt) |mtime| {
+                break :blk mtime;
+            }
+        } else |err| {
+            std.log.warn("Failed to scan plugin directory {s}: {}, falling back to index.ts mtime", .{ plugin_dir, err });
+        }
+        // Fallback: use index.ts mtime only
+        const stat = std.fs.cwd().statFile(expanded_path) catch {
+            return error.PathNotFound;
+        };
+        break :blk stat.mtime;
+    };
+
+    // STEP 3: Compute cache key from path + latest mtime of ANY source file
+    const path_hash = std.hash.Wyhash.hash(0, expanded_path);
+    const cache_key = try std.fmt.allocPrint(allocator, "{x:0>16}_{d}", .{ path_hash, latest_mtime });
     defer allocator.free(cache_key);
 
     const cache_path = try std.fmt.allocPrint(allocator, "{s}/{s}.hbc", .{ cache_dir, cache_key });
     defer allocator.free(cache_path);
 
-    // Try cache first
-    if (loader_config.enable_cache and cache.isCacheFresh(expanded_path, cache_path)) {
-        if (cache.loadFromCache(allocator, cache_path)) |bytecode| {
-            defer allocator.free(bytecode);
-            global_cache_stats.recordHit();
-            const result = c.hermes_evaluate_bytecode(runtime, bytecode.ptr, bytecode.len);
-            if (result == null) {
-                const err_msg = c.hermes_get_exception_message(runtime);
-                std.debug.print("[JSI] Plugin error: {s}\n", .{err_msg});
-                return error.JSError;
-            }
-            defer c.hermes_value_destroy(result);
-            return;
-        } else |_| {
-            // Cache read failed - rebuild
+    // STEP 4: Try to load from cache (FAST PATH: ~0.5ms)
+    // Cache hit means: same path + no source file changed since last bundle
+    if (cache.loadFromCache(allocator, cache_path)) |bytecode| {
+        defer allocator.free(bytecode);
+        global_cache_stats.recordHit();
+        const result = c.hermes_evaluate_bytecode(runtime, bytecode.ptr, bytecode.len);
+        if (result == null) {
+            const err_msg = c.hermes_get_exception_message(runtime);
+            std.debug.print("[JSI] Plugin error: {s}\n", .{err_msg});
+            return error.JSError;
         }
+        defer c.hermes_value_destroy(result);
+        return;
+    } else |_| {
+        // Cache miss - need to bundle and compile
     }
 
-    // Bundle plugin with esbuild (resolves all imports into single file)
+    // STEP 5: Cache miss - bundle plugin with esbuild (~10-50ms)
     const bundled_js = esbuild.buildWithCacheDir(allocator, expanded_path, cache_dir) catch |err| {
         std.log.err("esbuild bundle failed for plugin {s}: {}", .{ filepath, err });
         return error.TranspileFailed;
     };
     defer allocator.free(bundled_js);
 
-    // Compile to Hermes bytecode
+    // STEP 6: Compile bundled JS to Hermes bytecode
     const bytecode = hermes.compile(allocator, bundled_js) catch |err| {
         std.log.err("Hermes compilation failed for plugin {s}: {}", .{ filepath, err });
         return error.CompileFailed;
     };
     defer allocator.free(bytecode);
 
-    // Save to cache
-    if (loader_config.enable_cache) {
-        cache.saveToCache(cache_path, bytecode) catch {};
-    }
+    // STEP 7: Save to cache
+    cache.saveToCache(cache_path, bytecode) catch {};
     global_cache_stats.recordMiss(bytecode.len);
 
-    // Execute bytecode
+    // STEP 8: Execute bytecode
     const result = c.hermes_evaluate_bytecode(runtime, bytecode.ptr, bytecode.len);
 
     if (result == null) {
@@ -663,6 +693,60 @@ pub fn loadPlugin(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
     }
 
     defer c.hermes_value_destroy(result);
+}
+
+/// Directories to exclude from mtime scanning (common build outputs, dependencies)
+const EXCLUDED_DIRS = [_][]const u8{ "node_modules", ".git", "dist", "build", "target", "zig-out", "zig-cache" };
+
+/// Check if path contains any excluded directory
+fn isExcludedPath(path: []const u8) bool {
+    for (EXCLUDED_DIRS) |excluded| {
+        if (std.mem.indexOf(u8, path, excluded) != null) return true;
+    }
+    return false;
+}
+
+/// Scan directory recursively for .ts/.js files and return latest mtime
+/// Returns null if no source files found
+fn getLatestMtimeInDir(dir_path: []const u8, allocator: std.mem.Allocator) !?i128 {
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+        return err;
+    };
+    defer dir.close();
+
+    var latest_mtime: ?i128 = null;
+
+    // Use passed allocator (proper memory management, cleaned up by caller's arena)
+    var walker = dir.walk(allocator) catch |err| {
+        return err;
+    };
+    defer walker.deinit();
+
+    while (walker.next() catch null) |entry| {
+        // Fast rejection: skip non-files first
+        if (entry.kind != .file) continue;
+
+        // Skip excluded directories (node_modules, .git, build outputs)
+        if (isExcludedPath(entry.path)) continue;
+
+        // Only check .ts, .tsx, .js, .jsx files
+        const ext = std.fs.path.extension(entry.basename);
+        const is_source = std.mem.eql(u8, ext, ".ts") or
+            std.mem.eql(u8, ext, ".tsx") or
+            std.mem.eql(u8, ext, ".js") or
+            std.mem.eql(u8, ext, ".jsx");
+
+        if (!is_source) continue;
+
+        // Get file mtime
+        const stat = entry.dir.statFile(entry.basename) catch continue;
+
+        if (latest_mtime == null or stat.mtime > latest_mtime.?) {
+            latest_mtime = stat.mtime;
+        }
+    }
+
+    return latest_mtime;
 }
 
 /// Load config file (WITH runtime.js wrapper for vim.* globals)

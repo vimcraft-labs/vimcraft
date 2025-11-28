@@ -23,6 +23,7 @@ const usercommand_api_mod = @import("../system/jsi/usercommand_api.zig");
 const UserCommandContext = usercommand_api_mod.UserCommandContext;
 const UserCommand = usercommand_api_mod.UserCommand;
 const HighlightRegistry = @import("../system/jsi/highlight_api.zig").HighlightRegistry;
+const namespace_api = @import("../system/jsi/namespace_api.zig");
 const Syntax = @import("treesitter/syntax.zig").Syntax;
 const Parser = @import("treesitter/parser.zig").Parser;
 const languages = @import("treesitter/languages.zig");
@@ -637,6 +638,9 @@ pub const Editor = struct {
             buf_ptr.deinit();
             self.allocator.destroy(buf_ptr);
         }
+
+        // Clean up namespace highlights for this buffer
+        namespace_api.cleanupBuffer(@intCast(id.id));
     }
 
     /// Delete all buffers except current one (Neovim :only / :bonly behavior)
@@ -670,9 +674,12 @@ pub const Editor = struct {
         // Third pass: delete all other buffers
         for (to_delete.items) |id| {
             if (self.buffers.fetchRemove(id)) |kv| {
-                var buf_copy = kv.value;
-                buf_copy.deinit();
+                const buf_ptr = kv.value;
+                buf_ptr.deinit();
+                self.allocator.destroy(buf_ptr);
             }
+            // Clean up namespace highlights for this buffer
+            namespace_api.cleanupBuffer(@intCast(id.id));
         }
 
         return to_delete.items.len;
@@ -3037,20 +3044,22 @@ test "Keymap: mapping overrides built-in command" {
     try std.testing.expectEqual(@as(usize, 0), buf.cursor.row);
 }
 
-test "Keymap: callback mapping returns error (not yet implemented)" {
+test "Keymap: callback mapping executes (requires JSI context in practice)" {
     const allocator = std.testing.allocator;
 
     var editor = try Editor.init(allocator);
     defer editor.deinit();
 
-    // Map K → callback (not yet supported) - global mapping
+    // Map K → callback - global mapping
     try editor.keymap_mgr.set(.normal, "K", .{ .callback = 42 }, .{}, null);
 
-    // Execute K - should return error, not silently fail
-    const result = editor.executeKeys("K");
+    // Execute K - in unit tests without JSI, callback logs error and returns true
+    // In real usage with JSI context, it calls the JavaScript callback
+    const result = try editor.executeKeys("K");
 
-    // Should return CallbackNotImplemented error
-    try std.testing.expectError(error.CallbackNotImplemented, result);
+    // Should return true (callback execution attempted, state marked dirty)
+    try std.testing.expect(result);
+    try std.testing.expect(editor.js_state_dirty);
 }
 
 test "Keymap: mode-specific mappings don't leak" {
@@ -3109,7 +3118,7 @@ test "Keymap: complex mapping sequence (K → Hzz concept)" {
     try std.testing.expectEqual(@as(usize, 0), buf.cursor.col);
 }
 
-test "Keymap: depth restored correctly after mapping error (errdefer fix)" {
+test "Keymap: depth stays zero after callback mapping (no nesting)" {
     const allocator = std.testing.allocator;
 
     var editor = try Editor.init(allocator);
@@ -3118,17 +3127,16 @@ test "Keymap: depth restored correctly after mapping error (errdefer fix)" {
     // Verify initial depth is 0
     try std.testing.expectEqual(@as(usize, 0), editor.mapping_depth);
 
-    // Map K → callback (will error with CallbackNotImplemented) - global mapping
+    // Map K → callback - global mapping
     try editor.keymap_mgr.set(.normal, "K", .{ .callback = 42 }, .{}, null);
 
-    // Execute K - will return error
-    const result = editor.executeKeys("K");
-    try std.testing.expectError(error.CallbackNotImplemented, result);
+    // Execute K - callback doesn't nest, depth should stay 0
+    _ = try editor.executeKeys("K");
 
-    // CRITICAL: Depth should be restored to 0 after error (errdefer worked)
+    // Depth should still be 0 (callback doesn't increase depth)
     try std.testing.expectEqual(@as(usize, 0), editor.mapping_depth);
 
-    // Verify subsequent mapping still works (depth not corrupted) - global mapping
+    // Verify subsequent mapping still works - global mapping
     const keys = try allocator.dupe(u8, "gg");
     try editor.keymap_mgr.set(.normal, "J", .{ .keys = keys }, .{ .noremap = true }, null);
 
@@ -3137,7 +3145,7 @@ test "Keymap: depth restored correctly after mapping error (errdefer fix)" {
     buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\n");
     buf.cursor = .{ .row = 1, .col = 0 };
 
-    // This should work (depth not corrupted by previous error)
+    // This should work (depth not corrupted)
     _ = try editor.executeKeys("J");
     try std.testing.expectEqual(@as(usize, 0), buf.cursor.row);
 }

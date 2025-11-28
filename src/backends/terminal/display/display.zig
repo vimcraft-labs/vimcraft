@@ -96,6 +96,20 @@ pub const RenderStatistics = struct {
 /// Sentinel value for uninitialized cursor position (forces first cursor move on launch)
 const CURSOR_POS_UNINITIALIZED: usize = std.math.maxInt(usize);
 
+/// Captured frame for animation testing
+/// Each frame contains a timestamp and the ANSI output at that point in time
+pub const CapturedFrame = struct {
+    /// Milliseconds since frame capture started
+    timestamp_ms: i64,
+    /// ANSI output for this frame (owned by the ArrayList)
+    output: []const u8,
+
+    /// Free the owned output slice
+    pub fn deinit(self: *CapturedFrame, allocator: std.mem.Allocator) void {
+        allocator.free(self.output);
+    }
+};
+
 /// Terminal display manager
 /// Handles rendering buffer content to terminal using ANSI escape codes
 /// Now uses grid-based rendering (Neovim-style) with Helix optimizations
@@ -194,6 +208,32 @@ pub const Display = struct {
     capture_mode: bool = false,
     captured_output: std.ArrayList(u8) = .empty,
 
+    // ============================================================================
+    // ANIMATION FRAME CAPTURE (for E2E animation testing)
+    // ============================================================================
+    // When frame_capture_mode is true, each render cycle captures a timestamped frame.
+    // This enables testing animations (like smear-cursor) by capturing the sequence
+    // of frames over time, rather than just a single snapshot.
+    //
+    // THREAD SAFETY: Frame capture is NOT thread-safe.
+    // All frame capture methods must be called from the main event loop thread.
+    // This matches the existing PTY capture model (single-threaded).
+    //
+    // PERFORMANCE: Each frame duplicates the output buffer (~4KB/frame).
+    // For 60fps captures, expect ~1MB memory for 5 seconds.
+    // This is acceptable for E2E testing (not production code).
+    //
+    // Usage:
+    //   vim.e2e.pty.startFrameCapture()
+    //   vim.e2e.keys("lllll")  // Move cursor (triggers animation)
+    //   vim.e2e.pty.render()
+    //   vim.e2e.pty.captureFrame()  // Manually capture each frame
+    //   const frames = vim.e2e.pty.getFrames()
+    //   // frames = [{ timestamp: 0, output: "..." }, { timestamp: 16, output: "..." }, ...]
+    frame_capture_mode: bool = false,
+    captured_frames: std.ArrayList(CapturedFrame) = .empty,
+    frame_capture_start_ns: i128 = 0,
+
     pub fn init(allocator: std.mem.Allocator) !Display {
         const grid = try ScreenGrid.init(allocator, 80, 24);
         const gutter_mgr = gutter.GutterManager.init(allocator);
@@ -263,6 +303,12 @@ pub const Display = struct {
 
         // PTY capture cleanup
         self.captured_output.deinit(self.allocator);
+
+        // Animation frame capture cleanup
+        for (self.captured_frames.items) |*frame| {
+            frame.deinit(self.allocator);
+        }
+        self.captured_frames.deinit(self.allocator);
 
         // PERFORMANCE: Cleanup displayColumnToByte cache
         char_width.deinitCache();
@@ -811,6 +857,7 @@ pub const Display = struct {
             const context = window_renderer.WindowRenderContext{
                 .window = win.*,
                 .buffer = buffer,
+                .buffer_handle = @intCast(win.*.buffer_id.id), // For namespace highlight lookups
                 .region = .{
                     .row = win.*.screen_row,
                     .col = win.*.screen_col,
@@ -1559,5 +1606,139 @@ pub const Display = struct {
         }
         // Normal mode: write to stdout
         try self.stdout.writeAll(formatted);
+    }
+
+    // ============================================================================
+    // ANIMATION FRAME CAPTURE (for E2E animation testing)
+    // ============================================================================
+    // These methods enable testing animations (like smear-cursor) by capturing
+    // timestamped frames over a duration, rather than just a single snapshot.
+    //
+    // Usage from TypeScript:
+    //   vim.e2e.pty.startFrameCapture()
+    //   vim.e2e.keys("lllll")  // Move cursor (triggers animation)
+    //   vim.e2e.pty.wait(500)  // Let animation run
+    //   const frames = vim.e2e.pty.getFrames()
+    //   vim.e2e.pty.stopFrameCapture()
+    //   // frames = [{ timestamp: 0, output: "..." }, { timestamp: 16, output: "..." }, ...]
+
+    /// Start capturing animation frames
+    /// Each render cycle will create a new timestamped frame
+    pub fn startFrameCapture(self: *Display) void {
+        self.frame_capture_mode = true;
+        self.frame_capture_start_ns = std.time.nanoTimestamp();
+
+        // Clear any existing frames
+        for (self.captured_frames.items) |*frame| {
+            frame.deinit(self.allocator);
+        }
+        self.captured_frames.clearRetainingCapacity();
+
+        // Also start regular capture to collect output
+        self.capture_mode = true;
+        self.captured_output.clearRetainingCapacity();
+    }
+
+    /// Stop capturing animation frames
+    /// Returns the number of frames captured
+    pub fn stopFrameCapture(self: *Display) usize {
+        self.frame_capture_mode = false;
+        self.capture_mode = false;
+        return self.captured_frames.items.len;
+    }
+
+    /// Capture current render output as a frame
+    /// Called after each render cycle when frame_capture_mode is true
+    /// This should be called by the render loop after output is written
+    pub fn captureFrame(self: *Display) !void {
+        if (!self.frame_capture_mode) return;
+
+        // Calculate timestamp in milliseconds since capture started
+        const now_ns = std.time.nanoTimestamp();
+        const elapsed_ns = now_ns - self.frame_capture_start_ns;
+        const timestamp_ms: i64 = @intCast(@divFloor(elapsed_ns, 1_000_000));
+
+        // Duplicate the current captured output (the frame "snapshot")
+        const output_copy = try self.allocator.dupe(u8, self.captured_output.items);
+        errdefer self.allocator.free(output_copy);
+
+        // Add frame to the list
+        try self.captured_frames.append(self.allocator, .{
+            .timestamp_ms = timestamp_ms,
+            .output = output_copy,
+        });
+
+        // Clear captured output for next frame
+        self.captured_output.clearRetainingCapacity();
+    }
+
+    /// Get all captured frames
+    /// The returned slice is valid until stopFrameCapture() or deinit()
+    pub fn getCapturedFrames(self: *Display) []const CapturedFrame {
+        return self.captured_frames.items;
+    }
+
+    /// Get the number of captured frames
+    pub fn getCapturedFrameCount(self: *Display) usize {
+        return self.captured_frames.items.len;
+    }
+
+    /// Check if frame capture mode is active
+    pub fn isCapturingFrames(self: *Display) bool {
+        return self.frame_capture_mode;
+    }
+
+    // ============================================================================
+    // E2E TESTING: SET TERMINAL SIZE (for testing different terminal dimensions)
+    // ============================================================================
+    // Allows E2E tests to simulate different terminal sizes without a real PTY.
+    // This is useful for testing responsive layouts, text wrapping, etc.
+    //
+    // Usage from TypeScript:
+    //   vim.e2e.pty.setSize(10, 40)  // 10 rows, 40 columns
+    //   vim.e2e.pty.render()
+    //   // Assert layout behavior at smaller size
+
+    /// Set terminal size programmatically (for E2E testing)
+    /// This bypasses the ioctl call and directly sets the terminal dimensions,
+    /// resizing all internal grids and layers to match.
+    ///
+    /// @param rows Number of terminal rows (height)
+    /// @param cols Number of terminal columns (width)
+    pub fn setSize(self: *Display, rows: usize, cols: usize) !void {
+        // Validate minimum size (must have at least 1 row and 1 column)
+        if (rows == 0 or cols == 0) return error.InvalidSize;
+
+        // Only resize if dimensions actually changed
+        if (rows == self.terminal_rows and cols == self.terminal_cols) return;
+
+        // Resize the main grid
+        try self.grid.resize(cols, rows);
+
+        // Resize all layers
+        try self.layer_manager.resizeAll(rows, cols);
+
+        // Resize compositor
+        try self.compositor.resize(rows, cols);
+
+        // Update dimensions
+        self.terminal_rows = rows;
+        self.terminal_cols = cols;
+
+        // Reset attribute state (terminal state is unknown after resize)
+        self.resetAttributeState();
+
+        // Reset scroll tracking
+        self.last_viewport_top = 0;
+
+        // Reset cursor tracking to force re-positioning on next render
+        self.last_cursor_row = CURSOR_POS_UNINITIALIZED;
+        self.last_cursor_col = CURSOR_POS_UNINITIALIZED;
+    }
+
+    /// Get current terminal dimensions
+    /// Returns { rows, cols } for E2E testing validation
+    pub fn getSize(self: *const Display) struct { rows: usize, cols: usize } {
+        return .{ .rows = self.terminal_rows, .cols = self.terminal_cols };
     }
 };

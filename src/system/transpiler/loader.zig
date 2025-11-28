@@ -132,11 +132,14 @@ pub fn loadFromSource(
 
 /// Load and bundle TypeScript config file with runtime wrapper
 /// This function:
-/// 1. Checks cache based on source file mtime (BEFORE expensive bundling!)
+/// 1. Checks cache based on source file mtime + runtime_wrapper content hash
 /// 2. If cache miss: bundles the config file using esbuild.build() (resolves imports)
 /// 3. Wraps the bundle with runtime wrapper
 /// 4. Compiles to Hermes bytecode
 /// 5. Saves to cache
+///
+/// CRITICAL: Cache key includes runtime_wrapper hash to ensure cache invalidation
+/// when the runtime wrapper changes (e.g., after editor recompilation).
 ///
 /// Use this for index.ts that may have imports. For simple plugins without imports,
 /// use loadFromSource() directly.
@@ -146,12 +149,14 @@ pub fn loadConfigWithBundle(
     filepath: []const u8,
     runtime_wrapper: []const u8,
 ) LoadError![]const u8 {
-    // 1. Compute cache key based on source file path + mtime (BEFORE bundling)
-    // This avoids expensive bundling when source hasn't changed
-    const cache_key = cache.computeCacheKey(allocator, filepath) catch |err| {
-        std.log.err("Failed to compute cache key for {s}: {}", .{ filepath, err });
-        return LoadError.CacheFailed;
-    };
+    // 1. Compute cache key based on source file path + runtime_wrapper content
+    // CRITICAL: Include runtime_wrapper hash to invalidate cache when wrapper changes
+    // This ensures cache invalidation after editor recompilation with new runtime.js
+    const path_hash = std.hash.Wyhash.hash(0, filepath);
+    const wrapper_hash = std.hash.Wyhash.hash(0, runtime_wrapper);
+    const combined_hash = path_hash ^ wrapper_hash;
+
+    const cache_key = try std.fmt.allocPrint(allocator, "{x:0>16}", .{combined_hash});
     defer allocator.free(cache_key);
 
     const cache_path = try std.fmt.allocPrint(
@@ -162,6 +167,7 @@ pub fn loadConfigWithBundle(
     defer allocator.free(cache_path);
 
     // 2. Check cache freshness BEFORE expensive bundling
+    // Cache is valid if: cache file exists AND source mtime <= cache mtime
     if (config.enable_cache and cache.isCacheFresh(filepath, cache_path)) {
         if (cache.loadFromCache(allocator, cache_path)) |bytecode| {
             config.stats.recordHit();

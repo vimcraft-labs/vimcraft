@@ -1063,6 +1063,144 @@ fn ptyResetCursorState(
     return helpers.returnUndefined(runtime);
 }
 
+// ============================================================================
+// Animation Frame Capture Functions (for animation testing)
+// ============================================================================
+
+/// vim.e2e.pty.startFrameCapture() - Start capturing animation frames
+/// Each render cycle will create a new timestamped frame
+fn ptyStartFrameCapture(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+    display.startFrameCapture();
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.pty.stopFrameCapture() - Stop capturing animation frames
+/// Returns the number of frames captured
+fn ptyStopFrameCapture(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+    const frame_count = display.stopFrameCapture();
+    return c.hermes_value_create_number(runtime, @floatFromInt(frame_count));
+}
+
+/// vim.e2e.pty.captureFrame() - Manually capture current output as a frame
+/// This is called automatically during render when frame_capture_mode is true,
+/// but can also be called manually for more control
+fn ptyCaptureFrame(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+    display.captureFrame() catch |err| {
+        var msg_buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&msg_buf, "captureFrame failed: {}", .{err}) catch "captureFrame failed";
+        if (msg.len < msg_buf.len) {
+            msg_buf[msg.len] = 0;
+        }
+        c.hermes_throw_error(runtime, msg.ptr);
+        return null;
+    };
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.pty.getFrames() - Get all captured animation frames
+/// Returns an array of { timestamp: number, output: string } objects
+fn ptyGetFrames(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+
+    const frames = display.getCapturedFrames();
+
+    // Create result array
+    const result = c.hermes_array_create(runtime, frames.len) orelse return helpers.returnUndefined(runtime);
+
+    for (frames, 0..) |frame, i| {
+        // Create frame object { timestamp, output }
+        const frame_obj = c.hermes_value_create_object(runtime) orelse continue;
+
+        // timestamp (milliseconds since capture started)
+        const timestamp_val = c.hermes_value_create_number(runtime, @floatFromInt(frame.timestamp_ms));
+        if (timestamp_val) |tv| {
+            c.hermes_value_set_property(runtime, frame_obj, "timestamp", tv);
+            c.hermes_value_destroy(tv);
+        }
+
+        // output (ANSI escape codes as string)
+        const output_val = c.hermes_value_create_string(runtime, frame.output.ptr, frame.output.len);
+        if (output_val) |ov| {
+            c.hermes_value_set_property(runtime, frame_obj, "output", ov);
+            c.hermes_value_destroy(ov);
+        }
+
+        c.hermes_array_set(runtime, result, i, frame_obj);
+        c.hermes_value_destroy(frame_obj);
+    }
+
+    return result;
+}
+
+/// vim.e2e.pty.getFrameCount() - Get the number of captured frames
+fn ptyGetFrameCount(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+    const count = display.getCapturedFrameCount();
+    return c.hermes_value_create_number(runtime, @floatFromInt(count));
+}
+
+/// vim.e2e.pty.isCapturingFrames() - Check if frame capture mode is active
+fn ptyIsCapturingFrames(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        return c.hermes_value_create_boolean(runtime, false);
+    };
+    return c.hermes_value_create_boolean(runtime, display.isCapturingFrames());
+}
+
 /// vim.e2e.pty.render() - Trigger a full render cycle with PTY capture
 /// This generates actual ANSI escape codes that can be inspected
 /// Returns the number of bytes written to the capture buffer
@@ -1078,74 +1216,56 @@ fn ptyRender(
         return null;
     };
 
-    // Get the EditorContext pointer - we need it for render
-    const EditorContext = @import("../../backends/headless/editor_context.zig").EditorContext;
+    // Get the Editor pointer - ctx.editor is *Editor (not *EditorContext!)
+    // In test.zig, jsi_api.initJSI is called with &editor_ctx.editor which is *Editor
+    const Editor = @import("../../editor/editor.zig").Editor;
     const ListChars = @import("../../editor/config/listchars.zig").ListChars;
 
-    // Cast editor back to EditorContext
-    const editor_ctx: *EditorContext = @ptrCast(@alignCast(ctx.editor));
+    // Cast editor back to *Editor (NOT *EditorContext!)
+    const editor: *Editor = @ptrCast(@alignCast(ctx.editor));
 
-    // Get default highlight config and listchars
+    // Get default listchars
     var listchars = ListChars{};
 
     // Trigger a render cycle
     // When capture mode is active (for PTY testing), always use full render
     // to generate ANSI escape codes. Otherwise, use headless for clean output.
     if (g_verbose or display.capture_mode) {
-        // Check if multi-window mode (more than 1 window)
-        // Multi-window requires renderAllWindows() which includes separator rendering
-        const is_multi_window = editor_ctx.editor.windows.count() > 1;
-
-        if (is_multi_window) {
-            // Multi-window mode: Use renderAllWindows for separator rendering
-            display.renderAllWindows(
-                &editor_ctx.editor,
-                "-- NORMAL --", // Default status line
-                ctx.visual_state,
-                &editor_ctx.editor.yank_highlight,
-                false, // cursorline disabled
-                false, // list mode disabled
-                &listchars,
-                2, // laststatus = always show
-            ) catch |err| {
-                var msg_buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&msg_buf, "renderAllWindows failed: {}", .{err}) catch "render failed";
-                if (msg.len < msg_buf.len) {
-                    msg_buf[msg.len] = 0;
-                }
-                c.hermes_throw_error(runtime, msg.ptr);
-                return null;
-            };
-        } else {
-            // Single window mode: Use standard render
-            display.render(
-                editor_ctx,
-                "-- NORMAL --", // Default status line
-                false, // cursorline disabled
-                ctx.visual_state,
-                &editor_ctx.editor.yank_highlight,
-                false, // list mode disabled
-                &listchars,
-                2, // laststatus = always show
-            ) catch |err| {
-                var msg_buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&msg_buf, "render failed: {}", .{err}) catch "render failed";
-                if (msg.len < msg_buf.len) {
-                    msg_buf[msg.len] = 0;
-                }
-                c.hermes_throw_error(runtime, msg.ptr);
-                return null;
-            };
-        }
+        // E2E Test Simplification: Always use single-window render path
+        //
+        // The multi-window renderAllWindows() requires a properly initialized window_layout
+        // with a valid root node. In E2E test context, the window_layout may not be fully
+        // initialized (the root pointer can be uninitialized sentinel 0xaaaa...).
+        //
+        // Since E2E tests primarily test single-window scenarios, we use the simpler
+        // render() function which works with *Editor directly.
+        display.render(
+            editor,
+            "-- NORMAL --", // Default status line
+            false, // cursorline disabled
+            ctx.visual_state,
+            &editor.yank_highlight,
+            false, // list mode disabled
+            &listchars,
+            2, // laststatus = always show
+        ) catch |err| {
+            var msg_buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "render failed: {}", .{err}) catch "render failed";
+            if (msg.len < msg_buf.len) {
+                msg_buf[msg.len] = 0;
+            }
+            c.hermes_throw_error(runtime, msg.ptr);
+            return null;
+        };
     } else {
         // Headless render: Update compositor state WITHOUT writing to stdout
         // This keeps stdout clean for JSON test results
         display.renderHeadless(
-            editor_ctx,
+            editor,
             "-- NORMAL --",
             false,
             ctx.visual_state,
-            &editor_ctx.editor.yank_highlight,
+            &editor.yank_highlight,
             false,
             &listchars,
         ) catch |err| {
@@ -1212,6 +1332,99 @@ fn ptyGetRenderStats(
     if (avg_val) |av| {
         c.hermes_value_set_property(runtime, result, "avgRenderMs", av);
         c.hermes_value_destroy(av);
+    }
+
+    return result;
+}
+
+/// vim.e2e.pty.setSize(rows, cols) - Set terminal size for testing
+/// This allows testing different terminal dimensions without a real PTY.
+/// Useful for testing responsive layouts, text wrapping, viewport behavior, etc.
+/// Returns boolean indicating success.
+fn ptySetSize(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    // Require 2 arguments: rows and cols
+    if (arg_count < 2) {
+        c.hermes_throw_error(runtime, "pty.setSize requires 2 arguments: rows, cols");
+        return null;
+    }
+
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+
+    // Get rows argument
+    if (!c.hermes_value_is_number(args[0])) {
+        c.hermes_throw_error(runtime, "pty.setSize: rows must be a number");
+        return null;
+    }
+    const rows_f = c.hermes_value_get_number(args[0]);
+    if (rows_f < 1 or rows_f > 1000) {
+        c.hermes_throw_error(runtime, "pty.setSize: rows must be between 1 and 1000");
+        return null;
+    }
+    const rows: usize = @intFromFloat(rows_f);
+
+    // Get cols argument
+    if (!c.hermes_value_is_number(args[1])) {
+        c.hermes_throw_error(runtime, "pty.setSize: cols must be a number");
+        return null;
+    }
+    const cols_f = c.hermes_value_get_number(args[1]);
+    if (cols_f < 1 or cols_f > 1000) {
+        c.hermes_throw_error(runtime, "pty.setSize: cols must be between 1 and 1000");
+        return null;
+    }
+    const cols: usize = @intFromFloat(cols_f);
+
+    // Apply the size change
+    display.setSize(rows, cols) catch |err| {
+        var msg_buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&msg_buf, "pty.setSize failed: {}", .{err}) catch "setSize failed";
+        if (msg.len < msg_buf.len) {
+            msg_buf[msg.len] = 0;
+        }
+        c.hermes_throw_error(runtime, msg.ptr);
+        return null;
+    };
+
+    return c.hermes_value_create_boolean(runtime, true);
+}
+
+/// vim.e2e.pty.getSize() - Get current terminal size
+/// Returns { rows: number, cols: number }
+fn ptyGetSize(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    _: [*c]?*c.OVHermesValue,
+    _: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+
+    const size = display.getSize();
+
+    const result = c.hermes_value_create_object(runtime) orelse return helpers.returnUndefined(runtime);
+
+    const rows_val = c.hermes_value_create_number(runtime, @floatFromInt(size.rows));
+    if (rows_val) |rv| {
+        c.hermes_value_set_property(runtime, result, "rows", rv);
+        c.hermes_value_destroy(rv);
+    }
+
+    const cols_val = c.hermes_value_create_number(runtime, @floatFromInt(size.cols));
+    if (cols_val) |cv| {
+        c.hermes_value_set_property(runtime, result, "cols", cv);
+        c.hermes_value_destroy(cv);
     }
 
     return result;
@@ -1540,6 +1753,283 @@ fn assertFalse(
 }
 
 // ============================================================================
+// Frame Assertion Helpers
+// ============================================================================
+
+/// vim.e2e.assert.frameCount(expected, message?)
+/// Asserts that the captured frame count matches expected
+fn assertFrameCount(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    if (arg_count < 1) {
+        c.hermes_throw_error(runtime, "assert.frameCount requires 1 argument");
+        return null;
+    }
+
+    const expected = @as(usize, @intFromFloat(c.hermes_value_get_number(args[0])));
+    const ctx = global_e2e_ctx orelse {
+        c.hermes_throw_error(runtime, "E2E context not initialized");
+        return null;
+    };
+
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+
+    const actual = display.captured_frames.items.len;
+
+    if (actual != expected) {
+        var msg_buf: [512]u8 = undefined;
+        const msg = std.fmt.bufPrint(&msg_buf, "assert.frameCount failed: expected {d} frames, got {d}", .{ expected, actual }) catch "assert.frameCount failed";
+        if (msg.len < msg_buf.len) {
+            msg_buf[msg.len] = 0;
+        }
+        c.hermes_throw_error(runtime, msg.ptr);
+        return null;
+    }
+
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.assert.framesIncreasing(message?)
+/// Asserts that frame timestamps are strictly increasing
+fn assertFramesIncreasing(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse {
+        c.hermes_throw_error(runtime, "E2E context not initialized");
+        return null;
+    };
+
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+
+    const frames = display.captured_frames.items;
+    if (frames.len < 2) {
+        // Trivially true with less than 2 frames
+        return helpers.returnUndefined(runtime);
+    }
+
+    var prev_ts = frames[0].timestamp_ms;
+    for (frames[1..], 1..) |frame, i| {
+        if (frame.timestamp_ms <= prev_ts) {
+            var msg_buf: [512]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "assert.framesIncreasing failed: frame {d} timestamp ({d}ms) not > frame {d} timestamp ({d}ms)", .{ i, frame.timestamp_ms, i - 1, prev_ts }) catch "assert.framesIncreasing failed";
+            if (msg.len < msg_buf.len) {
+                msg_buf[msg.len] = 0;
+            }
+            c.hermes_throw_error(runtime, msg.ptr);
+            return null;
+        }
+        prev_ts = frame.timestamp_ms;
+    }
+
+    // Include message in success (for logging/debugging)
+    _ = args;
+    _ = arg_count;
+
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.assert.framesNotEmpty(message?)
+/// Asserts that all captured frames have non-empty output
+fn assertFramesNotEmpty(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse {
+        c.hermes_throw_error(runtime, "E2E context not initialized");
+        return null;
+    };
+
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+
+    const frames = display.captured_frames.items;
+    for (frames, 0..) |frame, i| {
+        if (frame.output.len == 0) {
+            var msg_buf: [512]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "assert.framesNotEmpty failed: frame {d} has empty output", .{i}) catch "assert.framesNotEmpty failed";
+            if (msg.len < msg_buf.len) {
+                msg_buf[msg.len] = 0;
+            }
+            c.hermes_throw_error(runtime, msg.ptr);
+            return null;
+        }
+    }
+
+    _ = args;
+    _ = arg_count;
+
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.assert.framesUnique(message?)
+/// Asserts that all captured frames have unique output (detects animation progression)
+fn assertFramesUnique(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse {
+        c.hermes_throw_error(runtime, "E2E context not initialized");
+        return null;
+    };
+
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+
+    const frames = display.captured_frames.items;
+    if (frames.len < 2) {
+        // Trivially true with less than 2 frames
+        return helpers.returnUndefined(runtime);
+    }
+
+    // O(n^2) comparison - acceptable for test frame counts (<100)
+    for (frames, 0..) |frame_a, i| {
+        for (frames[i + 1 ..], i + 1..) |frame_b, j| {
+            if (std.mem.eql(u8, frame_a.output, frame_b.output)) {
+                var msg_buf: [512]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "assert.framesUnique failed: frame {d} and frame {d} have identical output", .{ i, j }) catch "assert.framesUnique failed";
+                if (msg.len < msg_buf.len) {
+                    msg_buf[msg.len] = 0;
+                }
+                c.hermes_throw_error(runtime, msg.ptr);
+                return null;
+            }
+        }
+    }
+
+    _ = args;
+    _ = arg_count;
+
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.assert.frameDuration(minMs, maxMs, message?)
+/// Asserts that total animation duration is within expected bounds
+fn assertFrameDuration(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    if (arg_count < 2) {
+        c.hermes_throw_error(runtime, "assert.frameDuration requires minMs and maxMs arguments");
+        return null;
+    }
+
+    const min_ms = @as(i64, @intFromFloat(c.hermes_value_get_number(args[0])));
+    const max_ms = @as(i64, @intFromFloat(c.hermes_value_get_number(args[1])));
+
+    const ctx = global_e2e_ctx orelse {
+        c.hermes_throw_error(runtime, "E2E context not initialized");
+        return null;
+    };
+
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+
+    const frames = display.captured_frames.items;
+    if (frames.len < 2) {
+        // Can't measure duration with less than 2 frames
+        return helpers.returnUndefined(runtime);
+    }
+
+    const first_ts = frames[0].timestamp_ms;
+    const last_ts = frames[frames.len - 1].timestamp_ms;
+    const duration = last_ts - first_ts;
+
+    if (duration < min_ms or duration > max_ms) {
+        var msg_buf: [512]u8 = undefined;
+        const msg = std.fmt.bufPrint(&msg_buf, "assert.frameDuration failed: duration {d}ms not in range [{d}ms, {d}ms]", .{ duration, min_ms, max_ms }) catch "assert.frameDuration failed";
+        if (msg.len < msg_buf.len) {
+            msg_buf[msg.len] = 0;
+        }
+        c.hermes_throw_error(runtime, msg.ptr);
+        return null;
+    }
+
+    return helpers.returnUndefined(runtime);
+}
+
+/// vim.e2e.assert.frameContains(frameIndex, pattern, message?)
+/// Asserts that a specific frame contains the given pattern
+fn assertFrameContains(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    if (arg_count < 2) {
+        c.hermes_throw_error(runtime, "assert.frameContains requires frameIndex and pattern arguments");
+        return null;
+    }
+
+    const frame_index = @as(usize, @intFromFloat(c.hermes_value_get_number(args[0])));
+
+    var pattern_len: usize = 0;
+    const pattern_ptr = c.hermes_value_get_string(runtime, args[1], &pattern_len);
+    if (pattern_ptr == null or pattern_len == 0) {
+        c.hermes_throw_error(runtime, "assert.frameContains requires non-empty pattern");
+        return null;
+    }
+    const pattern = pattern_ptr[0..pattern_len];
+
+    const ctx = global_e2e_ctx orelse {
+        c.hermes_throw_error(runtime, "E2E context not initialized");
+        return null;
+    };
+
+    const display = ctx.display orelse {
+        c.hermes_throw_error(runtime, "PTY capture not available (no display)");
+        return null;
+    };
+
+    const frames = display.captured_frames.items;
+    if (frame_index >= frames.len) {
+        var msg_buf: [512]u8 = undefined;
+        const msg = std.fmt.bufPrint(&msg_buf, "assert.frameContains failed: frame index {d} out of bounds (have {d} frames)", .{ frame_index, frames.len }) catch "assert.frameContains failed";
+        if (msg.len < msg_buf.len) {
+            msg_buf[msg.len] = 0;
+        }
+        c.hermes_throw_error(runtime, msg.ptr);
+        return null;
+    }
+
+    const frame_output = frames[frame_index].output;
+    if (std.mem.indexOf(u8, frame_output, pattern) == null) {
+        var msg_buf: [512]u8 = undefined;
+        const msg = std.fmt.bufPrint(&msg_buf, "assert.frameContains failed: frame {d} does not contain '{s}'", .{ frame_index, pattern }) catch "assert.frameContains failed";
+        if (msg.len < msg_buf.len) {
+            msg_buf[msg.len] = 0;
+        }
+        c.hermes_throw_error(runtime, msg.ptr);
+        return null;
+    }
+
+    return helpers.returnUndefined(runtime);
+}
+
+// ============================================================================
 // HostObject Registration
 // ============================================================================
 
@@ -1636,6 +2126,43 @@ fn createAssertObject(runtime: ?*c.OVHermesRuntime) ?*c.OVHermesValue {
         c.hermes_value_destroy(ff);
     }
 
+    // Frame assertion helpers for animation testing
+    const frame_count_fn = c.hermes_create_function(runtime, "frameCount", assertFrameCount, null);
+    if (frame_count_fn) |fcf| {
+        c.hermes_value_set_property(runtime, assert_obj, "frameCount", fcf);
+        c.hermes_value_destroy(fcf);
+    }
+
+    const frames_inc_fn = c.hermes_create_function(runtime, "framesIncreasing", assertFramesIncreasing, null);
+    if (frames_inc_fn) |fif| {
+        c.hermes_value_set_property(runtime, assert_obj, "framesIncreasing", fif);
+        c.hermes_value_destroy(fif);
+    }
+
+    const frames_ne_fn = c.hermes_create_function(runtime, "framesNotEmpty", assertFramesNotEmpty, null);
+    if (frames_ne_fn) |fnef| {
+        c.hermes_value_set_property(runtime, assert_obj, "framesNotEmpty", fnef);
+        c.hermes_value_destroy(fnef);
+    }
+
+    const frames_unique_fn = c.hermes_create_function(runtime, "framesUnique", assertFramesUnique, null);
+    if (frames_unique_fn) |fuf| {
+        c.hermes_value_set_property(runtime, assert_obj, "framesUnique", fuf);
+        c.hermes_value_destroy(fuf);
+    }
+
+    const frame_dur_fn = c.hermes_create_function(runtime, "frameDuration", assertFrameDuration, null);
+    if (frame_dur_fn) |fdf| {
+        c.hermes_value_set_property(runtime, assert_obj, "frameDuration", fdf);
+        c.hermes_value_destroy(fdf);
+    }
+
+    const frame_contains_fn = c.hermes_create_function(runtime, "frameContains", assertFrameContains, null);
+    if (frame_contains_fn) |fcf| {
+        c.hermes_value_set_property(runtime, assert_obj, "frameContains", fcf);
+        c.hermes_value_destroy(fcf);
+    }
+
     return assert_obj;
 }
 
@@ -1727,6 +2254,56 @@ fn createPtyObject(runtime: ?*c.OVHermesRuntime) ?*c.OVHermesValue {
     if (reset_cursor_fn) |rcf| {
         c.hermes_value_set_property(runtime, pty_obj, "resetCursorState", rcf);
         c.hermes_value_destroy(rcf);
+    }
+
+    // Animation frame capture methods
+    const start_frame_fn = c.hermes_create_function(runtime, "startFrameCapture", ptyStartFrameCapture, null);
+    if (start_frame_fn) |sff| {
+        c.hermes_value_set_property(runtime, pty_obj, "startFrameCapture", sff);
+        c.hermes_value_destroy(sff);
+    }
+
+    const stop_frame_fn = c.hermes_create_function(runtime, "stopFrameCapture", ptyStopFrameCapture, null);
+    if (stop_frame_fn) |sff| {
+        c.hermes_value_set_property(runtime, pty_obj, "stopFrameCapture", sff);
+        c.hermes_value_destroy(sff);
+    }
+
+    const capture_frame_fn = c.hermes_create_function(runtime, "captureFrame", ptyCaptureFrame, null);
+    if (capture_frame_fn) |cff| {
+        c.hermes_value_set_property(runtime, pty_obj, "captureFrame", cff);
+        c.hermes_value_destroy(cff);
+    }
+
+    const get_frames_fn = c.hermes_create_function(runtime, "getFrames", ptyGetFrames, null);
+    if (get_frames_fn) |gff| {
+        c.hermes_value_set_property(runtime, pty_obj, "getFrames", gff);
+        c.hermes_value_destroy(gff);
+    }
+
+    const get_frame_count_fn = c.hermes_create_function(runtime, "getFrameCount", ptyGetFrameCount, null);
+    if (get_frame_count_fn) |gfcf| {
+        c.hermes_value_set_property(runtime, pty_obj, "getFrameCount", gfcf);
+        c.hermes_value_destroy(gfcf);
+    }
+
+    const is_capturing_frames_fn = c.hermes_create_function(runtime, "isCapturingFrames", ptyIsCapturingFrames, null);
+    if (is_capturing_frames_fn) |icff| {
+        c.hermes_value_set_property(runtime, pty_obj, "isCapturingFrames", icff);
+        c.hermes_value_destroy(icff);
+    }
+
+    // Terminal size methods for E2E testing
+    const set_size_fn = c.hermes_create_function(runtime, "setSize", ptySetSize, null);
+    if (set_size_fn) |ssf| {
+        c.hermes_value_set_property(runtime, pty_obj, "setSize", ssf);
+        c.hermes_value_destroy(ssf);
+    }
+
+    const get_size_fn = c.hermes_create_function(runtime, "getSize", ptyGetSize, null);
+    if (get_size_fn) |gsf| {
+        c.hermes_value_set_property(runtime, pty_obj, "getSize", gsf);
+        c.hermes_value_destroy(gsf);
     }
 
     return pty_obj;

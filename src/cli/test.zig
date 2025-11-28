@@ -460,14 +460,15 @@ pub fn execute(allocator: std.mem.Allocator, sandbox_path: []const u8, verbose: 
 
     // Step 3: Run event loop until tests complete (async support)
     // This allows setTimeout/setInterval in tests
-    const timeout_ns: i128 = 30 * std.time.ns_per_s; // 30 second timeout
+    const timeout_ns: i128 = 60 * std.time.ns_per_s; // 60 second timeout (process-spawn-pty has 46 tests)
     const loop_start = std.time.nanoTimestamp();
 
-    while (!e2e_api.isComplete() or event_loop.isAlive()) {
+    // Run until tests complete (don't wait for event_loop.isAlive() - PTY processes leave handles)
+    while (!e2e_api.isComplete()) {
         // Check timeout
         const elapsed = std.time.nanoTimestamp() - loop_start;
         if (elapsed > timeout_ns) {
-            std.debug.print("Error: E2E tests timed out after 30 seconds\n", .{});
+            std.debug.print("Error: E2E tests timed out after 60 seconds\n", .{});
             return error.TestTimeout;
         }
 

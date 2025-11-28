@@ -114,6 +114,14 @@ pub const TerminalBackend = struct {
             }
         }
 
+        // Track cursor position at START of input processing (for CursorMoved event)
+        // Like Neovim, we fire CursorMoved ONCE after all input is processed, not after each command
+        const CursorPos = struct { row: usize, col: usize };
+        const start_cursor: CursorPos = if (self.editor.getCurrentBuffer()) |b|
+            .{ .row = b.cursor.row, .col = b.cursor.col }
+        else
+            .{ .row = 0, .col = 0 };
+
         // CRITICAL: Process ALL complete sequences in buffer (may be multiple keys!)
         // InputHandler returns one sequence at a time, so loop until buffer is drained
         while (true) {
@@ -133,6 +141,12 @@ pub const TerminalBackend = struct {
                 },
                 .none => {
                     // Buffer empty - all sequences processed
+                    // Fire CursorMoved if cursor position changed (Neovim pattern: fire ONCE after all input)
+                    if (self.editor.getCurrentBuffer()) |b| {
+                        if (b.cursor.row != start_cursor.row or b.cursor.col != start_cursor.col) {
+                            self.editor.fireCursorMoved();
+                        }
+                    }
                     return true; // Render already triggered if we processed anything
                 },
                 .complete => |sequence| {
@@ -240,6 +254,8 @@ pub const TerminalBackend = struct {
                             const viewport_top = self.display.viewport_top;
                             self.editor.moveToViewportPosition(cmd, viewport_top, viewport_height);
                             needs_render.* = true;
+                            // NOTE: CursorMoved fires once at end of input processing (Neovim pattern)
+                            // See .none case above - no per-command fireCursorMoved() needed here
                         }
                     }
 
@@ -685,6 +701,7 @@ pub const TerminalBackend = struct {
                         win.cursor.row = buf.cursor.row;
                         win.cursor.col = buf.cursor.col;
                         win.ensureCursorVisible(); // Update viewport if cursor moved offscreen
+                        // NOTE: CursorMoved fires once at end of input processing (Neovim pattern)
                     }
                 }
             } else {
@@ -712,6 +729,7 @@ pub const TerminalBackend = struct {
 
                     buf.cursor.row = buffer_row;
                     buf.cursor.col = @min(buffer_col, line_len);
+                    // NOTE: CursorMoved fires once at end of input processing (Neovim pattern)
                 }
             }
         }
@@ -730,6 +748,7 @@ pub const TerminalBackend = struct {
             switch (kind) {
                 .arrow_up => {
                     _ = movement_module.moveUp(buf);
+                    // NOTE: CursorMoved fires once at end of input processing (Neovim pattern)
                     return true;
                 },
                 .arrow_down => {
