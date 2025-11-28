@@ -312,6 +312,7 @@ bool hermes_value_is_boolean(OVHermesValue* value);
 bool hermes_value_is_number(OVHermesValue* value);
 bool hermes_value_is_string(OVHermesValue* value);
 bool hermes_value_is_object(OVHermesValue* value);
+bool hermes_value_is_array(OVHermesRuntime* runtime, OVHermesValue* value);
 bool hermes_value_is_function(OVHermesRuntime* runtime, OVHermesValue* value);
 
 /**

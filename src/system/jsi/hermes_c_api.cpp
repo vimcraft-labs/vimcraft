@@ -785,6 +785,17 @@ bool hermes_value_is_object(OVHermesValue* value) {
     return value && value->value.isObject();
 }
 
+bool hermes_value_is_array(OVHermesRuntime* runtime, OVHermesValue* value) {
+    if (!runtime || !value || !value->value.isObject()) {
+        return false;
+    }
+    try {
+        return value->value.asObject(*runtime->runtime).isArray(*runtime->runtime);
+    } catch (...) {
+        return false;
+    }
+}
+
 bool hermes_value_is_function(OVHermesRuntime* runtime, OVHermesValue* value) {
     if (!runtime || !value || !value->value.isObject()) {
         return false;

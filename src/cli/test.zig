@@ -387,7 +387,9 @@ pub fn execute(allocator: std.mem.Allocator, sandbox_path: []const u8, verbose: 
     // Transpiler and bytecode compilation
     const esbuild = @import("../system/transpiler/esbuild.zig");
     const hermes = @import("../system/transpiler/hermes.zig");
-    const runtime_wrapper = @embedFile("../system/jsi/runtime.js");
+    // Runtime wrapper provides vim.* globals
+    // runtime_js is generated from runtime.ts by esbuild at build time (see build/runtime.zig)
+    const runtime_wrapper = @embedFile("runtime_js");
 
     // Step 1: Load config.ts (if exists) - sets up buffer, keymaps, options
     if (has_config) {

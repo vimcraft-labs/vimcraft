@@ -95,6 +95,109 @@ export type AutocmdID = number;
 export type CommandID = number;
 
 /**
+ * Extmark ID returned by `vim.api.bufSetExtmark()`.
+ *
+ * Used to identify and manage extmarks (extended marks) in buffers.
+ * Extmarks track positions and survive text edits.
+ *
+ * @example
+ * const ns = vim.api.createNamespace('my-plugin');
+ * const id: ExtmarkID = vim.api.bufSetExtmark(0, ns, 0, 0, { hlGroup: 'Error' });
+ */
+export type ExtmarkID = number;
+
+/**
+ * Options for creating or updating an extmark.
+ *
+ * @example
+ * // Simple extmark at position
+ * vim.api.bufSetExtmark(0, ns, 0, 5, {});
+ *
+ * // Extmark with highlight
+ * vim.api.bufSetExtmark(0, ns, 0, 5, {
+ *   endLine: 0,
+ *   endCol: 10,
+ *   hlGroup: 'Search'
+ * });
+ *
+ * // Extmark with priority
+ * vim.api.bufSetExtmark(0, ns, 0, 5, {
+ *   hlGroup: 'Error',
+ *   priority: 200
+ * });
+ */
+export interface ExtmarkOpts {
+  /** End line for range (0-indexed) */
+  endLine?: number;
+  /** End column for range (0-indexed, byte offset) */
+  endCol?: number;
+  /** Highlight group name */
+  hlGroup?: string;
+  /** Priority for overlapping highlights (higher = more priority, default: 4096) */
+  priority?: number;
+  /** Update existing extmark by ID instead of creating new */
+  id?: ExtmarkID;
+}
+
+/**
+ * Detailed information about an extmark when `details: true` is passed.
+ *
+ * @example
+ * const [id, line, col, details] = vim.api.bufGetExtmarkById(0, ns, extmarkId, { details: true });
+ * console.log(details.hlGroup); // 'Error'
+ */
+export interface ExtmarkDetails {
+  /** End line (0-indexed) */
+  endLine?: number;
+  /** End column (0-indexed, byte offset) */
+  endCol?: number;
+  /** Highlight group name */
+  hlGroup?: string;
+  /** Priority value */
+  priority?: number;
+}
+
+/**
+ * Options for querying extmarks.
+ *
+ * @example
+ * // Get all extmarks in namespace
+ * const marks = vim.api.bufGetExtmarks(0, ns, 0, -1, {});
+ *
+ * // Get extmarks with details
+ * const marksWithDetails = vim.api.bufGetExtmarks(0, ns, 0, -1, { details: true });
+ *
+ * // Limit results
+ * const first5 = vim.api.bufGetExtmarks(0, ns, 0, -1, { limit: 5 });
+ */
+export interface ExtmarkGetOpts {
+  /** Maximum number of extmarks to return */
+  limit?: number;
+  /** Include details (endLine, endCol, hlGroup, priority) */
+  details?: boolean;
+}
+
+/**
+ * Position specification for extmark queries.
+ *
+ * - `0`: Start of buffer
+ * - `-1`: End of buffer
+ * - `[line, col]`: Specific position (0-indexed)
+ * - `ExtmarkID`: Position of existing extmark
+ *
+ * @example
+ * // Get all extmarks
+ * vim.api.bufGetExtmarks(0, ns, 0, -1, {});
+ *
+ * // Get extmarks from line 5 to end
+ * vim.api.bufGetExtmarks(0, ns, [5, 0], -1, {});
+ *
+ * // Get extmarks from specific extmark to end
+ * vim.api.bufGetExtmarks(0, ns, existingExtmarkId, -1, {});
+ */
+export type ExtmarkPosition = 0 | -1 | [number, number] | ExtmarkID;
+
+/**
  * RGB color representation with integer values 0-255.
  *
  * @example
@@ -135,7 +238,7 @@ export interface Color {
  * // Link to an existing highlight group
  * vim.highlight('MyCustomGroup', { link: 'Comment' });
  *
- * @see https://vimcraft.com/docs/editor-api/user/api#nvim_set_hl()
+ * @see https://vimcraft.com/docs/api/highlight
  */
 export interface HighlightOpts {
   /**
@@ -1527,6 +1630,114 @@ export interface API {
 
   /** Clear namespace highlights */
   bufClearNamespace(buffer: Buffer, ns_id: Namespace, line_start: number, line_end: number): void;
+
+  // === Extmark Functions ===
+
+  /**
+   * Create or update an extmark.
+   *
+   * Extmarks are buffer annotations that track positions across edits.
+   * They can be used for highlighting, virtual text, diagnostics, etc.
+   *
+   * @param buffer - Buffer handle (0 for current)
+   * @param ns_id - Namespace ID from `createNamespace()`
+   * @param line - Line number (0-indexed)
+   * @param col - Column number (0-indexed, byte offset)
+   * @param opts - Extmark options
+   * @returns Extmark ID
+   *
+   * @example
+   * const ns = vim.api.createNamespace('my-plugin');
+   *
+   * // Simple extmark
+   * const id = vim.api.bufSetExtmark(0, ns, 0, 0, {});
+   *
+   * // Extmark with highlight
+   * vim.api.bufSetExtmark(0, ns, 0, 5, {
+   *   endLine: 0,
+   *   endCol: 10,
+   *   hlGroup: 'Search'
+   * });
+   *
+   * // Update existing extmark
+   * vim.api.bufSetExtmark(0, ns, 2, 0, { id: existingId });
+   */
+  bufSetExtmark(buffer: Buffer, ns_id: Namespace, line: number, col: number, opts: ExtmarkOpts): ExtmarkID;
+
+  /**
+   * Get extmarks in a range.
+   *
+   * @param buffer - Buffer handle (0 for current)
+   * @param ns_id - Namespace ID
+   * @param start - Start position (0, -1, [line, col], or extmark ID)
+   * @param end - End position (0, -1, [line, col], or extmark ID)
+   * @param opts - Query options
+   * @returns Array of extmarks: `[id, line, col]` or `[id, line, col, details]` if `details: true`
+   *
+   * @example
+   * // Get all extmarks in namespace
+   * const marks = vim.api.bufGetExtmarks(0, ns, 0, -1, {});
+   *
+   * // Get extmarks with details
+   * const marks = vim.api.bufGetExtmarks(0, ns, 0, -1, { details: true });
+   * for (const [id, line, col, details] of marks) {
+   *   console.log(`Extmark ${id} at ${line}:${col}, hl: ${details.hlGroup}`);
+   * }
+   *
+   * // Get first 5 extmarks starting from line 10
+   * const marks = vim.api.bufGetExtmarks(0, ns, [10, 0], -1, { limit: 5 });
+   */
+  bufGetExtmarks(
+    buffer: Buffer,
+    ns_id: Namespace,
+    start: ExtmarkPosition,
+    end: ExtmarkPosition,
+    opts?: ExtmarkGetOpts
+  ): [ExtmarkID, number, number][] | [ExtmarkID, number, number, ExtmarkDetails][];
+
+  /**
+   * Delete an extmark.
+   *
+   * @param buffer - Buffer handle (0 for current)
+   * @param ns_id - Namespace ID
+   * @param id - Extmark ID to delete
+   * @returns `true` if extmark was found and deleted, `false` otherwise
+   *
+   * @example
+   * const deleted = vim.api.bufDelExtmark(0, ns, extmarkId);
+   */
+  bufDelExtmark(buffer: Buffer, ns_id: Namespace, id: ExtmarkID): boolean;
+
+  /**
+   * Get extmark by ID.
+   *
+   * @param buffer - Buffer handle (0 for current)
+   * @param ns_id - Namespace ID
+   * @param id - Extmark ID
+   * @param opts - Query options
+   * @returns `[line, col]` or `[line, col, details]` if found, `null` if not found
+   *
+   * @example
+   * // Get position only
+   * const result = vim.api.bufGetExtmarkById(0, ns, extmarkId, {});
+   * if (result) {
+   *   const [line, col] = result;
+   *   console.log(`Extmark at ${line}:${col}`);
+   * }
+   *
+   * // Get position with details
+   * const result = vim.api.bufGetExtmarkById(0, ns, extmarkId, { details: true });
+   * if (result) {
+   *   const [line, col, details] = result;
+   *   console.log(`Extmark at ${line}:${col}, hl: ${details.hlGroup}`);
+   * }
+   */
+  bufGetExtmarkById(
+    buffer: Buffer,
+    ns_id: Namespace,
+    id: ExtmarkID,
+    opts?: ExtmarkGetOpts
+  ): [number, number] | [number, number, ExtmarkDetails] | null;
 
   // === Autocommand Functions ===
 
@@ -2929,16 +3140,434 @@ export interface Process {
 }
 
 // ============================================================================
-// LSP - Future
+// LSP (Language Server Protocol)
 // ============================================================================
 
 /**
- * LSP client interface (vim.lsp)
- * FUTURE: Phase 5+
+ * Options for starting an LSP client.
+ *
+ * @example
+ * ```typescript
+ * const client = await vim.lsp.start({
+ *   name: 'typescript-language-server',
+ *   cmd: ['typescript-language-server', '--stdio'],
+ *   root_dir: '/path/to/project',
+ *   capabilities: {
+ *     textDocument: { completion: { snippetSupport: true } }
+ *   },
+ *   on_attach: (client, bufnr) => {
+ *     console.log('LSP attached to buffer', bufnr);
+ *   },
+ * });
+ * ```
+ */
+export interface LspClientOptions {
+  /** Client name for logging and identification */
+  name: string;
+
+  /** Command and arguments to spawn the LSP server */
+  cmd: string[];
+
+  /** Project root directory (sent as rootUri to server) */
+  root_dir?: string;
+
+  /** Client capabilities to advertise to server */
+  capabilities?: Record<string, any>;
+
+  /** Workspace settings (sent as initializationOptions) */
+  settings?: Record<string, any>;
+
+  /** Callback when client attaches to a buffer */
+  on_attach?: (client: LspClient, bufnr: number) => void;
+
+  /** Callback when server exits */
+  on_exit?: (code: number, signal: string | null) => void;
+}
+
+/**
+ * Filter options for vim.lsp.get_clients().
+ */
+export interface LspClientFilter {
+  /** Filter by attached buffer number */
+  bufnr?: number;
+
+  /** Filter by client name */
+  name?: string;
+}
+
+/**
+ * LSP client instance - represents a connection to an LSP server.
+ *
+ * Created by `vim.lsp.start()`. Provides methods for sending requests,
+ * notifications, and handling server messages.
+ *
+ * @example
+ * ```typescript
+ * const client = await vim.lsp.start({
+ *   name: 'tsserver',
+ *   cmd: ['typescript-language-server', '--stdio'],
+ *   root_dir: process.cwd(),
+ * });
+ *
+ * // Handle diagnostics
+ * client.on('textDocument/publishDiagnostics', (params) => {
+ *   console.log('Diagnostics:', params.diagnostics.length);
+ * });
+ *
+ * // Request hover info
+ * const hover = await client.request('textDocument/hover', {
+ *   textDocument: { uri: 'file:///path/to/file.ts' },
+ *   position: { line: 10, character: 5 },
+ * });
+ *
+ * // Send notification
+ * client.notify('textDocument/didOpen', {
+ *   textDocument: { uri, languageId: 'typescript', version: 1, text },
+ * });
+ *
+ * // Stop the client
+ * client.stop();
+ * ```
+ */
+export interface LspClient {
+  /** Unique client ID */
+  readonly id: number;
+
+  /** Client name */
+  readonly name: string;
+
+  /** Whether the client has completed initialization */
+  readonly initialized: boolean;
+
+  /** Server capabilities received from initialize response */
+  readonly server_capabilities: Record<string, any>;
+
+  /** List of attached buffer numbers */
+  readonly attached_buffers: number[];
+
+  /**
+   * Send a request to the LSP server and wait for response.
+   *
+   * @param method - LSP method name (e.g., 'textDocument/hover')
+   * @param params - Request parameters
+   * @returns Promise resolving to the server's response
+   *
+   * @example
+   * ```typescript
+   * const result = await client.request('textDocument/definition', {
+   *   textDocument: { uri: 'file:///path/to/file.ts' },
+   *   position: { line: 10, character: 5 },
+   * });
+   * ```
+   */
+  request(method: string, params?: Record<string, any>): Promise<any>;
+
+  /**
+   * Send a notification to the LSP server (fire-and-forget).
+   *
+   * @param method - LSP method name (e.g., 'textDocument/didOpen')
+   * @param params - Notification parameters
+   *
+   * @example
+   * ```typescript
+   * client.notify('textDocument/didSave', {
+   *   textDocument: { uri: 'file:///path/to/file.ts' },
+   * });
+   * ```
+   */
+  notify(method: string, params?: Record<string, any>): void;
+
+  /**
+   * Register a handler for server notifications.
+   *
+   * @param method - Method name to handle
+   * @param callback - Handler function
+   * @returns this (for chaining)
+   *
+   * @example
+   * ```typescript
+   * client.on('textDocument/publishDiagnostics', (params) => {
+   *   const { uri, diagnostics } = params;
+   *   console.log(`${diagnostics.length} diagnostics for ${uri}`);
+   * });
+   * ```
+   */
+  on(method: string, callback: (params: any) => void): this;
+
+  /**
+   * Check if server supports a capability.
+   *
+   * @param capability - Capability path (e.g., 'textDocument.hover', 'hoverProvider')
+   * @returns true if server supports the capability
+   *
+   * @example
+   * ```typescript
+   * if (client.supports('hoverProvider')) {
+   *   const hover = await client.request('textDocument/hover', ...);
+   * }
+   * ```
+   */
+  supports(capability: string): boolean;
+
+  /**
+   * Attach this client to a buffer.
+   *
+   * @param bufnr - Buffer number
+   */
+  attachBuffer(bufnr: number): void;
+
+  /**
+   * Detach this client from a buffer.
+   *
+   * @param bufnr - Buffer number
+   */
+  detachBuffer(bufnr: number): void;
+
+  /**
+   * Stop the LSP server gracefully.
+   *
+   * Sends shutdown request, then exit notification. Falls back to SIGTERM
+   * if shutdown fails or takes too long.
+   */
+  stop(): void;
+}
+
+/**
+ * LSP message framer for Content-Length parsing.
+ *
+ * Handles the LSP message framing protocol:
+ * ```
+ * Content-Length: <length>\r\n
+ * \r\n
+ * <JSON payload>
+ * ```
+ *
+ * @example
+ * ```typescript
+ * const framer = new vim.lsp.LspFramer();
+ * framer.onMessage((msg) => {
+ *   console.log('Received:', msg);
+ * });
+ *
+ * // Feed raw data from stdout
+ * framer.feed('Content-Length: 23\r\n\r\n{"jsonrpc":"2.0",...}');
+ *
+ * // Encode outgoing message
+ * const encoded = vim.lsp.LspFramer.encode({ jsonrpc: '2.0', ... });
+ * ```
+ */
+export interface LspFramerConstructor {
+  new (): LspFramer;
+
+  /**
+   * Encode a message with Content-Length header.
+   *
+   * @param message - JSON-RPC message object
+   * @returns Framed string with header
+   */
+  encode(message: Record<string, any>): string;
+}
+
+export interface LspFramer {
+  /**
+   * Set callback for complete messages.
+   *
+   * @param callback - Called with parsed JSON for each complete message
+   */
+  onMessage(callback: (message: any) => void): void;
+
+  /**
+   * Feed raw data from server stdout.
+   *
+   * @param data - Raw string data
+   */
+  feed(data: string): void;
+}
+
+/**
+ * vim.lsp - LSP client management interface.
+ *
+ * Provides high-level API for managing Language Server Protocol clients.
+ * Built on top of `process.spawn()` with JSON-RPC 2.0 message framing.
+ *
+ * @example
+ * ```typescript
+ * // Start a TypeScript language server
+ * const client = await vim.lsp.start({
+ *   name: 'tsserver',
+ *   cmd: ['typescript-language-server', '--stdio'],
+ *   root_dir: '/path/to/project',
+ *   on_attach: (client, bufnr) => {
+ *     // Setup keymaps when LSP attaches
+ *     vim.keymap.set('n', 'K', async () => {
+ *       const hover = await vim.lsp.buf_hover(bufnr, uri, line, col);
+ *       if (hover) showHover(hover);
+ *     }, { buffer: bufnr });
+ *   },
+ * });
+ *
+ * // Get all active clients
+ * const clients = vim.lsp.get_clients();
+ *
+ * // Get clients for a specific buffer
+ * const bufferClients = vim.lsp.get_clients({ bufnr: 0 });
+ *
+ * // Stop a client
+ * vim.lsp.stop_client(client);
+ * ```
  */
 export interface LSP {
-  // Placeholder for future implementation
-  [key: string]: any;
+  /**
+   * Start an LSP client.
+   *
+   * Spawns the LSP server process, performs initialize handshake,
+   * and returns the client instance.
+   *
+   * @param opts - Client configuration
+   * @returns Promise resolving to started client
+   * @throws Error if spawn or initialization fails
+   *
+   * @example
+   * ```typescript
+   * const client = await vim.lsp.start({
+   *   name: 'rust-analyzer',
+   *   cmd: ['rust-analyzer'],
+   *   root_dir: process.cwd(),
+   * });
+   * ```
+   */
+  start(opts: LspClientOptions): Promise<LspClient>;
+
+  /**
+   * Get all active LSP clients.
+   *
+   * @param filter - Optional filter criteria
+   * @returns Array of matching clients
+   *
+   * @example
+   * ```typescript
+   * // All clients
+   * const all = vim.lsp.get_clients();
+   *
+   * // Clients attached to buffer 0
+   * const forBuf = vim.lsp.get_clients({ bufnr: 0 });
+   *
+   * // Clients by name
+   * const rust = vim.lsp.get_clients({ name: 'rust-analyzer' });
+   * ```
+   */
+  get_clients(filter?: LspClientFilter): LspClient[];
+
+  /**
+   * Stop an LSP client.
+   *
+   * @param client_or_id - Client instance or client ID
+   * @param force - If true, send SIGKILL instead of graceful shutdown
+   *
+   * @example
+   * ```typescript
+   * vim.lsp.stop_client(client);
+   * vim.lsp.stop_client(1, true);  // Force kill client ID 1
+   * ```
+   */
+  stop_client(client_or_id: LspClient | number, force?: boolean): void;
+
+  /**
+   * Get client by ID.
+   *
+   * @param id - Client ID
+   * @returns Client or undefined if not found
+   */
+  get_client_by_id(id: number): LspClient | undefined;
+
+  // ========== Buffer-level helpers ==========
+
+  /**
+   * Send textDocument/didOpen notification to all clients attached to buffer.
+   *
+   * @param bufnr - Buffer number
+   * @param uri - Document URI (file://...)
+   * @param languageId - Language identifier (e.g., 'typescript')
+   * @param text - Document content
+   */
+  buf_did_open(bufnr: number, uri: string, languageId: string, text: string): void;
+
+  /**
+   * Send textDocument/didChange notification to all clients attached to buffer.
+   *
+   * @param bufnr - Buffer number
+   * @param uri - Document URI
+   * @param version - Document version number
+   * @param text - Full document text (full sync mode)
+   */
+  buf_did_change(bufnr: number, uri: string, version: number, text: string): void;
+
+  /**
+   * Send textDocument/didClose notification to all clients attached to buffer.
+   *
+   * @param bufnr - Buffer number
+   * @param uri - Document URI
+   */
+  buf_did_close(bufnr: number, uri: string): void;
+
+  /**
+   * Send textDocument/didSave notification to all clients attached to buffer.
+   *
+   * @param bufnr - Buffer number
+   * @param uri - Document URI
+   * @param text - Document text (optional, for includeText capability)
+   */
+  buf_did_save(bufnr: number, uri: string, text?: string): void;
+
+  // ========== Request helpers ==========
+
+  /**
+   * Request hover information at a position.
+   *
+   * @param bufnr - Buffer number
+   * @param uri - Document URI
+   * @param line - Line number (0-indexed)
+   * @param character - Character offset (0-indexed)
+   * @returns Hover result or null
+   */
+  buf_hover(bufnr: number, uri: string, line: number, character: number): Promise<any>;
+
+  /**
+   * Request definition location at a position.
+   *
+   * @param bufnr - Buffer number
+   * @param uri - Document URI
+   * @param line - Line number (0-indexed)
+   * @param character - Character offset (0-indexed)
+   * @returns Definition location(s) or null
+   */
+  buf_definition(bufnr: number, uri: string, line: number, character: number): Promise<any>;
+
+  /**
+   * Request references at a position.
+   *
+   * @param bufnr - Buffer number
+   * @param uri - Document URI
+   * @param line - Line number (0-indexed)
+   * @param character - Character offset (0-indexed)
+   * @param includeDeclaration - Include declaration in results (default: true)
+   * @returns Reference locations or null
+   */
+  buf_references(
+    bufnr: number,
+    uri: string,
+    line: number,
+    character: number,
+    includeDeclaration?: boolean
+  ): Promise<any>;
+
+  // ========== Advanced ==========
+
+  /** LspClient class for advanced use */
+  LspClient: new (opts: LspClientOptions) => LspClient;
+
+  /** LspFramer class for Content-Length message framing */
+  LspFramer: LspFramerConstructor;
 }
 
 // ============================================================================
@@ -4628,9 +5257,25 @@ export interface Vim {
   /**
    * LSP client interface.
    *
-   * @future Phase 5+ - Not yet implemented
+   * Provides high-level API for managing Language Server Protocol clients.
+   * Built on process.spawn() with JSON-RPC 2.0 message framing.
+   *
+   * @example
+   * ```typescript
+   * const client = await vim.lsp.start({
+   *   name: 'tsserver',
+   *   cmd: ['typescript-language-server', '--stdio'],
+   *   root_dir: '/path/to/project',
+   * });
+   *
+   * client.on('textDocument/publishDiagnostics', (params) => {
+   *   console.log('Diagnostics:', params.diagnostics);
+   * });
+   * ```
+   *
+   * @since Phase 5
    */
-  lsp?: LSP;
+  lsp: LSP;
 
   /**
    * Tree-sitter integration for syntax parsing.

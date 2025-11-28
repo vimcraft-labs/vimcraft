@@ -756,8 +756,9 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
     // Get cache directory from global state
     const cache_dir = global_cache_dir orelse return error.CacheNotInitialized;
 
-    // Load runtime wrapper
-    const runtime_wrapper = @embedFile("runtime.js");
+    // Load runtime wrapper (provides vim.* globals)
+    // runtime_js is generated from runtime.ts by esbuild at build time (see build/runtime.zig)
+    const runtime_wrapper = @embedFile("runtime_js");
 
     // Setup loader config
     const loader_config = transpiler.LoaderConfig{

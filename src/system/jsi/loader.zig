@@ -108,8 +108,9 @@ pub fn loadConfig(runtime: *c.OVHermesRuntime, filepath: []const u8, allocator: 
     const source = try file.readToEndAlloc(allocator, 1_000_000);
     defer allocator.free(source);
 
-    // Load runtime wrapper at compile time
-    const runtime_wrapper = @embedFile("runtime.js");
+    // Load runtime wrapper at compile time (provides vim.* globals)
+    // runtime_js is generated from runtime.ts by esbuild at build time (see build/runtime.zig)
+    const runtime_wrapper = @embedFile("runtime_js");
 
     // Wrap user config with runtime wrapper
     const wrapped_source = try std.fmt.allocPrint(allocator,

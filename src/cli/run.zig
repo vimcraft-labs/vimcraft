@@ -78,7 +78,9 @@ pub fn execute(
     // This is intentional - vimc run is for quick experimentation, not production
     const esbuild = @import("../system/transpiler/esbuild.zig");
     const hermes = @import("../system/transpiler/hermes.zig");
-    const runtime_wrapper = @embedFile("../system/jsi/runtime.js");
+    // Runtime wrapper provides vim.* API to JS
+    // runtime_js is generated from runtime.ts by esbuild at build time (see build/runtime.zig)
+    const runtime_wrapper = @embedFile("runtime_js");
 
     if (debug_mode) {
         std.debug.print("[vimc run] Bundling with esbuild...\n", .{});
