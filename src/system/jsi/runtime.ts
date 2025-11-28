@@ -2061,10 +2061,31 @@ LspFramer.prototype._parseMessages = function(this: LspFramerInstance): void {
       this._buffer = this._buffer.substring(headerEnd + 4);
     }
 
-    if (this._buffer.length < this._contentLength) return;
+    // LSP Content-Length is in bytes, not characters
+    // Find how many characters correspond to contentLength bytes
+    let charCount = 0;
+    let byteCount = 0;
+    while (charCount < this._buffer.length && byteCount < this._contentLength) {
+      const codePoint = this._buffer.codePointAt(charCount)!;
+      // Calculate UTF-8 byte length for this code point
+      if (codePoint <= 0x7F) {
+        byteCount += 1;
+      } else if (codePoint <= 0x7FF) {
+        byteCount += 2;
+      } else if (codePoint <= 0xFFFF) {
+        byteCount += 3;
+      } else {
+        byteCount += 4;
+        charCount++; // Skip surrogate pair's second half
+      }
+      charCount++;
+    }
 
-    const body = this._buffer.substring(0, this._contentLength);
-    this._buffer = this._buffer.substring(this._contentLength);
+    // Not enough bytes yet
+    if (byteCount < this._contentLength) return;
+
+    const body = this._buffer.substring(0, charCount);
+    this._buffer = this._buffer.substring(charCount);
     this._contentLength = -1;
 
     try {
@@ -2081,7 +2102,11 @@ LspFramer.prototype._parseMessages = function(this: LspFramerInstance): void {
 // Static method
 LspFramer.encode = function(message: object): string {
   const body = JSON.stringify(message);
-  return 'Content-Length: ' + body.length + '\r\n\r\n' + body;
+  // LSP requires Content-Length in bytes (UTF-8), not string length
+  // TextEncoder.encode() returns UTF-8 bytes
+  const encoder = new TextEncoder();
+  const byteLength = encoder.encode(body).length;
+  return 'Content-Length: ' + byteLength + '\r\n\r\n' + body;
 };
 
 interface LspClientOptions {
@@ -2092,12 +2117,16 @@ interface LspClientOptions {
   settings?: object;
   onAttach?: (client: LspClientInstance, bufnr: number) => void;
   onExit?: (code: number, signal: string) => void;
+  /** Default request timeout in milliseconds (default: 30000) */
+  requestTimeout?: number;
 }
 
 interface PendingRequest {
   resolve: (result: any) => void;
   reject: (error: Error) => void;
   method: string;
+  /** Timer ID for request timeout */
+  timeoutId?: any;
 }
 
 // LspClient using constructor function pattern (ES5 compatible)
@@ -2109,6 +2138,8 @@ interface LspClientInstance {
   settings: object;
   onAttach: ((client: LspClientInstance, bufnr: number) => void) | null;
   onExitCallback: ((code: number, signal: string) => void) | null;
+  /** Request timeout in milliseconds */
+  requestTimeout: number;
   _id: number;
   _requestId: number;
   _pendingRequests: Record<number, PendingRequest>;
@@ -2116,14 +2147,16 @@ interface LspClientInstance {
   _framer: LspFramerInstance;
   _process: any;
   _initialized: boolean;
+  _stopping: boolean;
   _serverCapabilities: object;
   _attachedBuffers: Record<number, boolean>;
   id: number;
   serverCapabilities: object;
   initialized: boolean;
+  stopping: boolean;
   attachedBuffers: number[];
   start(): Promise<LspClientInstance>;
-  request(method: string, params?: object): Promise<any>;
+  request(method: string, params?: object, options?: { timeout?: number }): Promise<any>;
   notify(method: string, params?: object): void;
   on(method: string, callback: (params: object) => void): LspClientInstance;
   stop(): void;
@@ -2159,6 +2192,8 @@ const LspClient = function(this: LspClientInstance, opts: LspClientOptions): voi
   this.settings = opts.settings || {};
   this.onAttach = opts.onAttach || null;
   this.onExitCallback = opts.onExit || null;
+  // Default timeout: 30 seconds
+  this.requestTimeout = opts.requestTimeout !== undefined ? opts.requestTimeout : 30000;
   this._id = LspClient._nextId++;
   this._requestId = 1;
   this._pendingRequests = {};
@@ -2166,6 +2201,7 @@ const LspClient = function(this: LspClientInstance, opts: LspClientOptions): voi
   this._framer = new (LspFramer as any)();
   this._process = null;
   this._initialized = false;
+  this._stopping = false;
   this._serverCapabilities = {};
   this._attachedBuffers = {};
 } as unknown as LspClientConstructor;
@@ -2193,6 +2229,12 @@ Object.defineProperty(LspClient.prototype, 'initialized', {
   configurable: true
 });
 
+Object.defineProperty(LspClient.prototype, 'stopping', {
+  get: function(this: LspClientInstance): boolean { return this._stopping; },
+  enumerable: true,
+  configurable: true
+});
+
 Object.defineProperty(LspClient.prototype, 'attachedBuffers', {
   get: function(this: LspClientInstance): number[] {
     return Object.keys(this._attachedBuffers).map(k => parseInt(k, 10));
@@ -2203,6 +2245,9 @@ Object.defineProperty(LspClient.prototype, 'attachedBuffers', {
 
 LspClient.prototype.start = function(this: LspClientInstance): Promise<LspClientInstance> {
   const self = this;
+  if (this._stopping) {
+    return Promise.reject(new Error('LSP client is stopping'));
+  }
   if (this._process) {
     return Promise.reject(new Error('LSP client already started'));
   }
@@ -2273,14 +2318,20 @@ LspClient.prototype._deepMerge = function(this: LspClientInstance, target: any, 
 LspClient.prototype._handleExit = function(this: LspClientInstance, code: number, signal: string): void {
   consoleAPI.log('[LSP:' + this.name + '] exited: code=' + code + ' signal=' + signal);
 
+  // Clear all pending request timeouts and reject them
   for (const id in this._pendingRequests) {
     if (Object.prototype.hasOwnProperty.call(this._pendingRequests, id)) {
-      this._pendingRequests[id].reject(new Error('LSP server exited'));
+      const pending = this._pendingRequests[id];
+      if (pending.timeoutId) {
+        (globalThis as any).clearTimeout(pending.timeoutId);
+      }
+      pending.reject(new Error('LSP server exited'));
     }
   }
   this._pendingRequests = {};
   this._process = null;
   this._initialized = false;
+  this._stopping = false;  // Reset so client could potentially be restarted
 
   const idx = LspClient._clients.indexOf(this);
   if (idx >= 0) {
@@ -2313,6 +2364,11 @@ LspClient.prototype._handleResponse = function(this: LspClientInstance, msg: any
   if (!pending) {
     consoleAPI.log('[LSP:' + this.name + '] Unknown response id:', msg.id);
     return;
+  }
+
+  // Clear timeout if set
+  if (pending.timeoutId) {
+    (globalThis as any).clearTimeout(pending.timeoutId);
   }
 
   delete this._pendingRequests[msg.id];
@@ -2369,22 +2425,43 @@ LspClient.prototype._sendError = function(this: LspClientInstance, id: number, c
 
 LspClient.prototype._send = function(this: LspClientInstance, msg: object): void {
   if (!this._process) {
+    if (this._stopping) {
+      throw new Error('LSP client is stopping');
+    }
     throw new Error('LSP client not started');
   }
   const encoded = LspFramer.encode(msg);
   this._process.stdin.write(encoded);
 };
 
-LspClient.prototype.request = function(this: LspClientInstance, method: string, params?: object): Promise<any> {
+LspClient.prototype.request = function(this: LspClientInstance, method: string, params?: object, options?: { timeout?: number }): Promise<any> {
   const self = this;
   const id = this._requestId++;
   const msg = { jsonrpc: '2.0', id, method, params: params || {} };
+  const timeout = (options && options.timeout !== undefined) ? options.timeout : self.requestTimeout;
 
   return new Promise(function(resolve, reject) {
-    self._pendingRequests[id] = { resolve, reject, method };
+    let timeoutId: any = null;
+
+    // Set up timeout if enabled (timeout > 0)
+    if (timeout > 0) {
+      timeoutId = (globalThis as any).setTimeout(function() {
+        const pending = self._pendingRequests[id];
+        if (pending) {
+          delete self._pendingRequests[id];
+          reject(new Error('LSP request timeout: ' + method + ' (waited ' + timeout + 'ms)'));
+        }
+      }, timeout);
+    }
+
+    self._pendingRequests[id] = { resolve, reject, method, timeoutId };
+
     try {
       self._send(msg);
     } catch (e) {
+      if (timeoutId) {
+        (globalThis as any).clearTimeout(timeoutId);
+      }
       delete self._pendingRequests[id];
       reject(e);
     }
@@ -2402,8 +2479,27 @@ LspClient.prototype.on = function(this: LspClientInstance, method: string, callb
 
 LspClient.prototype.stop = function(this: LspClientInstance): void {
   const self = this;
+
+  // Guard against multiple stop() calls
+  if (this._stopping) {
+    return;
+  }
+  this._stopping = true;
+
+  // Clear all pending request timeouts to avoid leaks
+  for (const id in this._pendingRequests) {
+    const pending = this._pendingRequests[id];
+    if (pending && pending.timeoutId) {
+      (globalThis as any).clearTimeout(pending.timeoutId);
+    }
+    if (pending) {
+      pending.reject(new Error('LSP client stopped'));
+    }
+  }
+  this._pendingRequests = {};
+
   if (this._process) {
-    this.request('shutdown', {}).then(function() {
+    this.request('shutdown', {}, { timeout: 5000 }).then(function() {
       self.notify('exit', {});
       (globalThis as any).setTimeout(function() {
         if (self._process) {
@@ -2462,6 +2558,15 @@ const vimLsp = {
     LspClient._clients.push(client);
 
     return client.start().catch(function(e) {
+      // Kill the process if it was spawned but initialization failed
+      if (client._process) {
+        try {
+          client._process.kill('SIGTERM');
+        } catch (killErr) {
+          // Ignore kill errors
+        }
+        client._process = null;
+      }
       const idx = LspClient._clients.indexOf(client);
       if (idx >= 0) {
         LspClient._clients.splice(idx, 1);
@@ -2501,8 +2606,39 @@ const vimLsp = {
     }
 
     if (client) {
-      if (force && client._process) {
-        client._process.kill('SIGKILL');
+      if (force) {
+        // Force kill: clean up immediately without graceful shutdown
+        client._stopping = true;
+
+        // Clear all pending request timeouts
+        for (const id in client._pendingRequests) {
+          const pending = client._pendingRequests[id];
+          if (pending && pending.timeoutId) {
+            (globalThis as any).clearTimeout(pending.timeoutId);
+          }
+          if (pending) {
+            pending.reject(new Error('LSP client force killed'));
+          }
+        }
+        client._pendingRequests = {};
+
+        // Kill process
+        if (client._process) {
+          try {
+            client._process.kill('SIGKILL');
+          } catch (e) {
+            // Ignore kill errors
+          }
+          client._process = null;
+        }
+
+        // Remove from clients list
+        const idx = LspClient._clients.indexOf(client);
+        if (idx >= 0) {
+          LspClient._clients.splice(idx, 1);
+        }
+
+        client._initialized = false;
       } else {
         client.stop();
       }
@@ -2516,8 +2652,364 @@ const vimLsp = {
     return undefined;
   },
 
+  // ========== Buffer-level notification helpers ==========
+
+  /**
+   * Send textDocument/didOpen notification to all clients attached to buffer
+   */
+  bufDidOpen(bufnr: number, uri: string, languageId: string, text: string): void {
+    const clients = vimLsp.getClients({ bufnr: bufnr });
+    for (const client of clients) {
+      client.notify('textDocument/didOpen', {
+        textDocument: {
+          uri: uri,
+          languageId: languageId,
+          version: 1,
+          text: text
+        }
+      });
+    }
+  },
+
+  /**
+   * Send textDocument/didChange notification to all clients attached to buffer
+   */
+  bufDidChange(bufnr: number, uri: string, version: number, text: string): void {
+    const clients = vimLsp.getClients({ bufnr: bufnr });
+    for (const client of clients) {
+      client.notify('textDocument/didChange', {
+        textDocument: { uri: uri, version: version },
+        contentChanges: [{ text: text }]
+      });
+    }
+  },
+
+  /**
+   * Send textDocument/didClose notification to all clients attached to buffer
+   */
+  bufDidClose(bufnr: number, uri: string): void {
+    const clients = vimLsp.getClients({ bufnr: bufnr });
+    for (const client of clients) {
+      client.notify('textDocument/didClose', {
+        textDocument: { uri: uri }
+      });
+    }
+  },
+
+  /**
+   * Send textDocument/didSave notification to all clients attached to buffer
+   */
+  bufDidSave(bufnr: number, uri: string, text?: string): void {
+    const clients = vimLsp.getClients({ bufnr: bufnr });
+    for (const client of clients) {
+      const params: any = { textDocument: { uri: uri } };
+      if (text !== undefined) {
+        params.text = text;
+      }
+      client.notify('textDocument/didSave', params);
+    }
+  },
+
+  // ========== Buffer-level request helpers ==========
+
+  /**
+   * Request hover information at a position
+   */
+  bufHover(bufnr: number, uri: string, line: number, character: number): Promise<any> {
+    const clients = vimLsp.getClients({ bufnr: bufnr });
+    if (clients.length === 0) {
+      return Promise.resolve(null);
+    }
+    return clients[0].request('textDocument/hover', {
+      textDocument: { uri: uri },
+      position: { line: line, character: character }
+    });
+  },
+
+  /**
+   * Request definition location at a position
+   */
+  bufDefinition(bufnr: number, uri: string, line: number, character: number): Promise<any> {
+    const clients = vimLsp.getClients({ bufnr: bufnr });
+    if (clients.length === 0) {
+      return Promise.resolve(null);
+    }
+    return clients[0].request('textDocument/definition', {
+      textDocument: { uri: uri },
+      position: { line: line, character: character }
+    });
+  },
+
+  /**
+   * Request references at a position
+   */
+  bufReferences(bufnr: number, uri: string, line: number, character: number, includeDeclaration?: boolean): Promise<any> {
+    const clients = vimLsp.getClients({ bufnr: bufnr });
+    if (clients.length === 0) {
+      return Promise.resolve(null);
+    }
+    return clients[0].request('textDocument/references', {
+      textDocument: { uri: uri },
+      position: { line: line, character: character },
+      context: { includeDeclaration: includeDeclaration !== false }
+    });
+  },
+
   LspClient,
   LspFramer,
+
+  /**
+   * Find first client attached to buffer that supports the given capability
+   * @internal
+   */
+  _findClientWithCapability(bufnr: number, capability: string): LspClientInstance | null {
+    const clients = vimLsp.getClients({ bufnr: bufnr });
+    for (const client of clients) {
+      if (client.supports(capability)) {
+        return client;
+      }
+    }
+    // Fall back to first client if none explicitly support capability
+    // (server may not have advertised all capabilities)
+    return clients.length > 0 ? clients[0] : null;
+  },
+
+  // vim.lsp.buf - buffer-level LSP operations
+  // Following Neovim's vim.lsp.buf pattern
+  buf: {
+    // Navigation methods
+
+    /**
+     * Request hover information at cursor position
+     * Displays documentation/signature for symbol under cursor
+     */
+    hover(): Promise<any> {
+      const bufnr = vim.api.nvim_get_current_buf();
+      const client = vimLsp._findClientWithCapability(bufnr, 'hoverProvider');
+      if (!client) {
+        return Promise.resolve(null);
+      }
+
+      const win = vim.api.nvim_get_current_win();
+      const cursor = vim.api.nvim_win_get_cursor(win);
+      const line = cursor[0] - 1; // 0-indexed
+      const col = cursor[1];
+
+      return client.request('textDocument/hover', {
+        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        position: { line: line, character: col }
+      });
+    },
+
+    /**
+     * Jump to definition of symbol under cursor
+     */
+    definition(): Promise<any> {
+      const bufnr = vim.api.nvim_get_current_buf();
+      const client = vimLsp._findClientWithCapability(bufnr, 'definitionProvider');
+      if (!client) {
+        return Promise.resolve(null);
+      }
+
+      const win = vim.api.nvim_get_current_win();
+      const cursor = vim.api.nvim_win_get_cursor(win);
+      const line = cursor[0] - 1;
+      const col = cursor[1];
+
+      return client.request('textDocument/definition', {
+        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        position: { line: line, character: col }
+      });
+    },
+
+    /**
+     * Find all references to symbol under cursor
+     */
+    references(opts?: { includeDeclaration?: boolean }): Promise<any> {
+      const bufnr = vim.api.nvim_get_current_buf();
+      const client = vimLsp._findClientWithCapability(bufnr, 'referencesProvider');
+      if (!client) {
+        return Promise.resolve(null);
+      }
+
+      const win = vim.api.nvim_get_current_win();
+      const cursor = vim.api.nvim_win_get_cursor(win);
+      const line = cursor[0] - 1;
+      const col = cursor[1];
+
+      const includeDeclaration = opts && opts.includeDeclaration !== undefined
+        ? opts.includeDeclaration
+        : true;
+
+      return client.request('textDocument/references', {
+        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        position: { line: line, character: col },
+        context: { includeDeclaration: includeDeclaration }
+      });
+    },
+
+    /**
+     * Jump to implementation of symbol under cursor
+     */
+    implementation(): Promise<any> {
+      const bufnr = vim.api.nvim_get_current_buf();
+      const client = vimLsp._findClientWithCapability(bufnr, 'implementationProvider');
+      if (!client) {
+        return Promise.resolve(null);
+      }
+
+      const win = vim.api.nvim_get_current_win();
+      const cursor = vim.api.nvim_win_get_cursor(win);
+      const line = cursor[0] - 1;
+      const col = cursor[1];
+
+      return client.request('textDocument/implementation', {
+        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        position: { line: line, character: col }
+      });
+    },
+
+    /**
+     * Jump to type definition of symbol under cursor
+     */
+    typeDefinition(): Promise<any> {
+      const bufnr = vim.api.nvim_get_current_buf();
+      const client = vimLsp._findClientWithCapability(bufnr, 'typeDefinitionProvider');
+      if (!client) {
+        return Promise.resolve(null);
+      }
+
+      const win = vim.api.nvim_get_current_win();
+      const cursor = vim.api.nvim_win_get_cursor(win);
+      const line = cursor[0] - 1;
+      const col = cursor[1];
+
+      return client.request('textDocument/typeDefinition', {
+        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        position: { line: line, character: col }
+      });
+    },
+
+    // Editing methods
+
+    /**
+     * Format current buffer using LSP
+     */
+    formatting(opts?: { tabSize?: number; insertSpaces?: boolean }): Promise<any> {
+      const bufnr = vim.api.nvim_get_current_buf();
+      const client = vimLsp._findClientWithCapability(bufnr, 'documentFormattingProvider');
+      if (!client) {
+        return Promise.resolve(null);
+      }
+
+      const tabSize = opts && opts.tabSize !== undefined ? opts.tabSize : 4;
+      const insertSpaces = opts && opts.insertSpaces !== undefined ? opts.insertSpaces : true;
+
+      return client.request('textDocument/formatting', {
+        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        options: {
+          tabSize: tabSize,
+          insertSpaces: insertSpaces
+        }
+      });
+    },
+
+    /**
+     * Rename symbol under cursor
+     */
+    rename(newName?: string): Promise<any> {
+      const bufnr = vim.api.nvim_get_current_buf();
+      const client = vimLsp._findClientWithCapability(bufnr, 'renameProvider');
+      if (!client) {
+        return Promise.resolve(null);
+      }
+
+      // If no name provided, this would typically show a prompt
+      // For now, just return early if no name
+      if (!newName) {
+        return Promise.resolve(null);
+      }
+
+      const win = vim.api.nvim_get_current_win();
+      const cursor = vim.api.nvim_win_get_cursor(win);
+      const line = cursor[0] - 1;
+      const col = cursor[1];
+
+      return client.request('textDocument/rename', {
+        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        position: { line: line, character: col },
+        newName: newName
+      });
+    },
+
+    /**
+     * Request code actions at cursor position
+     */
+    codeAction(opts?: { only?: string[] }): Promise<any> {
+      const bufnr = vim.api.nvim_get_current_buf();
+      const client = vimLsp._findClientWithCapability(bufnr, 'codeActionProvider');
+      if (!client) {
+        return Promise.resolve(null);
+      }
+
+      const win = vim.api.nvim_get_current_win();
+      const cursor = vim.api.nvim_win_get_cursor(win);
+      const line = cursor[0] - 1;
+      const col = cursor[1];
+
+      const context: any = { diagnostics: [] };
+      if (opts && opts.only) {
+        context.only = opts.only;
+      }
+
+      return client.request('textDocument/codeAction', {
+        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        range: {
+          start: { line: line, character: col },
+          end: { line: line, character: col }
+        },
+        context: context
+      });
+    },
+
+    // Helper methods
+
+    /**
+     * Request signature help (parameter hints)
+     */
+    signatureHelp(): Promise<any> {
+      const bufnr = vim.api.nvim_get_current_buf();
+      const client = vimLsp._findClientWithCapability(bufnr, 'signatureHelpProvider');
+      if (!client) {
+        return Promise.resolve(null);
+      }
+
+      const win = vim.api.nvim_get_current_win();
+      const cursor = vim.api.nvim_win_get_cursor(win);
+      const line = cursor[0] - 1;
+      const col = cursor[1];
+
+      return client.request('textDocument/signatureHelp', {
+        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        position: { line: line, character: col }
+      });
+    },
+
+    /**
+     * Request document symbols (outline)
+     */
+    documentSymbol(): Promise<any> {
+      const bufnr = vim.api.nvim_get_current_buf();
+      const client = vimLsp._findClientWithCapability(bufnr, 'documentSymbolProvider');
+      if (!client) {
+        return Promise.resolve(null);
+      }
+
+      return client.request('textDocument/documentSymbol', {
+        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) }
+      });
+    }
+  }
 };
 
 vim.lsp = vimLsp;

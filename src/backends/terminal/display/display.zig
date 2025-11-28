@@ -397,24 +397,20 @@ pub const Display = struct {
     }
 
     /// Unsuppress cursor visibility (after plugin animation completes)
-    /// This restores normal showCursor() behavior. The cursor will be shown
-    /// on the NEXT render cycle, NOT immediately. This prevents flickering
-    /// by ensuring the smear layer is cleared before the cursor appears.
+    /// This restores normal showCursor() behavior and shows the cursor immediately.
     ///
-    /// CRITICAL FIX for "tiny flickering":
-    /// Previously, unsuppressCursor() immediately sent showCursor escape code.
-    /// This caused the cursor to appear while the smear trail was still visible,
-    /// creating a brief flicker. By deferring cursor show to next render:
-    ///   1. Animation ends → clearCursorRenderPosition() → sets cursor_suppressed = false
-    ///   2. Layer cleared (marks dirty) → triggers re-render
-    ///   3. Render cycle → clears layer → shows cursor at correct position
-    /// Result: Cursor only appears AFTER layer is cleared, eliminating flicker.
+    /// CRITICAL FIX: When animation stops, no render cycle happens automatically.
+    /// If we only set cursor_suppressed = false without showing, the cursor stays
+    /// hidden forever. We must call showCursor() here to make it visible again.
+    ///
+    /// Flow:
+    ///   1. Animation ends → stopAnimation() → unsuppressCursor()
+    ///   2. cursor_suppressed = false → showCursor() now allowed
+    ///   3. showCursor() sends escape code → cursor appears
     pub fn unsuppressCursor(self: *Display) !void {
         self.cursor_suppressed = false;
-        // NOTE: Do NOT show cursor here! Let the next render cycle handle it.
-        // This ensures the cursor only appears AFTER the smear layer is cleared
-        // and the screen is properly rendered. The backend.render() function
-        // will call showCursor() after all rendering is complete.
+        // Show cursor immediately - no render cycle will happen after animation stops
+        try self.showCursor();
     }
 
     /// Check if cursor is currently suppressed

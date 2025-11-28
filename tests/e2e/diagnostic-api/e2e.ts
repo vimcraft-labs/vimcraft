@@ -105,7 +105,7 @@ vim.e2e.describe("vim.diagnostic", function () {
       vim.diagnostic.reset(ns, buf);
     });
 
-    vim.e2e.test("normalizes end_lnum and end_col", function () {
+    vim.e2e.test("normalizes endLnum and endCol", function () {
       const ns = vim.api.createNamespace("test_normalize");
       const buf = vim.api.getCurrentBuf();
 
@@ -120,9 +120,9 @@ vim.e2e.describe("vim.diagnostic", function () {
 
       const diagnostics = vim.diagnostic.get(buf);
       vim.e2e.assert.equal(diagnostics.length, 1);
-      // end_lnum defaults to lnum, end_col defaults to col
-      vim.e2e.assert.equal(diagnostics[0].end_lnum, 1);
-      vim.e2e.assert.equal(diagnostics[0].end_col, 5);
+      // endLnum defaults to lnum, endCol defaults to col
+      vim.e2e.assert.equal(diagnostics[0].endLnum, 1);
+      vim.e2e.assert.equal(diagnostics[0].endCol, 5);
 
       vim.diagnostic.reset(ns, buf);
     });

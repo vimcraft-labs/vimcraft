@@ -3560,8 +3560,8 @@ export interface Process {
  * ```
  */
 export interface LspClientOptions {
-  /** Client name for logging and identification */
-  name: string;
+  /** Client name for logging and identification (default: 'lsp') */
+  name?: string;
 
   /** Command and arguments to spawn the LSP server */
   cmd: string[];
@@ -3580,6 +3580,14 @@ export interface LspClientOptions {
 
   /** Callback when server exits */
   onExit?: (code: number, signal: string | null) => void;
+
+  /**
+   * Default request timeout in milliseconds.
+   * If a request does not receive a response within this time, it will be rejected.
+   * Set to 0 to disable timeout.
+   * @default 30000 (30 seconds)
+   */
+  requestTimeout?: number;
 }
 
 /**
@@ -3637,6 +3645,9 @@ export interface LspClient {
   /** Whether the client has completed initialization */
   readonly initialized: boolean;
 
+  /** Whether the client is in the process of stopping */
+  readonly stopping: boolean;
+
   /** Server capabilities received from initialize response */
   readonly serverCapabilities: Record<string, any>;
 
@@ -3656,9 +3667,12 @@ export interface LspClient {
    *   textDocument: { uri: 'file:///path/to/file.ts' },
    *   position: { line: 10, character: 5 },
    * });
+   *
+   * // With custom timeout
+   * const result = await client.request('textDocument/completion', params, { timeout: 5000 });
    * ```
    */
-  request(method: string, params?: Record<string, any>): Promise<any>;
+  request(method: string, params?: Record<string, any>, options?: { timeout?: number }): Promise<any>;
 
   /**
    * Send a notification to the LSP server (fire-and-forget).
@@ -3720,6 +3734,14 @@ export interface LspClient {
    * @param bufnr - Buffer number
    */
   detachBuffer(bufnr: number): void;
+
+  /**
+   * Check if this client is attached to a buffer.
+   *
+   * @param bufnr - Buffer number
+   * @returns true if client is attached to the buffer
+   */
+  hasBuffer(bufnr: number): boolean;
 
   /**
    * Stop the LSP server gracefully.
@@ -3959,6 +3981,28 @@ export interface LSP {
     includeDeclaration?: boolean
   ): Promise<any>;
 
+  // ========== vim.lsp.buf namespace ==========
+
+  /**
+   * Buffer-local LSP operations.
+   *
+   * Methods in this namespace operate on the current buffer at the current cursor position.
+   * They automatically find attached LSP clients and send appropriate requests.
+   *
+   * @example
+   * ```typescript
+   * // Show hover info at cursor
+   * vim.lsp.buf.hover();
+   *
+   * // Go to definition
+   * vim.lsp.buf.definition();
+   *
+   * // Find all references
+   * vim.lsp.buf.references();
+   * ```
+   */
+  buf: LspBuf;
+
   // ========== Advanced ==========
 
   /** LspClient class for advanced use */
@@ -3966,6 +4010,168 @@ export interface LSP {
 
   /** LspFramer class for Content-Length message framing */
   LspFramer: LspFramerConstructor;
+}
+
+/**
+ * vim.lsp.buf - Buffer-local LSP operations.
+ *
+ * All methods operate on the current buffer at the current cursor position.
+ * Following Neovim's vim.lsp.buf pattern with camelCase naming.
+ *
+ * @example
+ * ```typescript
+ * // Map K to show hover
+ * vim.keymap.set('n', 'K', () => vim.lsp.buf.hover());
+ *
+ * // Map gd to go to definition
+ * vim.keymap.set('n', 'gd', () => vim.lsp.buf.definition());
+ * ```
+ */
+export interface LspBuf {
+  /**
+   * Display hover information at the current cursor position.
+   *
+   * Shows documentation, type info, or other hover content from the LSP server.
+   *
+   * @returns Promise resolving to hover result or null
+   *
+   * @example
+   * ```typescript
+   * vim.keymap.set('n', 'K', async () => {
+   *   const hover = await vim.lsp.buf.hover();
+   *   if (hover) {
+   *     // Display hover in floating window
+   *   }
+   * });
+   * ```
+   */
+  hover(): Promise<any>;
+
+  /**
+   * Jump to the definition of the symbol under cursor.
+   *
+   * If multiple definitions are found, may show a selection UI.
+   *
+   * @returns Promise resolving to definition location(s) or null
+   *
+   * @example
+   * ```typescript
+   * vim.keymap.set('n', 'gd', () => vim.lsp.buf.definition());
+   * ```
+   */
+  definition(): Promise<any>;
+
+  /**
+   * Find all references to the symbol under cursor.
+   *
+   * @param opts - Optional settings
+   * @param opts.includeDeclaration - Include declaration in results (default: true)
+   * @returns Promise resolving to reference locations or null
+   *
+   * @example
+   * ```typescript
+   * vim.keymap.set('n', 'gr', () => vim.lsp.buf.references());
+   * ```
+   */
+  references(opts?: { includeDeclaration?: boolean }): Promise<any>;
+
+  /**
+   * Show available code actions at the current cursor position.
+   *
+   * Code actions include quick fixes, refactorings, and source actions.
+   *
+   * @param opts - Optional filter options
+   * @param opts.only - Only show actions of these kinds (e.g., 'quickfix', 'refactor')
+   * @returns Promise resolving to available actions or null
+   *
+   * @example
+   * ```typescript
+   * vim.keymap.set('n', '<leader>ca', () => vim.lsp.buf.codeAction());
+   * ```
+   */
+  codeAction(opts?: { only?: string[] }): Promise<any>;
+
+  /**
+   * Rename the symbol under cursor.
+   *
+   * @param newName - New name for the symbol (prompts if not provided)
+   * @returns Promise resolving when rename is complete
+   *
+   * @example
+   * ```typescript
+   * vim.keymap.set('n', '<leader>rn', () => vim.lsp.buf.rename());
+   * ```
+   */
+  rename(newName?: string): Promise<any>;
+
+  /**
+   * Format the current buffer using LSP formatting.
+   *
+   * @param opts - Optional formatting options
+   * @param opts.tabSize - Size of a tab (default: from buffer options)
+   * @param opts.insertSpaces - Use spaces instead of tabs
+   * @returns Promise resolving to text edits or null
+   *
+   * @example
+   * ```typescript
+   * vim.keymap.set('n', '<leader>f', () => vim.lsp.buf.formatting());
+   * ```
+   */
+  formatting(opts?: { tabSize?: number; insertSpaces?: boolean }): Promise<any>;
+
+  /**
+   * Jump to the implementation of the symbol under cursor.
+   *
+   * For interfaces/abstract classes, jumps to implementing types.
+   *
+   * @returns Promise resolving to implementation location(s) or null
+   *
+   * @example
+   * ```typescript
+   * vim.keymap.set('n', 'gi', () => vim.lsp.buf.implementation());
+   * ```
+   */
+  implementation(): Promise<any>;
+
+  /**
+   * Jump to the type definition of the symbol under cursor.
+   *
+   * @returns Promise resolving to type definition location(s) or null
+   *
+   * @example
+   * ```typescript
+   * vim.keymap.set('n', 'gt', () => vim.lsp.buf.typeDefinition());
+   * ```
+   */
+  typeDefinition(): Promise<any>;
+
+  /**
+   * Show signature help for the current function call.
+   *
+   * Displays parameter hints and documentation for function arguments.
+   *
+   * @returns Promise resolving to signature help or null
+   *
+   * @example
+   * ```typescript
+   * vim.keymap.set('i', '<C-k>', () => vim.lsp.buf.signatureHelp());
+   * ```
+   */
+  signatureHelp(): Promise<any>;
+
+  /**
+   * List document symbols in the current buffer.
+   *
+   * Shows functions, classes, variables, etc. in the current file.
+   *
+   * @returns Promise resolving to document symbols or null
+   *
+   * @example
+   * ```typescript
+   * vim.keymap.set('n', '<leader>ds', () => vim.lsp.buf.documentSymbol());
+   * ```
+   */
+  documentSymbol(): Promise<any>;
 }
 
 // ============================================================================

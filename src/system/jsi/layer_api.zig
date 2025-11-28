@@ -595,6 +595,108 @@ pub export fn clearLayer(
     return c.hermes_value_create_undefined(runtime);
 }
 
+/// Zig host function: screenchar(row, col) -> number
+/// JavaScript: vim.layer.screenchar(row, col) -> codepoint
+/// Returns the character code at screen position (like vim.fn.screenchar)
+/// This reads from the compositor's output grid - the final blended result
+pub export fn screenchar(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const display = global_display orelse return c.hermes_value_create_number(runtime, 0);
+
+    if (count < 2) {
+        return c.hermes_value_create_number(runtime, 0);
+    }
+
+    // Arg 0: row (number)
+    if (args[0] == null or !c.hermes_value_is_number(args[0])) {
+        return c.hermes_value_create_number(runtime, 0);
+    }
+
+    // Arg 1: col (number)
+    if (args[1] == null or !c.hermes_value_is_number(args[1])) {
+        return c.hermes_value_create_number(runtime, 0);
+    }
+
+    const row_f = c.hermes_value_get_number(args[0]);
+    const col_f = c.hermes_value_get_number(args[1]);
+
+    // Validate coordinates
+    if (std.math.isNan(row_f) or std.math.isInf(row_f) or row_f < 0) {
+        return c.hermes_value_create_number(runtime, 0);
+    }
+    if (std.math.isNan(col_f) or std.math.isInf(col_f) or col_f < 0) {
+        return c.hermes_value_create_number(runtime, 0);
+    }
+
+    const row: usize = @intFromFloat(row_f);
+    const col: usize = @intFromFloat(col_f);
+
+    // Get cell from compositor output grid
+    const output = display.compositor.getOutput();
+    const cell = output.getCell(row, col) orelse {
+        return c.hermes_value_create_number(runtime, 0);
+    };
+
+    // Return character codepoint as number
+    return c.hermes_value_create_number(runtime, @floatFromInt(cell.char));
+}
+
+/// Zig host function: suppressCursor()
+/// JavaScript: vim.layer.suppressCursor()
+/// Hides the terminal cursor during custom cursor animation (e.g., smear cursor)
+pub export fn suppressCursor(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+    _ = args;
+    _ = count;
+
+    const display = global_display orelse return c.hermes_value_create_undefined(runtime);
+
+    // Suppress the terminal cursor (hides it immediately)
+    display.suppressCursor() catch {
+        debug_log.log("[JSI] suppressCursor() - failed to suppress cursor", .{});
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    debug_log.log("[JSI] suppressCursor() - cursor hidden for animation", .{});
+    return c.hermes_value_create_undefined(runtime);
+}
+
+/// Zig host function: unsuppressCursor()
+/// JavaScript: vim.layer.unsuppressCursor()
+/// Shows the terminal cursor after custom cursor animation ends
+pub export fn unsuppressCursor(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+    _ = args;
+    _ = count;
+
+    const display = global_display orelse return c.hermes_value_create_undefined(runtime);
+
+    // Unsuppress the terminal cursor (will be shown on next render)
+    display.unsuppressCursor() catch {
+        debug_log.log("[JSI] unsuppressCursor() - failed to unsuppress cursor", .{});
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    debug_log.log("[JSI] unsuppressCursor() - cursor will show on next render", .{});
+    return c.hermes_value_create_undefined(runtime);
+}
+
 /// Zig host function: destroyLayer(name)
 /// JavaScript: destroyLayer('my_layer')
 /// Destroys layer and frees resources
@@ -666,6 +768,9 @@ pub export fn layerHostObjectGet(
         .{ "setLayerOpacity", setLayerOpacity },
         .{ "clearLayer", clearLayer },
         .{ "destroyLayer", destroyLayer },
+        .{ "screenchar", screenchar },
+        .{ "suppressCursor", suppressCursor },
+        .{ "unsuppressCursor", unsuppressCursor },
     });
 
     const func = PropertyMap.get(name) orelse return null;
@@ -692,6 +797,9 @@ pub export fn layerHostObjectEnumerator(
         "setLayerOpacity",
         "clearLayer",
         "destroyLayer",
+        "screenchar",
+        "suppressCursor",
+        "unsuppressCursor",
     };
 
     const arr = c.hermes_array_create(rt, method_names.len) orelse return null;

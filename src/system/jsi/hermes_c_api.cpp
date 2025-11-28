@@ -248,12 +248,18 @@ OVHermesValue* hermes_evaluate_bytecode(
 }
 
 bool hermes_has_exception(OVHermesRuntime* runtime) {
-    // Only check pending_throw flag (set when host function wants to throw).
-    // DO NOT check last_exception_message - that is just storage for the message
-    // text and remains set even after JavaScript catches the exception.
-    // When JS catches an error with try/catch, the error is handled and we
-    // should NOT report it as an exception.
-    return runtime->pending_throw;
+    // Check both pending_throw flag AND last_exception_message.
+    //
+    // Why we need to check last_exception_message:
+    // When a host function (like assert.equal) throws via hermes_throw_error:
+    // 1. hermes_throw_error sets pending_throw = true
+    // 2. The host function wrapper checks pending_throw, clears it, then throws JSError
+    // 3. hermes_call_function catches JSError and stores message in last_exception_message
+    // 4. At this point pending_throw is false but we DID have an exception
+    //
+    // The last_exception_message is ONLY set when an actual exception was thrown.
+    // It is cleared by hermes_clear_exception().
+    return runtime->pending_throw || !runtime->last_exception_message.empty();
 }
 
 const char* hermes_get_exception_message(OVHermesRuntime* runtime) {
