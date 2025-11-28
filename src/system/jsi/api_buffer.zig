@@ -971,6 +971,101 @@ pub export fn apiBufGetOffset(
 }
 
 // ============================================================================
+// vim.api.bufGetCharAt(buf, row, col) -> string
+// Returns the character at the specified position (single UTF-8 codepoint)
+// Used by smear-cursor to render the character under the cursor block
+// ============================================================================
+
+pub export fn apiBufGetCharAt(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const rt = runtime orelse return null;
+    const ctx = global_ctx orelse return c.hermes_value_create_string(rt, "", 0);
+
+    if (count < 3) return c.hermes_value_create_string(rt, "", 0);
+
+    const buf_handle_val = args[0] orelse return c.hermes_value_create_string(rt, "", 0);
+    const row_val = args[1] orelse return c.hermes_value_create_string(rt, "", 0);
+    const col_val = args[2] orelse return c.hermes_value_create_string(rt, "", 0);
+
+    const buf_handle = @as(i64, @intFromFloat(c.hermes_value_get_number(buf_handle_val)));
+    const row = @as(i64, @intFromFloat(c.hermes_value_get_number(row_val)));
+    const col = @as(i64, @intFromFloat(c.hermes_value_get_number(col_val)));
+
+    if (row < 0 or col < 0) return c.hermes_value_create_string(rt, " ", 1);
+
+    const buffer = getBufferByHandle(buf_handle) orelse return c.hermes_value_create_string(rt, " ", 1);
+    const line_count = buffer.lineCount();
+
+    if (@as(usize, @intCast(row)) >= line_count) return c.hermes_value_create_string(rt, " ", 1);
+
+    const line = buffer.getLine(@intCast(row)) orelse return c.hermes_value_create_string(rt, " ", 1);
+    defer ctx.allocator.free(line);
+
+    // Remove trailing newline if present
+    const clean_line = if (line.len > 0 and line[line.len - 1] == '\n')
+        line[0 .. line.len - 1]
+    else
+        line;
+
+    // Handle column bounds - return space if beyond line end
+    if (@as(usize, @intCast(col)) >= clean_line.len) {
+        return c.hermes_value_create_string(rt, " ", 1);
+    }
+
+    // Find UTF-8 character at column (need to iterate codepoints)
+    const target_col: usize = @intCast(col);
+    var byte_idx: usize = 0;
+    var col_idx: usize = 0;
+
+    while (byte_idx < clean_line.len and col_idx < target_col) {
+        const byte = clean_line[byte_idx];
+        // Determine UTF-8 sequence length
+        const seq_len: usize = if (byte & 0x80 == 0)
+            1
+        else if (byte & 0xE0 == 0xC0)
+            2
+        else if (byte & 0xF0 == 0xE0)
+            3
+        else if (byte & 0xF8 == 0xF0)
+            4
+        else
+            1; // Invalid UTF-8, treat as single byte
+
+        byte_idx += seq_len;
+        col_idx += 1;
+    }
+
+    // Now byte_idx points to the start of the character at target_col
+    if (byte_idx >= clean_line.len) {
+        return c.hermes_value_create_string(rt, " ", 1);
+    }
+
+    // Determine length of character at this position
+    const byte = clean_line[byte_idx];
+    const char_len: usize = if (byte & 0x80 == 0)
+        1
+    else if (byte & 0xE0 == 0xC0)
+        2
+    else if (byte & 0xF0 == 0xE0)
+        3
+    else if (byte & 0xF8 == 0xF0)
+        4
+    else
+        1;
+
+    const end_idx = @min(byte_idx + char_len, clean_line.len);
+    const char_slice = clean_line[byte_idx..end_idx];
+
+    return c.hermes_value_create_string(rt, char_slice.ptr, char_slice.len);
+}
+
+// ============================================================================
 // vim.api.bufCall(buf, fun) -> any
 // ============================================================================
 
@@ -1054,6 +1149,7 @@ fn registerFunctions(runtime: *c.OVHermesRuntime) void {
     c.hermes_register_host_function(runtime, "vimApiBufGetChangedtick", apiBufGetChangedtick, null);
     c.hermes_register_host_function(runtime, "vimApiBufGetOffset", apiBufGetOffset, null);
     c.hermes_register_host_function(runtime, "vimApiBufCall", apiBufCall, null);
+    c.hermes_register_host_function(runtime, "vimApiBufGetCharAt", apiBufGetCharAt, null);
 }
 
 pub fn deinit() void {

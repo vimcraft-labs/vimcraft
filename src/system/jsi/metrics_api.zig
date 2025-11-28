@@ -132,10 +132,10 @@ export fn vimMetricsGetPluginLoadTimes(
             c.hermes_value_destroy(name_val);
         }
 
-        // Set duration_ms property
+        // Set durationMs property
         const duration_val = c.hermes_value_create_number(rt, @floatFromInt(plugin.duration_ms));
         if (duration_val != null) {
-            c.hermes_value_set_property(rt, obj, "duration_ms", duration_val);
+            c.hermes_value_set_property(rt, obj, "durationMs", duration_val);
             c.hermes_value_destroy(duration_val);
         }
 
@@ -193,10 +193,10 @@ export fn vimMetricsHostObjectGet(
                 c.hermes_value_destroy(name_val);
             }
 
-            // Set duration_ms property
+            // Set durationMs property
             const duration_val = c.hermes_value_create_number(rt, @floatFromInt(plugin.duration_ms));
             if (duration_val != null) {
-                c.hermes_value_set_property(rt, obj, "duration_ms", duration_val);
+                c.hermes_value_set_property(rt, obj, "durationMs", duration_val);
                 c.hermes_value_destroy(duration_val);
             }
 

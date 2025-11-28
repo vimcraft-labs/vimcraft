@@ -1031,6 +1031,12 @@ fn registerFunctions(runtime: *c.OVHermesRuntime) void {
 
     // Editor-level functions (mode)
     c.hermes_register_host_function(runtime, "vimApiGetMode", apiGetMode, null);
+
+    // Floating window functions
+    c.hermes_register_host_function(runtime, "vimApiOpenWin", apiOpenWin, null);
+    c.hermes_register_host_function(runtime, "vimApiWinSetConfig", apiWinSetConfig, null);
+    c.hermes_register_host_function(runtime, "vimApiWinGetConfig", apiWinGetConfig, null);
+    c.hermes_register_host_function(runtime, "vimApiWinHide", apiWinHide, null);
 }
 
 /// Cleanup
@@ -1077,10 +1083,177 @@ fn getDimensionsFromEditorContext(ptr: *anyopaque) Dimensions {
 }
 
 // ============================================================================
+// Floating Window API Functions
+// ============================================================================
+
+/// vim.api.openWin(buf, enter, config) -> Window
+/// Opens a new floating window displaying buffer `buf`
+/// `enter` - if true, enter the window (make it current)
+/// `config` - FloatingConfig object
+pub export fn apiOpenWin(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const rt = runtime orelse return null;
+    const ctx = global_ctx orelse return c.hermes_value_create_null(rt);
+
+    // Validate arguments (buf, enter, config)
+    if (count < 3) return c.hermes_value_create_null(rt);
+
+    const buf_val = args[0] orelse return c.hermes_value_create_null(rt);
+    const enter_val = args[1] orelse return c.hermes_value_create_null(rt);
+    const config_val = args[2] orelse return c.hermes_value_create_null(rt);
+
+    const buf_handle = @as(u64, @intFromFloat(c.hermes_value_get_number(buf_val)));
+    const enter = c.hermes_value_get_boolean(enter_val);
+
+    // Parse FloatingConfig from JS object
+    const config = parseFloatingConfig(rt, config_val) orelse return c.hermes_value_create_null(rt);
+
+    // Get editor
+    const editor = getEditorFromContext(ctx) orelse return c.hermes_value_create_null(rt);
+
+    // Create floating window
+    const buf_id = BufferId{ .id = buf_handle };
+    const win_id = editor.openWin(buf_id, enter, config) catch return c.hermes_value_create_null(rt);
+
+    // Mark state dirty for re-render
+    editor.js_state_dirty = true;
+
+    return c.hermes_value_create_number(rt, @floatFromInt(win_id.id));
+}
+
+/// vim.api.winSetConfig(win, config) -> void
+/// Updates the configuration of a floating window
+pub export fn apiWinSetConfig(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const rt = runtime orelse return null;
+    const ctx = global_ctx orelse return c.hermes_value_create_undefined(rt);
+
+    // Validate arguments (win, config)
+    if (count < 2) return c.hermes_value_create_undefined(rt);
+
+    const win_val = args[0] orelse return c.hermes_value_create_undefined(rt);
+    const config_val = args[1] orelse return c.hermes_value_create_undefined(rt);
+
+    const win_handle = @as(i32, @intFromFloat(c.hermes_value_get_number(win_val)));
+
+    // Parse FloatingConfig from JS object
+    const config = parseFloatingConfig(rt, config_val) orelse return c.hermes_value_create_undefined(rt);
+
+    // Get editor
+    const editor = getEditorFromContext(ctx) orelse return c.hermes_value_create_undefined(rt);
+
+    // Resolve window ID
+    const win_id: WindowId = if (win_handle == 0) blk: {
+        break :blk editor.current_window_id orelse return c.hermes_value_create_undefined(rt);
+    } else blk: {
+        break :blk WindowId{ .id = @intCast(win_handle) };
+    };
+
+    // Update config
+    editor.winSetConfig(win_id, config) catch return c.hermes_value_create_undefined(rt);
+
+    // Mark state dirty for re-render
+    editor.js_state_dirty = true;
+
+    return c.hermes_value_create_undefined(rt);
+}
+
+/// vim.api.winGetConfig(win) -> config | null
+/// Gets the configuration of a floating window
+pub export fn apiWinGetConfig(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const rt = runtime orelse return null;
+    const ctx = global_ctx orelse return c.hermes_value_create_null(rt);
+
+    // Validate arguments (win)
+    if (count < 1) return c.hermes_value_create_null(rt);
+
+    const win_val = args[0] orelse return c.hermes_value_create_null(rt);
+    const win_handle = @as(i32, @intFromFloat(c.hermes_value_get_number(win_val)));
+
+    // Get editor
+    const editor = getEditorFromContext(ctx) orelse return c.hermes_value_create_null(rt);
+
+    // Resolve window ID
+    const win_id: WindowId = if (win_handle == 0) blk: {
+        break :blk editor.current_window_id orelse return c.hermes_value_create_null(rt);
+    } else blk: {
+        break :blk WindowId{ .id = @intCast(win_handle) };
+    };
+
+    // Get config
+    const config = editor.winGetConfig(win_id) orelse return c.hermes_value_create_null(rt);
+
+    // Convert FloatingConfig to JS object
+    return floatingConfigToJs(rt, config);
+}
+
+/// vim.api.winHide(win) -> void
+/// Hides a floating window without destroying it
+pub export fn apiWinHide(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const rt = runtime orelse return null;
+    const ctx = global_ctx orelse return c.hermes_value_create_undefined(rt);
+
+    // Validate arguments (win)
+    if (count < 1) return c.hermes_value_create_undefined(rt);
+
+    const win_val = args[0] orelse return c.hermes_value_create_undefined(rt);
+    const win_handle = @as(i32, @intFromFloat(c.hermes_value_get_number(win_val)));
+
+    // Get editor
+    const editor = getEditorFromContext(ctx) orelse return c.hermes_value_create_undefined(rt);
+
+    // Resolve window ID
+    const win_id: WindowId = if (win_handle == 0) blk: {
+        break :blk editor.current_window_id orelse return c.hermes_value_create_undefined(rt);
+    } else blk: {
+        break :blk WindowId{ .id = @intCast(win_handle) };
+    };
+
+    // Hide window
+    editor.winHide(win_id) catch return c.hermes_value_create_undefined(rt);
+
+    // Mark state dirty for re-render
+    editor.js_state_dirty = true;
+
+    return c.hermes_value_create_undefined(rt);
+}
+
+// ============================================================================
 // Multi-window support helper functions (Phase 5)
 // ============================================================================
 const Window = @import("../../editor/window.zig").Window;
 const WindowId = @import("../../editor/window.zig").WindowId;
+const FloatingConfig = @import("../../editor/window.zig").FloatingConfig;
+const FloatRelative = @import("../../editor/window.zig").FloatRelative;
+const FloatAnchor = @import("../../editor/window.zig").FloatAnchor;
+const BorderStyle = @import("../../editor/window.zig").BorderStyle;
+const BufferId = @import("../../editor/window.zig").BufferId;
 
 /// Get current window ID from context (returns null if not available)
 fn getCurrentWindowIdFromContext(ctx: *ApiWindowContext) ?u32 {
@@ -1146,4 +1319,335 @@ fn getAllWindowIds(ctx: *ApiWindowContext, allocator: std.mem.Allocator) ?[]u32 
     }
 
     return ids.toOwnedSlice(allocator) catch null;
+}
+
+// ============================================================================
+// Floating Window Config Helpers
+// ============================================================================
+
+/// Floating window dimension constraints (Neovim-compatible)
+const MIN_FLOAT_WIDTH: usize = 1;
+const MIN_FLOAT_HEIGHT: usize = 1;
+const MAX_FLOAT_WIDTH: usize = 10000; // Reasonable max (larger than any terminal)
+const MAX_FLOAT_HEIGHT: usize = 10000;
+
+/// Safe conversion of f64 to usize for dimensions
+/// Returns clamped value within min/max bounds, handles NaN/Inf/negative
+fn safeDimension(value: f64, min_val: usize, max_val: usize) usize {
+    // Handle NaN and Infinity
+    if (std.math.isNan(value) or std.math.isInf(value)) return min_val;
+    // Handle negative values
+    if (value < 0) return min_val;
+    // Handle values too large for usize (unlikely but safe)
+    if (value > @as(f64, @floatFromInt(max_val))) return max_val;
+    // Safe to convert
+    const int_val: usize = @intFromFloat(value);
+    // Clamp to range
+    return @max(min_val, @min(int_val, max_val));
+}
+
+/// Parse FloatingConfig from JS object
+/// MEMORY SAFETY: Duplicates title/footer strings so they're owned by the config
+/// The caller's FloatingConfig will have title_owned/footer_owned set to true
+fn parseFloatingConfig(rt: *c.OVHermesRuntime, config_val: *c.OVHermesValue) ?FloatingConfig {
+    const ctx = global_ctx orelse return null;
+    var config = FloatingConfig{};
+
+    // Required: width and height (with validation)
+    if (c.hermes_value_get_property(rt, config_val, "width")) |width_val| {
+        defer c.hermes_value_destroy(width_val);
+        config.width = safeDimension(c.hermes_value_get_number(width_val), MIN_FLOAT_WIDTH, MAX_FLOAT_WIDTH);
+    }
+
+    if (c.hermes_value_get_property(rt, config_val, "height")) |height_val| {
+        defer c.hermes_value_destroy(height_val);
+        config.height = safeDimension(c.hermes_value_get_number(height_val), MIN_FLOAT_HEIGHT, MAX_FLOAT_HEIGHT);
+    }
+
+    // Optional: relative (default: "editor")
+    if (c.hermes_value_get_property(rt, config_val, "relative")) |rel_val| {
+        defer c.hermes_value_destroy(rel_val);
+        var rel_len: usize = 0;
+        const rel_ptr = c.hermes_value_get_string(rt, rel_val, &rel_len);
+        if (rel_ptr != null and rel_len > 0) {
+            const rel_str = rel_ptr[0..rel_len];
+            if (std.mem.eql(u8, rel_str, "editor")) {
+                config.relative = .editor;
+            } else if (std.mem.eql(u8, rel_str, "win")) {
+                config.relative = .win;
+            } else if (std.mem.eql(u8, rel_str, "cursor")) {
+                config.relative = .cursor;
+            } else if (std.mem.eql(u8, rel_str, "mouse")) {
+                config.relative = .mouse;
+            }
+        }
+    }
+
+    // Optional: anchor (default: "NW")
+    if (c.hermes_value_get_property(rt, config_val, "anchor")) |anchor_val| {
+        defer c.hermes_value_destroy(anchor_val);
+        var anchor_len: usize = 0;
+        const anchor_ptr = c.hermes_value_get_string(rt, anchor_val, &anchor_len);
+        if (anchor_ptr != null and anchor_len > 0) {
+            const anchor_str = anchor_ptr[0..anchor_len];
+            if (std.mem.eql(u8, anchor_str, "NW")) {
+                config.anchor = .NW;
+            } else if (std.mem.eql(u8, anchor_str, "NE")) {
+                config.anchor = .NE;
+            } else if (std.mem.eql(u8, anchor_str, "SW")) {
+                config.anchor = .SW;
+            } else if (std.mem.eql(u8, anchor_str, "SE")) {
+                config.anchor = .SE;
+            }
+        }
+    }
+
+    // Optional: row, col
+    if (c.hermes_value_get_property(rt, config_val, "row")) |row_val| {
+        defer c.hermes_value_destroy(row_val);
+        config.row = @intFromFloat(c.hermes_value_get_number(row_val));
+    }
+
+    if (c.hermes_value_get_property(rt, config_val, "col")) |col_val| {
+        defer c.hermes_value_destroy(col_val);
+        config.col = @intFromFloat(c.hermes_value_get_number(col_val));
+    }
+
+    // Optional: focusable (default: true)
+    if (c.hermes_value_get_property(rt, config_val, "focusable")) |focus_val| {
+        defer c.hermes_value_destroy(focus_val);
+        config.focusable = c.hermes_value_get_boolean(focus_val);
+    }
+
+    // Optional: zindex (default: 50)
+    if (c.hermes_value_get_property(rt, config_val, "zindex")) |zindex_val| {
+        defer c.hermes_value_destroy(zindex_val);
+        config.zindex = @intFromFloat(c.hermes_value_get_number(zindex_val));
+    }
+
+    // Optional: border
+    if (c.hermes_value_get_property(rt, config_val, "border")) |border_val| {
+        defer c.hermes_value_destroy(border_val);
+        var border_len: usize = 0;
+        const border_ptr = c.hermes_value_get_string(rt, border_val, &border_len);
+        if (border_ptr != null and border_len > 0) {
+            const border_str = border_ptr[0..border_len];
+            if (std.mem.eql(u8, border_str, "none")) {
+                config.border = .none;
+            } else if (std.mem.eql(u8, border_str, "single")) {
+                config.border = .single;
+            } else if (std.mem.eql(u8, border_str, "double")) {
+                config.border = .double;
+            } else if (std.mem.eql(u8, border_str, "rounded")) {
+                config.border = .rounded;
+            } else if (std.mem.eql(u8, border_str, "solid")) {
+                config.border = .solid;
+            } else if (std.mem.eql(u8, border_str, "shadow")) {
+                config.border = .shadow;
+            }
+        }
+    }
+
+    // Optional: title - MUST duplicate string to avoid use-after-free when JS GC runs
+    if (c.hermes_value_get_property(rt, config_val, "title")) |title_val| {
+        defer c.hermes_value_destroy(title_val);
+        var title_len: usize = 0;
+        const title_ptr = c.hermes_value_get_string(rt, title_val, &title_len);
+        if (title_ptr != null and title_len > 0) {
+            // Duplicate the string so we own it
+            config.title = ctx.allocator.dupe(u8, title_ptr[0..title_len]) catch null;
+            if (config.title != null) {
+                config.title_owned = true;
+            }
+        }
+    }
+
+    // Optional: titlePos
+    if (c.hermes_value_get_property(rt, config_val, "titlePos")) |title_pos_val| {
+        defer c.hermes_value_destroy(title_pos_val);
+        var pos_len: usize = 0;
+        const pos_ptr = c.hermes_value_get_string(rt, title_pos_val, &pos_len);
+        if (pos_ptr != null and pos_len > 0) {
+            const pos_str = pos_ptr[0..pos_len];
+            if (std.mem.eql(u8, pos_str, "left")) {
+                config.title_pos = .left;
+            } else if (std.mem.eql(u8, pos_str, "center")) {
+                config.title_pos = .center;
+            } else if (std.mem.eql(u8, pos_str, "right")) {
+                config.title_pos = .right;
+            }
+        }
+    }
+
+    // Optional: footer - MUST duplicate string to avoid use-after-free when JS GC runs
+    if (c.hermes_value_get_property(rt, config_val, "footer")) |footer_val| {
+        defer c.hermes_value_destroy(footer_val);
+        var footer_len: usize = 0;
+        const footer_ptr = c.hermes_value_get_string(rt, footer_val, &footer_len);
+        if (footer_ptr != null and footer_len > 0) {
+            // Duplicate the string so we own it
+            config.footer = ctx.allocator.dupe(u8, footer_ptr[0..footer_len]) catch null;
+            if (config.footer != null) {
+                config.footer_owned = true;
+            }
+        }
+    }
+
+    // Optional: footerPos
+    if (c.hermes_value_get_property(rt, config_val, "footerPos")) |footer_pos_val| {
+        defer c.hermes_value_destroy(footer_pos_val);
+        var pos_len: usize = 0;
+        const pos_ptr = c.hermes_value_get_string(rt, footer_pos_val, &pos_len);
+        if (pos_ptr != null and pos_len > 0) {
+            const pos_str = pos_ptr[0..pos_len];
+            if (std.mem.eql(u8, pos_str, "left")) {
+                config.footer_pos = .left;
+            } else if (std.mem.eql(u8, pos_str, "center")) {
+                config.footer_pos = .center;
+            } else if (std.mem.eql(u8, pos_str, "right")) {
+                config.footer_pos = .right;
+            }
+        }
+    }
+
+    // Optional: noautocmd
+    if (c.hermes_value_get_property(rt, config_val, "noautocmd")) |noautocmd_val| {
+        defer c.hermes_value_destroy(noautocmd_val);
+        config.noautocmd = c.hermes_value_get_boolean(noautocmd_val);
+    }
+
+    // Optional: hide
+    if (c.hermes_value_get_property(rt, config_val, "hide")) |hide_val| {
+        defer c.hermes_value_destroy(hide_val);
+        config.hide = c.hermes_value_get_boolean(hide_val);
+    }
+
+    return config;
+}
+
+/// Convert FloatingConfig to JS object
+fn floatingConfigToJs(rt: *c.OVHermesRuntime, config: FloatingConfig) ?*c.OVHermesValue {
+    const obj = c.hermes_value_create_object(rt) orelse return null;
+
+    // relative
+    const rel_str: []const u8 = switch (config.relative) {
+        .editor => "editor",
+        .win => "win",
+        .cursor => "cursor",
+        .mouse => "mouse",
+    };
+    if (c.hermes_value_create_string(rt, rel_str.ptr, rel_str.len)) |v| {
+        c.hermes_value_set_property(rt, obj, "relative", v);
+        c.hermes_value_destroy(v);
+    }
+
+    // anchor
+    const anchor_str: []const u8 = switch (config.anchor) {
+        .NW => "NW",
+        .NE => "NE",
+        .SW => "SW",
+        .SE => "SE",
+    };
+    if (c.hermes_value_create_string(rt, anchor_str.ptr, anchor_str.len)) |v| {
+        c.hermes_value_set_property(rt, obj, "anchor", v);
+        c.hermes_value_destroy(v);
+    }
+
+    // width, height
+    if (c.hermes_value_create_number(rt, @floatFromInt(config.width))) |v| {
+        c.hermes_value_set_property(rt, obj, "width", v);
+        c.hermes_value_destroy(v);
+    }
+    if (c.hermes_value_create_number(rt, @floatFromInt(config.height))) |v| {
+        c.hermes_value_set_property(rt, obj, "height", v);
+        c.hermes_value_destroy(v);
+    }
+
+    // row, col
+    if (c.hermes_value_create_number(rt, @floatFromInt(config.row))) |v| {
+        c.hermes_value_set_property(rt, obj, "row", v);
+        c.hermes_value_destroy(v);
+    }
+    if (c.hermes_value_create_number(rt, @floatFromInt(config.col))) |v| {
+        c.hermes_value_set_property(rt, obj, "col", v);
+        c.hermes_value_destroy(v);
+    }
+
+    // focusable
+    if (c.hermes_value_create_boolean(rt, config.focusable)) |v| {
+        c.hermes_value_set_property(rt, obj, "focusable", v);
+        c.hermes_value_destroy(v);
+    }
+
+    // zindex
+    if (c.hermes_value_create_number(rt, @floatFromInt(config.zindex))) |v| {
+        c.hermes_value_set_property(rt, obj, "zindex", v);
+        c.hermes_value_destroy(v);
+    }
+
+    // border
+    const border_str: []const u8 = switch (config.border) {
+        .none => "none",
+        .single => "single",
+        .double => "double",
+        .rounded => "rounded",
+        .solid => "solid",
+        .shadow => "shadow",
+    };
+    if (c.hermes_value_create_string(rt, border_str.ptr, border_str.len)) |v| {
+        c.hermes_value_set_property(rt, obj, "border", v);
+        c.hermes_value_destroy(v);
+    }
+
+    // title
+    if (config.title) |title| {
+        if (c.hermes_value_create_string(rt, title.ptr, title.len)) |v| {
+            c.hermes_value_set_property(rt, obj, "title", v);
+            c.hermes_value_destroy(v);
+        }
+    }
+
+    // titlePos
+    const title_pos_str: []const u8 = switch (config.title_pos) {
+        .left => "left",
+        .center => "center",
+        .right => "right",
+    };
+    if (c.hermes_value_create_string(rt, title_pos_str.ptr, title_pos_str.len)) |v| {
+        c.hermes_value_set_property(rt, obj, "titlePos", v);
+        c.hermes_value_destroy(v);
+    }
+
+    // footer
+    if (config.footer) |footer| {
+        if (c.hermes_value_create_string(rt, footer.ptr, footer.len)) |v| {
+            c.hermes_value_set_property(rt, obj, "footer", v);
+            c.hermes_value_destroy(v);
+        }
+    }
+
+    // footerPos
+    const footer_pos_str: []const u8 = switch (config.footer_pos) {
+        .left => "left",
+        .center => "center",
+        .right => "right",
+    };
+    if (c.hermes_value_create_string(rt, footer_pos_str.ptr, footer_pos_str.len)) |v| {
+        c.hermes_value_set_property(rt, obj, "footerPos", v);
+        c.hermes_value_destroy(v);
+    }
+
+    // noautocmd
+    if (c.hermes_value_create_boolean(rt, config.noautocmd)) |v| {
+        c.hermes_value_set_property(rt, obj, "noautocmd", v);
+        c.hermes_value_destroy(v);
+    }
+
+    // hide
+    if (c.hermes_value_create_boolean(rt, config.hide)) |v| {
+        c.hermes_value_set_property(rt, obj, "hide", v);
+        c.hermes_value_destroy(v);
+    }
+
+    return obj;
 }

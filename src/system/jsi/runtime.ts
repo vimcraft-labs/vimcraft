@@ -95,8 +95,8 @@ declare function vimApiListBufs(): number[];
 declare function vimApiBufSetName(buffer: number, name: string): void;
 declare function vimApiBufDelete(buffer: number, opts: object): void;
 declare function vimApiCreateBuf(listed: boolean, scratch: boolean): number;
-declare function vimApiBufGetText(buffer: number, start_row: number, start_col: number, end_row: number, end_col: number): string[];
-declare function vimApiBufSetText(buffer: number, start_row: number, start_col: number, end_row: number, end_col: number, replacement: string[]): void;
+declare function vimApiBufGetText(buffer: number, startRow: number, startCol: number, endRow: number, endCol: number): string[];
+declare function vimApiBufSetText(buffer: number, startRow: number, startCol: number, endRow: number, endCol: number, replacement: string[]): void;
 declare function vimApiBufIsLoaded(buffer: number): boolean;
 declare function vimApiBufGetVar(buffer: number, name: string): unknown;
 declare function vimApiBufSetVar(buffer: number, name: string, value: unknown): void;
@@ -126,6 +126,12 @@ declare function vimApiWinCall(window: number, fun: () => unknown): unknown;
 declare function vimApiWinGetNumber(window: number): number;
 declare function vimApiWinGetPosition(window: number): [number, number];
 
+// Floating window API native functions
+declare function vimApiOpenWin(buf: number, enter: boolean, config: object): number;
+declare function vimApiWinSetConfig(window: number, config: object): void;
+declare function vimApiWinGetConfig(window: number): object | null;
+declare function vimApiWinHide(window: number): void;
+
 // Highlight API native functions
 declare function vimApiCreateNamespace(name: string): number;
 declare function vimApiGetNamespaces(): Record<string, number>;
@@ -138,6 +144,12 @@ declare function vimApiBufSetExtmark(buffer: number, ns: number, line: number, c
 declare function vimApiBufGetExtmarks(buffer: number, ns: number, start: number | [number, number], end: number | [number, number], opts: object): [number, number, number][] | [number, number, number, object][];
 declare function vimApiBufDelExtmark(buffer: number, ns: number, id: number): boolean;
 declare function vimApiBufGetExtmarkById(buffer: number, ns: number, id: number, opts: object): [number, number] | [number, number, object] | null;
+
+// Diagnostic API native functions
+declare function vimDiagnosticSet(namespace: number, bufnr: number, diagnostics: object[]): void;
+declare function vimDiagnosticGet(bufnr?: number, opts?: object): object[];
+declare function vimDiagnosticReset(namespace?: number, bufnr?: number): void;
+declare function vimDiagnosticCount(bufnr?: number, opts?: object): Record<number, number>;
 
 // Autocmd API native functions
 declare function vimApiCreateAutoCommand(events: string | string[], opts: object): number;
@@ -472,6 +484,7 @@ interface VimAPI {
   bufGetChangedtick(buffer: number): number;
   bufGetOffset(buffer: number, line: number): number;
   bufCall(buffer: number, fun: () => unknown): unknown;
+  bufGetCharAt(buffer: number, row: number, col: number): string;
 
   // Window functions
   getCurrentWin(): number;
@@ -493,6 +506,12 @@ interface VimAPI {
   winCall(window: number, fun: () => unknown): unknown;
   winGetNumber(window: number): number;
   winGetPosition(window: number): [number, number];
+
+  // Floating window functions
+  openWin(buf: number, enter: boolean, config: object): number;
+  winSetConfig(window: number, config: object): void;
+  winGetConfig(window: number): object | null;
+  winHide(window: number): void;
 
   // Highlight functions
   setHighlight(ns: number, name: string, opts: object): void;
@@ -614,6 +633,10 @@ const vimApi: VimAPI = {
     return typeof vimApiBufCall !== 'undefined' ? vimApiBufCall(buffer, fun) : fun();
   },
 
+  bufGetCharAt(buffer: number, row: number, col: number) {
+    return typeof vimApiBufGetCharAt !== 'undefined' ? vimApiBufGetCharAt(buffer, row, col) : ' ';
+  },
+
   // Window functions
   getCurrentWin() {
     return typeof vimApiGetCurrentWin !== 'undefined' ? vimApiGetCurrentWin() : 0;
@@ -693,6 +716,24 @@ const vimApi: VimAPI = {
 
   winGetPosition(window: number) {
     return typeof vimApiWinGetPosition !== 'undefined' ? vimApiWinGetPosition(window) : [0, 0];
+  },
+
+  // Floating window functions
+  openWin(buf: number, enter: boolean, config: object) {
+    if (typeof vimApiOpenWin !== 'undefined') return vimApiOpenWin(buf, enter, config);
+    throw new Error('openWin not available');
+  },
+
+  winSetConfig(window: number, config: object) {
+    if (typeof vimApiWinSetConfig !== 'undefined') vimApiWinSetConfig(window, config);
+  },
+
+  winGetConfig(window: number) {
+    return typeof vimApiWinGetConfig !== 'undefined' ? vimApiWinGetConfig(window) : null;
+  },
+
+  winHide(window: number) {
+    if (typeof vimApiWinHide !== 'undefined') vimApiWinHide(window);
   },
 
   // Highlight functions
@@ -935,6 +976,130 @@ const vimFn = {
     return '';
   },
 
+  /**
+   * Modify filename according to modifiers.
+   * :p - full path
+   * :h - head (directory)
+   * :t - tail (filename)
+   * :r - root (remove extension)
+   * :e - extension only
+   */
+  fnameModify(path: string, mods: string): string {
+    if (!path) return '';
+
+    let result = path;
+
+    // Parse modifiers - they can be chained like :p:h:t
+    const modList = mods.split(':').filter(m => m.length > 0);
+
+    for (const mod of modList) {
+      switch (mod) {
+        case 'p':
+          // Full path - if not absolute, prepend cwd
+          if (!result.startsWith('/')) {
+            const cwd = vimFn.getCwd();
+            result = cwd ? cwd + '/' + result : result;
+          }
+          break;
+        case 'h':
+          // Head (directory part)
+          const lastSlash = result.lastIndexOf('/');
+          if (lastSlash > 0) {
+            result = result.substring(0, lastSlash);
+          } else if (lastSlash === 0) {
+            result = '/';
+          } else {
+            result = '.';
+          }
+          break;
+        case 't':
+          // Tail (filename part)
+          const slashIdx = result.lastIndexOf('/');
+          if (slashIdx >= 0) {
+            result = result.substring(slashIdx + 1);
+          }
+          break;
+        case 'r':
+          // Root (remove last extension)
+          const dotIdx = result.lastIndexOf('.');
+          const slashForR = result.lastIndexOf('/');
+          if (dotIdx > slashForR + 1) {
+            result = result.substring(0, dotIdx);
+          }
+          break;
+        case 'e':
+          // Extension only
+          const dotForE = result.lastIndexOf('.');
+          const slashForE = result.lastIndexOf('/');
+          if (dotForE > slashForE + 1) {
+            result = result.substring(dotForE + 1);
+          } else {
+            result = '';
+          }
+          break;
+      }
+    }
+
+    return result;
+  },
+
+  fileReadable(path: string): number {
+    if (typeof __fs === 'undefined') return 0;
+
+    const fs = __fs as { existsSync?: (path: string) => boolean; statSync?: (path: string) => { isFile(): boolean } | null };
+    if (typeof fs.existsSync !== 'function') return 0;
+
+    try {
+      if (!fs.existsSync(path)) return 0;
+      // Check if it's a file (not directory)
+      if (typeof fs.statSync === 'function') {
+        const stat = fs.statSync(path);
+        return stat && stat.isFile() ? 1 : 0;
+      }
+      return 1; // If we can't check, assume it's readable
+    } catch {
+      return 0;
+    }
+  },
+
+  isDirectory(path: string): number {
+    if (typeof __fs === 'undefined') return 0;
+
+    const fs = __fs as { existsSync?: (path: string) => boolean; statSync?: (path: string) => { isDirectory(): boolean } | null };
+    if (typeof fs.existsSync !== 'function') return 0;
+
+    try {
+      if (!fs.existsSync(path)) return 0;
+      if (typeof fs.statSync === 'function') {
+        const stat = fs.statSync(path);
+        return stat && stat.isDirectory() ? 1 : 0;
+      }
+      return 0;
+    } catch {
+      return 0;
+    }
+  },
+
+  getLine(lnum: number | string): string | string[] {
+    // Handle special cases
+    if (lnum === '.') {
+      const pos = vimApi.winGetCursor(0);
+      lnum = pos ? pos[0] : 1;
+    } else if (lnum === '$') {
+      lnum = vimApi.bufLineCount(0);
+    }
+
+    if (typeof lnum !== 'number') {
+      lnum = parseInt(lnum as string, 10);
+    }
+
+    if (isNaN(lnum) || lnum < 1) return '';
+
+    // vim.fn.getline is 1-indexed, bufGetLines is 0-indexed
+    const lines = vimApi.bufGetLines(0, lnum - 1, lnum, false);
+    return lines && lines.length > 0 ? lines[0] : '';
+  },
+
   executable(cmd: string): number {
     // Check if command exists in PATH
     // On Unix-like systems, we can check common paths
@@ -1020,6 +1185,96 @@ const vimAutocmd = {
 Object.freeze(vimAutocmd);
 
 // ============================================================================
+// vim.diagnostic - Diagnostic API (Neovim-compatible)
+// ============================================================================
+
+/**
+ * Diagnostic severity levels
+ */
+const DiagnosticSeverity = {
+  ERROR: 1,
+  WARN: 2,
+  INFO: 3,
+  HINT: 4,
+  // Reverse mappings (numeric index -> string)
+  1: 'ERROR',
+  2: 'WARN',
+  3: 'INFO',
+  4: 'HINT',
+} as const;
+
+interface Diagnostic {
+  lnum: number;
+  col: number;
+  endLnum?: number;
+  endCol?: number;
+  severity?: number;
+  message: string;
+  source?: string;
+  code?: string;
+  bufnr?: number;
+}
+
+interface DiagnosticGetOpts {
+  namespace?: number;
+  lnum?: number;
+  severity?: number;
+}
+
+interface DiagnosticCountOpts {
+  namespace?: number;
+}
+
+const vimDiagnostic = {
+  /**
+   * Diagnostic severity levels (Neovim-compatible)
+   */
+  severity: DiagnosticSeverity,
+
+  /**
+   * Set diagnostics for a buffer under a namespace
+   * @param namespace - Namespace ID from vim.api.createNamespace()
+   * @param bufnr - Buffer number (0 for current)
+   * @param diagnostics - Array of diagnostic objects
+   * @param opts - Optional configuration
+   */
+  set(namespace: number, bufnr: number, diagnostics: Diagnostic[], opts?: object): void {
+    vimDiagnosticSet(namespace, bufnr, diagnostics);
+  },
+
+  /**
+   * Get diagnostics from buffer(s)
+   * @param bufnr - Buffer number (undefined for all buffers)
+   * @param opts - Filter options (namespace, lnum, severity)
+   */
+  get(bufnr?: number, opts?: DiagnosticGetOpts): Diagnostic[] {
+    return vimDiagnosticGet(bufnr, opts || {});
+  },
+
+  /**
+   * Clear diagnostics
+   * @param namespace - Namespace to clear (undefined for all)
+   * @param bufnr - Buffer to clear (undefined for all buffers)
+   */
+  reset(namespace?: number, bufnr?: number): void {
+    vimDiagnosticReset(namespace, bufnr);
+  },
+
+  /**
+   * Count diagnostics by severity
+   * @param bufnr - Buffer number (undefined for all buffers)
+   * @param opts - Filter options (namespace)
+   * @returns Object with severity keys and counts
+   */
+  count(bufnr?: number, opts?: DiagnosticCountOpts): Record<number, number> {
+    return vimDiagnosticCount(bufnr, opts || {});
+  },
+};
+
+Object.freeze(vimDiagnostic);
+Object.freeze(vimDiagnostic.severity);
+
+// ============================================================================
 // vim.cmd - Ex Command Methods
 // ============================================================================
 
@@ -1088,6 +1343,7 @@ interface VimObject {
   buffer?: object;
   api: VimAPI;
   autocmd: typeof vimAutocmd;
+  diagnostic: typeof vimDiagnostic;
   cmd: typeof vimCmd;
   fn: typeof vimFn;
   lsp: object;
@@ -1164,6 +1420,7 @@ const vim: VimObject = {
   filetype: vimFiletype,
   api: vimApi,
   autocmd: vimAutocmd,
+  diagnostic: vimDiagnostic,
   cmd: vimCmd,
   fn: vimFn,
   lsp: {},
@@ -1220,6 +1477,7 @@ Object.freeze(vim.motion);
 Object.freeze(vim.keymap);
 Object.freeze(vim.filetype);
 Object.freeze(vim.api);
+Object.freeze(vim.diagnostic);
 
 // Make vim global
 (globalThis as any).vim = vim;

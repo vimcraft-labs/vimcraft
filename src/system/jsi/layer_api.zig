@@ -220,8 +220,8 @@ pub export fn createLayer(
 
     const opts_val = args[1].?;
 
-    // Get z_index (required) - use hermes_value_get_property directly
-    const z_index_val = c.hermes_value_get_property(runtime, opts_val, "z_index");
+    // Get zIndex (required) - use hermes_value_get_property directly
+    const z_index_val = c.hermes_value_get_property(runtime, opts_val, "zIndex");
     if (z_index_val == null or !c.hermes_value_is_number(z_index_val)) {
         if (z_index_val != null) c.hermes_value_destroy(z_index_val);
         return c.hermes_value_create_undefined(runtime);

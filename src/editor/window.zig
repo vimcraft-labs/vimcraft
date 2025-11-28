@@ -74,6 +74,133 @@ pub const Cursor = struct {
     col: usize = 0,
 };
 
+/// Floating window anchor position
+pub const FloatAnchor = enum {
+    /// Top-left of window at (row, col)
+    NW,
+    /// Top-right of window at (row, col)
+    NE,
+    /// Bottom-left of window at (row, col)
+    SW,
+    /// Bottom-right of window at (row, col)
+    SE,
+};
+
+/// Relative positioning for floating windows
+pub const FloatRelative = enum {
+    /// Relative to editor grid (screen coordinates)
+    editor,
+    /// Relative to current window
+    win,
+    /// Relative to cursor position
+    cursor,
+    /// Relative to a specific mouse position
+    mouse,
+};
+
+/// Border style for floating windows
+pub const BorderStyle = enum {
+    none,
+    single,
+    double,
+    rounded,
+    solid,
+    shadow,
+};
+
+/// Floating window configuration (Neovim-compatible)
+/// MEMORY SAFETY: title and footer are OWNED by this struct when title_owned/footer_owned are true.
+/// Call deinit() with an allocator to free owned strings.
+pub const FloatingConfig = struct {
+    /// Relative positioning mode
+    relative: FloatRelative = .editor,
+    /// Reference window (when relative="win")
+    win: ?WindowId = null,
+    /// Anchor corner of floating window
+    anchor: FloatAnchor = .NW,
+    /// Width in columns (required)
+    width: usize = 1,
+    /// Height in rows (required)
+    height: usize = 1,
+    /// Row position (depends on relative mode)
+    row: i32 = 0,
+    /// Column position (depends on relative mode)
+    col: i32 = 0,
+    /// Whether window can receive focus
+    focusable: bool = true,
+    /// Z-index for stacking order (higher = on top)
+    zindex: u32 = 50,
+    /// Window style/appearance
+    style: Style = .minimal,
+    /// Border configuration
+    border: BorderStyle = .none,
+    /// Title text (displayed in border if border is set)
+    /// OWNED when title_owned is true - must be freed in deinit()
+    title: ?[]const u8 = null,
+    /// Whether title string is owned (allocated) by this config
+    title_owned: bool = false,
+    /// Title position: "left", "center", "right"
+    title_pos: TitlePos = .left,
+    /// Footer text (displayed in border if border is set)
+    /// OWNED when footer_owned is true - must be freed in deinit()
+    footer: ?[]const u8 = null,
+    /// Whether footer string is owned (allocated) by this config
+    footer_owned: bool = false,
+    /// Footer position: "left", "center", "right"
+    footer_pos: TitlePos = .left,
+    /// Don't add to jump list
+    noautocmd: bool = false,
+    /// Buffer to show when external window (for nvim-specific, ignored in Vimcraft)
+    external: bool = false,
+    /// Hide the window without destroying it
+    hide: bool = false,
+
+    pub const Style = enum {
+        /// No UI chrome (no line numbers, etc.)
+        minimal,
+    };
+
+    pub const TitlePos = enum {
+        left,
+        center,
+        right,
+    };
+
+    /// Free owned strings. Must be called when destroying a floating window.
+    pub fn deinit(self: *FloatingConfig, allocator: std.mem.Allocator) void {
+        if (self.title_owned) {
+            if (self.title) |title| {
+                allocator.free(title);
+            }
+            self.title = null;
+            self.title_owned = false;
+        }
+        if (self.footer_owned) {
+            if (self.footer) |footer| {
+                allocator.free(footer);
+            }
+            self.footer = null;
+            self.footer_owned = false;
+        }
+    }
+
+    /// Create a deep copy of this config, duplicating owned strings
+    pub fn clone(self: FloatingConfig, allocator: std.mem.Allocator) !FloatingConfig {
+        var copy = self;
+        // Deep copy title if present
+        if (self.title) |title| {
+            copy.title = try allocator.dupe(u8, title);
+            copy.title_owned = true;
+        }
+        // Deep copy footer if present
+        if (self.footer) |footer| {
+            copy.footer = try allocator.dupe(u8, footer);
+            copy.footer_owned = true;
+        }
+        return copy;
+    }
+};
+
 /// A window displays a buffer at a specific viewport position
 pub const Window = struct {
     id: WindowId,
@@ -108,6 +235,14 @@ pub const Window = struct {
     /// Hermes runtime for variable management
     runtime: ?*c.OVHermesRuntime = null,
 
+    /// Floating window configuration (null = normal window)
+    floating_config: ?FloatingConfig = null,
+
+    /// Check if this is a floating window
+    pub fn isFloating(self: *const Window) bool {
+        return self.floating_config != null;
+    }
+
     pub fn init(allocator: std.mem.Allocator, id: WindowId, buffer_id: BufferId) Window {
         return .{
             .id = id,
@@ -120,7 +255,25 @@ pub const Window = struct {
         };
     }
 
+    /// Create a floating window
+    pub fn initFloating(allocator: std.mem.Allocator, id: WindowId, buffer_id: BufferId, config: FloatingConfig) Window {
+        var win = init(allocator, id, buffer_id);
+        win.floating_config = config;
+        win.width = config.width;
+        win.height = config.height;
+        // Floating windows typically have minimal UI
+        win.options.number = false;
+        win.options.relativenumber = false;
+        win.options.signcolumn = .no;
+        return win;
+    }
+
     pub fn deinit(self: *Window) void {
+        // Clean up floating window config (owns title/footer strings)
+        if (self.floating_config) |*config| {
+            config.deinit(self.allocator);
+        }
+
         // Clean up window variables
         var it = self.variables.iterator();
         while (it.next()) |entry| {

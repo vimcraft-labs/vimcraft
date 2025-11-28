@@ -98,6 +98,73 @@ pub export fn showCursor(
     return c.hermes_value_create_undefined(runtime);
 }
 
+/// Zig host function: setCursorRenderPosition(row, col) -> void
+/// Sets a custom cursor render position. Used by smear-cursor plugin.
+/// When row=-1 and col=-1, this SUPPRESSES the cursor during animation.
+/// The native cursor is hidden and showCursor() becomes a no-op until cleared.
+///
+/// KEY INSIGHT (from smear-cursor.nvim analysis):
+/// Neovim's smear-cursor plugin uses blend=100 highlight to make cursor transparent.
+/// The cursor stays "hidden" during animation - it's not rapidly toggled hide/show.
+/// This suppression mechanism achieves the same effect in Vimcraft.
+///
+/// Without suppression: Each render frame sends hide→show codes (30+ per animation)
+/// With suppression: hide once at start, show once at end (2 codes total)
+pub export fn setCursorRenderPosition(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    if (count < 2) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    // Get row and col arguments
+    const row_value = args[0] orelse return c.hermes_value_create_undefined(runtime);
+    const col_value = args[1] orelse return c.hermes_value_create_undefined(runtime);
+
+    const row = @as(i32, @intFromFloat(c.hermes_value_get_number(row_value)));
+    const col = @as(i32, @intFromFloat(c.hermes_value_get_number(col_value)));
+
+    // If row=-1, col=-1: SUPPRESS cursor for animation duration
+    // This hides cursor AND prevents showCursor() from restoring it
+    if (row == -1 and col == -1) {
+        if (global_display) |display| {
+            display.suppressCursor() catch {};
+        }
+    }
+
+    return c.hermes_value_create_undefined(runtime);
+}
+
+/// Zig host function: clearCursorRenderPosition() -> void
+/// Clears the custom cursor render position and restores normal cursor visibility.
+/// Called by smear-cursor plugin when animation completes.
+///
+/// This UNSUPPRESSES the cursor, allowing showCursor() to work again,
+/// and immediately shows the cursor at its final position.
+pub export fn clearCursorRenderPosition(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+    _ = args;
+    _ = count;
+
+    // Unsuppress cursor - this restores normal showCursor() behavior
+    // and immediately shows the cursor
+    if (global_display) |display| {
+        display.unsuppressCursor() catch {};
+    }
+
+    return c.hermes_value_create_undefined(runtime);
+}
+
 // ============================================================================
 // HostObject Implementation (Zero-Copy JSI)
 // ============================================================================
@@ -121,6 +188,8 @@ pub export fn cursorHostObjectGet(
         .{ "getPosition", getCursorPosition },
         .{ "hide", hideCursor },
         .{ "show", showCursor },
+        .{ "setRenderPosition", setCursorRenderPosition },
+        .{ "clearRenderPosition", clearCursorRenderPosition },
     });
 
     const func = PropertyMap.get(name) orelse return null;
@@ -141,6 +210,8 @@ pub export fn cursorHostObjectEnumerator(
         "getPosition",
         "hide",
         "show",
+        "setRenderPosition",
+        "clearRenderPosition",
     };
 
     const arr = c.hermes_array_create(rt, method_names.len) orelse return null;
@@ -191,12 +262,42 @@ pub fn registerForEditorContext(runtime: *c.OVHermesRuntime, editor_ctx: *@impor
 }
 
 /// Legacy registration (backwards compatibility)
-/// TODO: Remove after all examples/tests updated
+/// Registers cursor functions as global functions for plugins like smear-cursor
 pub fn registerLegacy(runtime: *c.OVHermesRuntime, editor: *Editor) void {
     c.hermes_register_host_function(
         runtime,
         "getCursorPosition",
         getCursorPosition,
         @ptrCast(editor),
+    );
+
+    // Register cursor visibility functions for smear-cursor plugin
+    c.hermes_register_host_function(
+        runtime,
+        "hideCursor",
+        hideCursor,
+        null,
+    );
+
+    c.hermes_register_host_function(
+        runtime,
+        "showCursor",
+        showCursor,
+        null,
+    );
+
+    // Register cursor render position functions for smear-cursor animation
+    c.hermes_register_host_function(
+        runtime,
+        "setCursorRenderPosition",
+        setCursorRenderPosition,
+        null,
+    );
+
+    c.hermes_register_host_function(
+        runtime,
+        "clearCursorRenderPosition",
+        clearCursorRenderPosition,
+        null,
     );
 }

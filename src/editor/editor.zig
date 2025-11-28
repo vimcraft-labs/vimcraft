@@ -31,6 +31,10 @@ const languages = @import("treesitter/languages.zig");
 // Window management
 const Window = @import("window.zig").Window;
 pub const WindowId = @import("window.zig").WindowId;
+pub const FloatingConfig = @import("window.zig").FloatingConfig;
+pub const FloatRelative = @import("window.zig").FloatRelative;
+pub const FloatAnchor = @import("window.zig").FloatAnchor;
+pub const BorderStyle = @import("window.zig").BorderStyle;
 const WindowLayout = @import("window_layout.zig").WindowLayout;
 const SplitDirection = @import("window_layout.zig").SplitDirection;
 const NavigationDirection = @import("window_layout.zig").NavigationDirection;
@@ -1027,6 +1031,220 @@ pub const Editor = struct {
     /// Get window count
     pub fn windowCount(self: *Editor) usize {
         return self.windows.count();
+    }
+
+    // ========================================================================
+    // Floating Windows
+    // ========================================================================
+
+    /// Create a floating window (Neovim-compatible nvim_open_win)
+    /// Returns the new window ID
+    pub fn openWin(self: *Editor, buffer_id: BufferId, enter: bool, config: FloatingConfig) !WindowId {
+        // Validate buffer exists
+        if (buffer_id.id != 0 and !self.buffers.contains(buffer_id)) {
+            return error.InvalidBuffer;
+        }
+
+        // Resolve buffer ID (0 = current buffer)
+        const actual_buf_id: BufferId = if (buffer_id.id == 0)
+            self.current_buffer_id orelse return error.NoCurrentBuffer
+        else
+            buffer_id;
+
+        // Create new window ID
+        const new_win_id = WindowId{ .id = self.next_window_id };
+        self.next_window_id += 1;
+
+        // Create floating window
+        const new_window = try self.allocator.create(Window);
+        errdefer self.allocator.destroy(new_window);
+
+        new_window.* = Window.initFloating(self.allocator, new_win_id, actual_buf_id, config);
+
+        // Calculate actual screen position based on config
+        self.calculateFloatPosition(new_window, config);
+
+        try self.windows.put(new_win_id, new_window);
+        errdefer _ = self.windows.remove(new_win_id);
+
+        // Focus new window if requested
+        if (enter and config.focusable) {
+            self.current_window_id = new_win_id;
+            self.current_buffer_id = actual_buf_id;
+        }
+
+        new_window.needs_redraw = true;
+        self.js_state_dirty = true;
+
+        self.logger.info("Created floating window {} ({}x{}) at ({},{})", .{
+            new_win_id.id,
+            config.width,
+            config.height,
+            config.row,
+            config.col,
+        }) catch {};
+
+        return new_win_id;
+    }
+
+    /// Calculate screen position for a floating window based on its config
+    fn calculateFloatPosition(self: *Editor, window: *Window, config: FloatingConfig) void {
+        // Base position depends on relative mode
+        var base_row: i32 = 0;
+        var base_col: i32 = 0;
+
+        switch (config.relative) {
+            .editor => {
+                // Absolute screen coordinates
+                base_row = 0;
+                base_col = 0;
+            },
+            .win => {
+                // Relative to a window
+                const ref_win = if (config.win) |win_id|
+                    self.windows.get(win_id)
+                else
+                    self.getCurrentWindow();
+
+                if (ref_win) |win| {
+                    base_row = @intCast(win.screen_row);
+                    base_col = @intCast(win.screen_col);
+                }
+            },
+            .cursor => {
+                // Relative to cursor position in current window
+                if (self.getCurrentWindow()) |cur_win| {
+                    base_row = @intCast(cur_win.screen_row + cur_win.viewport.cursor_screen_row);
+                    base_col = @intCast(cur_win.screen_col + cur_win.viewport.cursor_screen_col);
+                }
+            },
+            .mouse => {
+                // Not implemented - fallback to editor
+                base_row = 0;
+                base_col = 0;
+            },
+        }
+
+        // Apply offset from config
+        var final_row = base_row + config.row;
+        var final_col = base_col + config.col;
+
+        // Adjust for anchor position
+        switch (config.anchor) {
+            .NW => {
+                // Top-left - no adjustment needed
+            },
+            .NE => {
+                // Top-right - subtract width
+                final_col -= @intCast(config.width);
+            },
+            .SW => {
+                // Bottom-left - subtract height
+                final_row -= @intCast(config.height);
+            },
+            .SE => {
+                // Bottom-right - subtract both
+                final_row -= @intCast(config.height);
+                final_col -= @intCast(config.width);
+            },
+        }
+
+        // Clamp to screen bounds
+        if (final_row < 0) final_row = 0;
+        if (final_col < 0) final_col = 0;
+        if (final_row + @as(i32, @intCast(config.height)) > @as(i32, @intCast(self.terminal_rows))) {
+            final_row = @max(0, @as(i32, @intCast(self.terminal_rows)) - @as(i32, @intCast(config.height)));
+        }
+        if (final_col + @as(i32, @intCast(config.width)) > @as(i32, @intCast(self.terminal_cols))) {
+            final_col = @max(0, @as(i32, @intCast(self.terminal_cols)) - @as(i32, @intCast(config.width)));
+        }
+
+        window.screen_row = @intCast(final_row);
+        window.screen_col = @intCast(final_col);
+        window.width = config.width;
+        window.height = config.height;
+    }
+
+    /// Update floating window configuration
+    pub fn winSetConfig(self: *Editor, win_id: WindowId, config: FloatingConfig) !void {
+        const window = self.windows.get(win_id) orelse return error.InvalidWindow;
+
+        // Only floating windows can have their config updated
+        if (!window.isFloating()) {
+            return error.NotFloatingWindow;
+        }
+
+        // Free old config's owned strings BEFORE overwriting (P0 fix: memory leak)
+        if (window.floating_config) |*old_config| {
+            old_config.deinit(self.allocator);
+        }
+
+        // Clone new config to ensure proper ownership of title/footer strings
+        window.floating_config = try config.clone(self.allocator);
+        window.width = config.width;
+        window.height = config.height;
+        self.calculateFloatPosition(window, config);
+
+        window.needs_redraw = true;
+        self.js_state_dirty = true;
+    }
+
+    /// Get floating window configuration
+    pub fn winGetConfig(self: *Editor, win_id: WindowId) ?FloatingConfig {
+        const window = self.windows.get(win_id) orelse return null;
+        return window.floating_config;
+    }
+
+    /// Hide a floating window (sets hide=true in config)
+    pub fn winHide(self: *Editor, win_id: WindowId) !void {
+        const window = self.windows.get(win_id) orelse return error.InvalidWindow;
+
+        if (!window.isFloating()) {
+            return error.NotFloatingWindow;
+        }
+
+        if (window.floating_config) |*config| {
+            config.hide = true;
+            window.needs_redraw = true;
+            self.js_state_dirty = true;
+        }
+    }
+
+    /// Check if a window is floating
+    pub fn isFloatingWindow(self: *Editor, win_id: WindowId) bool {
+        const window = self.windows.get(win_id) orelse return false;
+        return window.isFloating();
+    }
+
+    /// Get all floating windows sorted by z-index
+    pub fn getFloatingWindows(self: *Editor) ![]WindowId {
+        var floating = std.ArrayList(WindowId).init(self.allocator);
+
+        var iter = self.windows.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.*.isFloating()) {
+                if (entry.value_ptr.*.floating_config) |config| {
+                    if (!config.hide) {
+                        try floating.append(entry.key_ptr.*);
+                    }
+                }
+            }
+        }
+
+        // Sort by z-index (lower first, so higher z-index renders on top)
+        const windows_ptr = &self.windows;
+        std.mem.sort(WindowId, floating.items, windows_ptr, struct {
+            fn lessThan(ctx: *const @TypeOf(self.windows), a: WindowId, b: WindowId) bool {
+                const win_a = ctx.get(a);
+                const win_b = ctx.get(b);
+                if (win_a == null or win_b == null) return false;
+                const z_a = if (win_a.?.floating_config) |c| c.zindex else 0;
+                const z_b = if (win_b.?.floating_config) |c| c.zindex else 0;
+                return z_a < z_b;
+            }
+        }.lessThan);
+
+        return floating.toOwnedSlice();
     }
 
     // ========================================================================

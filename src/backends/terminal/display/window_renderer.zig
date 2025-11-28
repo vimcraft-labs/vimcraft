@@ -852,6 +852,357 @@ fn convertColor(api_color: Color) highlights.Color {
 }
 
 // ============================================================================
+// Floating Window Border Rendering
+// ============================================================================
+// Renders borders around floating windows using Unicode box-drawing characters.
+// Neovim-compatible border styles: none, single, double, rounded, solid, shadow
+//
+// Border layout (for a 3x5 content window):
+//   ┌─────┐  <- top border row (row-1)
+//   │     │  <- content rows with left (col-1) and right (col+width) borders
+//   │     │
+//   │     │
+//   └─────┘  <- bottom border row (row+height)
+//
+// The border is rendered AROUND the window region, not inside it.
+
+const BorderStyle = @import("../../../editor/window.zig").BorderStyle;
+const FloatingConfig = @import("../../../editor/window.zig").FloatingConfig;
+
+/// Border character set for different styles
+const BorderChars = struct {
+    top_left: u21,
+    top_right: u21,
+    bottom_left: u21,
+    bottom_right: u21,
+    horizontal: u21,
+    vertical: u21,
+};
+
+/// Get border characters for a given style
+fn getBorderChars(style: BorderStyle) ?BorderChars {
+    return switch (style) {
+        .none => null,
+        .single => .{
+            .top_left = '┌',
+            .top_right = '┐',
+            .bottom_left = '└',
+            .bottom_right = '┘',
+            .horizontal = '─',
+            .vertical = '│',
+        },
+        .double => .{
+            .top_left = '╔',
+            .top_right = '╗',
+            .bottom_left = '╚',
+            .bottom_right = '╝',
+            .horizontal = '═',
+            .vertical = '║',
+        },
+        .rounded => .{
+            .top_left = '╭',
+            .top_right = '╮',
+            .bottom_left = '╰',
+            .bottom_right = '╯',
+            .horizontal = '─',
+            .vertical = '│',
+        },
+        .solid => .{
+            .top_left = '█',
+            .top_right = '█',
+            .bottom_left = '█',
+            .bottom_right = '█',
+            .horizontal = '▀',
+            .vertical = '█',
+        },
+        .shadow => .{
+            // Shadow style: thin border with shadow effect
+            // The shadow is rendered separately on the right and bottom
+            .top_left = '┌',
+            .top_right = '┐',
+            .bottom_left = '└',
+            .bottom_right = '┘',
+            .horizontal = '─',
+            .vertical = '│',
+        },
+    };
+}
+
+/// Render border around a floating window
+/// This renders to the base_layer so it appears behind content
+pub fn renderFloatingWindowBorder(
+    display: *Display,
+    window: *const Window,
+    registry: *const HighlightRegistry,
+) void {
+    // Only render border for floating windows
+    const config = window.floating_config orelse return;
+    if (config.hide) return;
+
+    // Get border characters for the style
+    const border_chars = getBorderChars(config.border) orelse return;
+
+    // Get FloatBorder highlight (Neovim uses FloatBorder for all border elements)
+    const border_style = registry.get("FloatBorder");
+    const fg_color = if (border_style.fg) |c| convertColor(c) else highlights.Color{ .r = 128, .g = 128, .b = 128 };
+    const bg_color = if (border_style.bg) |c| convertColor(c) else null;
+
+    // Get window region (this is the CONTENT area, border is OUTSIDE it)
+    const content_row = window.screen_row;
+    const content_col = window.screen_col;
+    const content_height = window.height;
+    const content_width = window.width;
+
+    // Border positions (outside content area)
+    // Note: We need to ensure border doesn't go out of bounds
+    const border_top: usize = if (content_row > 0) content_row - 1 else 0;
+    const border_left: usize = if (content_col > 0) content_col - 1 else 0;
+    const border_bottom: usize = content_row + content_height;
+    const border_right: usize = content_col + content_width;
+
+    const grid_height = display.base_layer.grid.height;
+    const grid_width = display.base_layer.grid.width;
+
+    // Render top border row
+    if (border_top < grid_height and content_row > 0) {
+        // Top-left corner
+        if (border_left < grid_width and content_col > 0) {
+            display.base_layer.grid.setCell(border_top, border_left, .{
+                .char = border_chars.top_left,
+                .fg = fg_color,
+                .bg = bg_color,
+            });
+        }
+
+        // Top horizontal line
+        var col = content_col;
+        while (col < border_right and col < grid_width) : (col += 1) {
+            display.base_layer.grid.setCell(border_top, col, .{
+                .char = border_chars.horizontal,
+                .fg = fg_color,
+                .bg = bg_color,
+            });
+        }
+
+        // Top-right corner
+        if (border_right < grid_width) {
+            display.base_layer.grid.setCell(border_top, border_right, .{
+                .char = border_chars.top_right,
+                .fg = fg_color,
+                .bg = bg_color,
+            });
+        }
+
+        // Render title in top border if present
+        if (config.title) |title| {
+            renderBorderTitle(display, border_top, content_col, content_width, title, config.title_pos, fg_color, bg_color, grid_width);
+        }
+    }
+
+    // Render left and right vertical borders
+    var row = content_row;
+    while (row < border_bottom and row < grid_height) : (row += 1) {
+        // Left border
+        if (border_left < grid_width and content_col > 0) {
+            display.base_layer.grid.setCell(row, border_left, .{
+                .char = border_chars.vertical,
+                .fg = fg_color,
+                .bg = bg_color,
+            });
+        }
+
+        // Right border
+        if (border_right < grid_width) {
+            display.base_layer.grid.setCell(row, border_right, .{
+                .char = border_chars.vertical,
+                .fg = fg_color,
+                .bg = bg_color,
+            });
+        }
+    }
+
+    // Render bottom border row
+    if (border_bottom < grid_height) {
+        // Bottom-left corner
+        if (border_left < grid_width and content_col > 0) {
+            display.base_layer.grid.setCell(border_bottom, border_left, .{
+                .char = border_chars.bottom_left,
+                .fg = fg_color,
+                .bg = bg_color,
+            });
+        }
+
+        // Bottom horizontal line
+        var col = content_col;
+        while (col < border_right and col < grid_width) : (col += 1) {
+            display.base_layer.grid.setCell(border_bottom, col, .{
+                .char = border_chars.horizontal,
+                .fg = fg_color,
+                .bg = bg_color,
+            });
+        }
+
+        // Bottom-right corner
+        if (border_right < grid_width) {
+            display.base_layer.grid.setCell(border_bottom, border_right, .{
+                .char = border_chars.bottom_right,
+                .fg = fg_color,
+                .bg = bg_color,
+            });
+        }
+
+        // Render footer in bottom border if present
+        if (config.footer) |footer| {
+            renderBorderTitle(display, border_bottom, content_col, content_width, footer, config.footer_pos, fg_color, bg_color, grid_width);
+        }
+    }
+
+    // Render shadow effect for shadow border style
+    if (config.border == .shadow) {
+        renderShadowEffect(display, content_row, content_col, content_height, content_width, grid_height, grid_width);
+    }
+
+    display.base_layer.markDirty();
+}
+
+/// Render title/footer text within the border
+/// Uses UTF-8 safe truncation to avoid breaking multi-byte sequences
+fn renderBorderTitle(
+    display: *Display,
+    row: usize,
+    content_col: usize,
+    content_width: usize,
+    text: []const u8,
+    pos: FloatingConfig.TitlePos,
+    fg_color: highlights.Color,
+    bg_color: ?highlights.Color,
+    grid_width: usize,
+) void {
+    if (text.len == 0) return;
+    if (content_width < 4) return; // Need at least some space for title
+
+    // Calculate available width (leave 1 char on each side for corners/borders)
+    const available_width = content_width;
+
+    // UTF-8 safe truncation: find proper byte boundary and display width
+    var display_width: usize = 0;
+    var truncated_byte_len: usize = 0;
+    var byte_idx: usize = 0;
+
+    while (byte_idx < text.len) {
+        const char_len = std.unicode.utf8ByteSequenceLength(text[byte_idx]) catch 1;
+        if (byte_idx + char_len > text.len) break;
+
+        const codepoint = std.unicode.utf8Decode(text[byte_idx..][0..char_len]) catch ' ';
+        const char_width_val = char_width.codepointWidth(codepoint);
+
+        // Would this character exceed available width?
+        if (display_width + char_width_val > available_width) break;
+
+        display_width += char_width_val;
+        truncated_byte_len = byte_idx + char_len;
+        byte_idx += char_len;
+    }
+
+    if (truncated_byte_len == 0) return;
+    const display_text = text[0..truncated_byte_len];
+
+    // Calculate starting position based on alignment (use display_width, not byte length)
+    const start_col: usize = switch (pos) {
+        .left => content_col + 1,
+        .center => content_col + (available_width -| display_width) / 2,
+        .right => blk: {
+            // Avoid underflow: ensure we don't go below content_col
+            if (available_width > display_width + 1) {
+                break :blk content_col + available_width - display_width - 1;
+            } else {
+                break :blk content_col + 1;
+            }
+        },
+    };
+
+    // Render title characters (properly handling UTF-8 and wide chars)
+    var col = start_col;
+    byte_idx = 0;
+    while (byte_idx < display_text.len) {
+        if (col >= grid_width) break;
+        if (col >= content_col + content_width) break;
+
+        const char_len = std.unicode.utf8ByteSequenceLength(display_text[byte_idx]) catch 1;
+        if (byte_idx + char_len > display_text.len) break;
+
+        const codepoint = std.unicode.utf8Decode(display_text[byte_idx..][0..char_len]) catch ' ';
+        const char_display_width = char_width.codepointWidth(codepoint);
+
+        // Skip zero-width characters
+        if (char_display_width == 0) {
+            byte_idx += char_len;
+            continue;
+        }
+
+        if (col >= content_col) {
+            display.base_layer.grid.setCell(row, col, .{
+                .char = codepoint,
+                .fg = fg_color,
+                .bg = bg_color,
+            });
+
+            // Handle wide characters (e.g., CJK, emoji)
+            if (char_display_width == 2 and col + 1 < grid_width and col + 1 < content_col + content_width) {
+                display.base_layer.grid.setCell(row, col + 1, .{
+                    .char = ' ',
+                    .fg = fg_color,
+                    .bg = bg_color,
+                    .is_continuation = true,
+                });
+            }
+        }
+
+        col += char_display_width;
+        byte_idx += char_len;
+    }
+}
+
+/// Render shadow effect (bottom-right shadow)
+fn renderShadowEffect(
+    display: *Display,
+    content_row: usize,
+    content_col: usize,
+    content_height: usize,
+    content_width: usize,
+    grid_height: usize,
+    grid_width: usize,
+) void {
+    const shadow_color = highlights.Color{ .r = 64, .g = 64, .b = 64 };
+
+    // Shadow on right side (1 column to the right of the right border)
+    const shadow_right_col = content_col + content_width + 1;
+    if (shadow_right_col < grid_width) {
+        var row = content_row + 1;
+        while (row <= content_row + content_height + 1 and row < grid_height) : (row += 1) {
+            display.base_layer.grid.setCell(row, shadow_right_col, .{
+                .char = ' ',
+                .fg = null,
+                .bg = shadow_color,
+            });
+        }
+    }
+
+    // Shadow on bottom (1 row below the bottom border)
+    const shadow_bottom_row = content_row + content_height + 1;
+    if (shadow_bottom_row < grid_height) {
+        var col = content_col + 1;
+        while (col <= content_col + content_width + 1 and col < grid_width) : (col += 1) {
+            display.base_layer.grid.setCell(shadow_bottom_row, col, .{
+                .char = ' ',
+                .fg = null,
+                .bg = shadow_color,
+            });
+        }
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 

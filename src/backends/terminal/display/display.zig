@@ -163,6 +163,25 @@ pub const Display = struct {
     // Sending hide/show on every frame (60 FPS) causes rapid toggling
     last_cursor_visible: bool = true, // Assume visible at startup
 
+    // ============================================================================
+    // CURSOR SUPPRESSION (for plugin animations like smear-cursor)
+    // ============================================================================
+    // When a plugin is animating the cursor (e.g., smear-cursor), the native
+    // terminal cursor should stay hidden until animation completes.
+    //
+    // Without suppression:
+    //   Each render frame: hideCursor() → render cells → showCursor()
+    //   At 60fps, this causes visible flickering (30+ hide/show pairs per animation)
+    //
+    // With suppression:
+    //   Animation start: setCursorRenderPosition(-1, -1) → sets suppress_cursor = true
+    //   During animation: showCursor() becomes a no-op (cursor stays hidden)
+    //   Animation end: clearCursorRenderPosition() → sets suppress_cursor = false, shows cursor
+    //
+    // This matches Neovim's smear-cursor.nvim behavior which uses blend=100
+    // to keep the cursor visually hidden during animation.
+    cursor_suppressed: bool = false,
+
     // Terminal capabilities (detected at runtime)
     // Synchronized updates (DCS = 1 s ... DCS = 2 s) for flicker-free rendering
     // Supported by: iTerm2, Alacritty, WezTerm, tmux
@@ -355,12 +374,52 @@ pub const Display = struct {
     /// Show cursor
     /// OPTIMIZATION: Only send show code if cursor is currently hidden
     /// This prevents redundant show codes from causing flickering during rapid rendering
+    /// CURSOR SUPPRESSION: When cursor_suppressed is true (plugin animation active),
+    /// showCursor() becomes a no-op. The cursor stays hidden until suppression is cleared.
     pub fn showCursor(self: *Display) !void {
+        // Don't show cursor while suppressed (plugin animation in progress)
+        if (self.cursor_suppressed) return;
+
         if (!self.last_cursor_visible) {
             try terminal_control.showCursor(self);
             self.last_cursor_visible = true;
             self.render_stats.cursor_show_codes += 1; // Track for performance debugging
         }
+    }
+
+    /// Suppress cursor visibility (for plugin animations)
+    /// While suppressed, showCursor() becomes a no-op.
+    /// Call unsuppressCursor() when animation completes.
+    pub fn suppressCursor(self: *Display) !void {
+        self.cursor_suppressed = true;
+        // Hide cursor immediately when suppression starts
+        try self.hideCursor();
+    }
+
+    /// Unsuppress cursor visibility (after plugin animation completes)
+    /// This restores normal showCursor() behavior. The cursor will be shown
+    /// on the NEXT render cycle, NOT immediately. This prevents flickering
+    /// by ensuring the smear layer is cleared before the cursor appears.
+    ///
+    /// CRITICAL FIX for "tiny flickering":
+    /// Previously, unsuppressCursor() immediately sent showCursor escape code.
+    /// This caused the cursor to appear while the smear trail was still visible,
+    /// creating a brief flicker. By deferring cursor show to next render:
+    ///   1. Animation ends → clearCursorRenderPosition() → sets cursor_suppressed = false
+    ///   2. Layer cleared (marks dirty) → triggers re-render
+    ///   3. Render cycle → clears layer → shows cursor at correct position
+    /// Result: Cursor only appears AFTER layer is cleared, eliminating flicker.
+    pub fn unsuppressCursor(self: *Display) !void {
+        self.cursor_suppressed = false;
+        // NOTE: Do NOT show cursor here! Let the next render cycle handle it.
+        // This ensures the cursor only appears AFTER the smear layer is cleared
+        // and the screen is properly rendered. The backend.render() function
+        // will call showCursor() after all rendering is complete.
+    }
+
+    /// Check if cursor is currently suppressed
+    pub fn isCursorSuppressed(self: *const Display) bool {
+        return self.cursor_suppressed;
     }
 
     /// Set cursor to block shape (normal mode)
@@ -861,6 +920,11 @@ pub const Display = struct {
         // Render each window
         var window_iter = editor.windows.valueIterator();
         while (window_iter.next()) |win| {
+            // Skip hidden floating windows (P0 fix: don't render content for hidden windows)
+            if (win.*.floating_config) |config| {
+                if (config.hide) continue;
+            }
+
             // HashMap stores *Buffer, so get returns *Buffer directly
             const buffer = editor.buffers.get(win.*.buffer_id) orelse continue;
             const is_active = if (active_win_id) |id| win.*.id.eql(id) else false;
@@ -889,6 +953,13 @@ pub const Display = struct {
 
             // Render window to compositor layers
             try window_renderer.renderWindow(self, &context);
+
+            // Render floating window border (if applicable)
+            // This renders AROUND the window content area, not inside it
+            // Border is rendered to base_layer so it appears behind content
+            if (win.*.isFloating()) {
+                window_renderer.renderFloatingWindowBorder(self, win.*, &editor.highlight_registry);
+            }
 
             // Render window statusline to base_layer BEFORE compositor runs
             // This ensures statuslines are part of the compositor state and don't

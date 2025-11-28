@@ -197,6 +197,189 @@ export interface ExtmarkGetOpts {
  */
 export type ExtmarkPosition = 0 | -1 | [number, number] | ExtmarkID;
 
+// ============================================================================
+// Floating Window Types
+// ============================================================================
+
+/**
+ * Relative positioning mode for floating windows.
+ *
+ * - `'editor'`: Position relative to the editor grid
+ * - `'win'`: Position relative to a window (requires `win` option)
+ * - `'cursor'`: Position relative to cursor position
+ * - `'mouse'`: Position relative to mouse position (if available)
+ */
+export type FloatingRelative = 'editor' | 'win' | 'cursor' | 'mouse';
+
+/**
+ * Anchor position for floating windows.
+ *
+ * The anchor determines which corner of the floating window is placed
+ * at the specified row/col position.
+ *
+ * - `'NW'`: Top-left (default)
+ * - `'NE'`: Top-right
+ * - `'SW'`: Bottom-left
+ * - `'SE'`: Bottom-right
+ */
+export type FloatingAnchor = 'NW' | 'NE' | 'SW' | 'SE';
+
+/**
+ * Border style for floating windows.
+ *
+ * Can be a preset string or a custom array of border characters.
+ *
+ * @example
+ * // Preset styles
+ * border: 'none'     // No border
+ * border: 'single'   // Single-line box drawing characters
+ * border: 'double'   // Double-line box drawing characters
+ * border: 'rounded'  // Rounded corners
+ * border: 'solid'    // Solid block characters
+ * border: 'shadow'   // Shadow effect
+ *
+ * @example
+ * // Custom border (8 characters: top-left, top, top-right, right, bottom-right, bottom, bottom-left, left)
+ * border: ['╭', '─', '╮', '│', '╯', '─', '╰', '│']
+ */
+export type FloatingBorder = 'none' | 'single' | 'double' | 'rounded' | 'solid' | 'shadow' | string[];
+
+/**
+ * Configuration options for floating windows.
+ *
+ * Floating windows are positioned relative to the editor, cursor, or another window.
+ * They can have borders, titles, and various styling options.
+ *
+ * @example
+ * // Simple floating window at cursor
+ * const config: FloatingWinConfig = {
+ *   relative: 'cursor',
+ *   row: 1,
+ *   col: 0,
+ *   width: 20,
+ *   height: 5
+ * };
+ *
+ * @example
+ * // Centered floating window with border
+ * const config: FloatingWinConfig = {
+ *   relative: 'editor',
+ *   row: 10,
+ *   col: 20,
+ *   width: 40,
+ *   height: 10,
+ *   border: 'rounded',
+ *   title: 'My Window',
+ *   titlePos: 'center'
+ * };
+ *
+ * @example
+ * // Floating window anchored to another window
+ * const config: FloatingWinConfig = {
+ *   relative: 'win',
+ *   win: existingWindow,
+ *   anchor: 'NE',
+ *   row: 0,
+ *   col: 0,
+ *   width: 30,
+ *   height: 8
+ * };
+ */
+export interface FloatingWinConfig {
+  /**
+   * Positioning mode for the floating window.
+   * Required when creating a new floating window.
+   */
+  relative: FloatingRelative;
+
+  /**
+   * Window to position relative to when `relative: 'win'`.
+   * Use 0 for current window.
+   */
+  win?: Window;
+
+  /**
+   * Anchor corner of the floating window for positioning.
+   * Default: 'NW' (top-left)
+   */
+  anchor?: FloatingAnchor;
+
+  /**
+   * Row position (0-indexed), relative to the anchor.
+   * Can be negative to position above the anchor point.
+   */
+  row: number;
+
+  /**
+   * Column position (0-indexed), relative to the anchor.
+   * Can be negative to position left of the anchor point.
+   */
+  col: number;
+
+  /**
+   * Width of the floating window in columns.
+   */
+  width: number;
+
+  /**
+   * Height of the floating window in rows.
+   */
+  height: number;
+
+  /**
+   * Whether the window can receive focus.
+   * Default: true
+   */
+  focusable?: boolean;
+
+  /**
+   * Z-index for stacking order. Higher values appear on top.
+   * Default: 50
+   */
+  zindex?: number;
+
+  /**
+   * Border style. Can be a preset name or custom characters.
+   */
+  border?: FloatingBorder;
+
+  /**
+   * Title text to display in the border.
+   * Requires a border to be set.
+   */
+  title?: string;
+
+  /**
+   * Position of the title in the border.
+   * Default: 'left'
+   */
+  titlePos?: 'left' | 'center' | 'right';
+
+  /**
+   * Footer text to display in the bottom border.
+   * Requires a border to be set.
+   */
+  footer?: string;
+
+  /**
+   * Position of the footer in the border.
+   * Default: 'left'
+   */
+  footerPos?: 'left' | 'center' | 'right';
+
+  /**
+   * Whether the window is hidden.
+   * Hidden windows are not displayed but retain their configuration.
+   */
+  hide?: boolean;
+
+  /**
+   * Style presets for the window.
+   * - 'minimal': No line numbers, no status line
+   */
+  style?: 'minimal';
+}
+
 /**
  * RGB color representation with integer values 0-255.
  *
@@ -1098,7 +1281,7 @@ export interface KeymapOpts {
    * Replace keycodes in rhs (e.g., '<CR>' becomes actual carriage return).
    * @default true when expr is true
    */
-  replace_keycodes?: boolean;
+  replaceKeycodes?: boolean;
 
   /**
    * Description of the mapping.
@@ -1312,7 +1495,7 @@ export interface UserCommandOpts {
   /** Completion type */
   complete?: 'file' | 'dir' | 'buffer' | 'custom' | string;
   /** Custom completion function */
-  complete_function?: (arg_lead: string, cmd_line: string, cursor_pos: number) => string[];
+  completeFunction?: (argLead: string, cmdLine: string, cursorPos: number) => string[];
   /** Range allowed */
   range?: boolean | '%' | number;
   /** Count allowed */
@@ -1381,11 +1564,11 @@ export interface Diagnostic {
   /** Line number (0-indexed) */
   lnum: number;
   /** End line number (0-indexed, optional) */
-  end_lnum?: number;
+  endLnum?: number;
   /** Column number (0-indexed) */
   col: number;
   /** End column number (0-indexed, optional) */
-  end_col?: number;
+  endCol?: number;
   /** Severity level */
   severity: DiagnosticSeverity | number;
   /** Diagnostic message */
@@ -1395,7 +1578,7 @@ export interface Diagnostic {
   /** Error code */
   code?: string | number;
   /** User data */
-  user_data?: any;
+  userData?: any;
 }
 
 /**
@@ -1405,10 +1588,10 @@ export interface DiagnosticConfig {
   /** Underline diagnostics */
   underline?: boolean;
   /** Virtual text configuration */
-  virtual_text?: boolean | {
+  virtualText?: boolean | {
     spacing?: number;
     prefix?: string;
-    source?: boolean | 'always' | 'if_many';
+    source?: boolean | 'always' | 'ifMany';
     format?: (diagnostic: Diagnostic) => string;
   };
   /** Signs in sign column */
@@ -1417,14 +1600,14 @@ export interface DiagnosticConfig {
     priority?: number;
   };
   /** Update diagnostics in insert mode */
-  update_in_insert?: boolean;
+  updateInInsert?: boolean;
   /** Severity sort order */
-  severity_sort?: boolean | {
+  severitySort?: boolean | {
     reverse?: boolean;
   };
   /** Float window configuration */
   float?: boolean | {
-    source?: boolean | 'always' | 'if_many';
+    source?: boolean | 'always' | 'ifMany';
     border?: string;
     header?: string;
     prefix?: string | ((diagnostic: Diagnostic, i: number, total: number) => string);
@@ -1432,9 +1615,38 @@ export interface DiagnosticConfig {
 }
 
 /**
+ * Diagnostic severity object with both named and numeric keys.
+ * Neovim-compatible severity levels.
+ *
+ * @example
+ * // Access by name
+ * vim.diagnostic.severity.ERROR // 1
+ * vim.diagnostic.severity.WARN  // 2
+ *
+ * // Reverse lookup
+ * vim.diagnostic.severity[1] // "ERROR"
+ */
+export interface DiagnosticSeverityMap {
+  ERROR: 1;
+  WARN: 2;
+  INFO: 3;
+  HINT: 4;
+  // Reverse mappings
+  1: 'ERROR';
+  2: 'WARN';
+  3: 'INFO';
+  4: 'HINT';
+}
+
+/**
  * Diagnostic interface (vim.diagnostic)
  */
 export interface DiagnosticAPI {
+  /**
+   * Severity levels (ERROR=1, WARN=2, INFO=3, HINT=4)
+   */
+  severity: DiagnosticSeverityMap;
+
   /**
    * Set diagnostics for a namespace
    */
@@ -1446,34 +1658,53 @@ export interface DiagnosticAPI {
   get(bufnr?: Buffer, opts?: { namespace?: Namespace; lnum?: number; severity?: DiagnosticSeverity }): Diagnostic[];
 
   /**
-   * Configure diagnostics
+   * Clear diagnostics for a namespace/buffer
+   * @param namespace - Namespace to clear (undefined for all namespaces)
+   * @param bufnr - Buffer to clear (undefined for all buffers)
    */
-  config(opts: DiagnosticConfig, namespace?: Namespace): void;
+  reset(namespace?: Namespace, bufnr?: Buffer): void;
 
   /**
-   * Show diagnostics in floating window
+   * Count diagnostics by severity
+   * @param bufnr - Buffer to count (undefined for all buffers)
+   * @param opts - Options with optional namespace filter
+   * @returns Object with severity keys (1-4) and counts
+   *
+   * @example
+   * const counts = vim.diagnostic.count(0);
+   * console.log(counts[vim.diagnostic.severity.ERROR]); // 2
    */
-  open_float(opts?: any): void;
+  count(bufnr?: Buffer, opts?: { namespace?: Namespace }): Record<DiagnosticSeverity, number>;
 
   /**
-   * Jump to next diagnostic
+   * Configure diagnostics (not yet implemented)
    */
-  goto_next(opts?: any): void;
+  config?(opts: DiagnosticConfig, namespace?: Namespace): void;
 
   /**
-   * Jump to previous diagnostic
+   * Show diagnostics in floating window (not yet implemented)
    */
-  goto_prev(opts?: any): void;
+  openFloat?(opts?: any): void;
 
   /**
-   * Enable diagnostics
+   * Jump to next diagnostic (not yet implemented)
    */
-  enable(bufnr?: Buffer, namespace?: Namespace): void;
+  gotoNext?(opts?: any): void;
 
   /**
-   * Disable diagnostics
+   * Jump to previous diagnostic (not yet implemented)
    */
-  disable(bufnr?: Buffer, namespace?: Namespace): void;
+  gotoPrev?(opts?: any): void;
+
+  /**
+   * Enable diagnostics (not yet implemented)
+   */
+  enable?(bufnr?: Buffer, namespace?: Namespace): void;
+
+  /**
+   * Disable diagnostics (not yet implemented)
+   */
+  disable?(bufnr?: Buffer, namespace?: Namespace): void;
 }
 
 // ============================================================================
@@ -1494,10 +1725,10 @@ export interface API {
   setCurrentBuf(buffer: Buffer): void;
 
   /** Get buffer lines */
-  bufGetLines(buffer: Buffer, start: number, end: number, strict_indexing: boolean): string[];
+  bufGetLines(buffer: Buffer, start: number, end: number, strictIndexing: boolean): string[];
 
   /** Set buffer lines */
-  bufSetLines(buffer: Buffer, start: number, end: number, strict_indexing: boolean, replacement: string[]): void;
+  bufSetLines(buffer: Buffer, start: number, end: number, strictIndexing: boolean, replacement: string[]): void;
 
   /** Get buffer line count */
   bufLineCount(buffer: Buffer): number;
@@ -1551,6 +1782,90 @@ export interface API {
 
   /** Close window */
   winClose(window: Window, force: boolean): void;
+
+  // === Floating Window Functions ===
+
+  /**
+   * Open a new floating window.
+   *
+   * Creates a floating window displaying the specified buffer. Floating windows
+   * are positioned relative to the editor, cursor, or another window.
+   *
+   * @param buffer - Buffer to display (use 0 for current buffer or vim.api.createBuf())
+   * @param enter - Whether to enter the window (make it current)
+   * @param config - Floating window configuration
+   * @returns Window handle for the new floating window
+   *
+   * @example
+   * // Create a simple floating window at cursor
+   * const buf = vim.api.createBuf(false, true);
+   * vim.api.bufSetLines(buf, 0, -1, false, ['Hello', 'World']);
+   * const win = vim.api.openWin(buf, true, {
+   *   relative: 'cursor',
+   *   row: 1,
+   *   col: 0,
+   *   width: 20,
+   *   height: 2
+   * });
+   *
+   * // Create a centered floating window
+   * const win = vim.api.openWin(buf, false, {
+   *   relative: 'editor',
+   *   row: 10,
+   *   col: 20,
+   *   width: 40,
+   *   height: 10,
+   *   border: 'rounded',
+   *   title: 'My Window'
+   * });
+   */
+  openWin(buffer: Buffer, enter: boolean, config: FloatingWinConfig): Window;
+
+  /**
+   * Update the configuration of a floating window.
+   *
+   * @param window - Window handle
+   * @param config - New configuration options (only specified fields are updated)
+   *
+   * @example
+   * // Move a floating window
+   * vim.api.winSetConfig(win, { row: 5, col: 10 });
+   *
+   * // Resize and add a border
+   * vim.api.winSetConfig(win, { width: 30, height: 15, border: 'single' });
+   */
+  winSetConfig(window: Window, config: Partial<FloatingWinConfig>): void;
+
+  /**
+   * Get the configuration of a floating window.
+   *
+   * @param window - Window handle
+   * @returns Floating window configuration, or null if not a floating window
+   *
+   * @example
+   * const config = vim.api.winGetConfig(win);
+   * if (config) {
+   *   console.log('Window is at:', config.row, config.col);
+   * }
+   */
+  winGetConfig(window: Window): FloatingWinConfig | null;
+
+  /**
+   * Hide a floating window without destroying it.
+   *
+   * The window can be shown again by updating its configuration.
+   * This is more efficient than closing and recreating the window.
+   *
+   * @param window - Window handle
+   *
+   * @example
+   * // Hide the window
+   * vim.api.winHide(win);
+   *
+   * // Show it again later
+   * vim.api.winSetConfig(win, { hide: false });
+   */
+  winHide(window: Window): void;
 
   // === Tabpage Functions ===
 
@@ -1626,10 +1941,10 @@ export interface API {
   getHighlight(namespace: Namespace, opts: { name?: string; id?: number; link?: boolean }): Record<string, any>;
 
   /** Set buffer highlight (extmark-based) */
-  bufAddHighlight(buffer: Buffer, ns_id: Namespace, hl_group: string, line: number, col_start: number, col_end: number): number;
+  bufAddHighlight(buffer: Buffer, nsId: Namespace, hlGroup: string, line: number, colStart: number, colEnd: number): number;
 
   /** Clear namespace highlights */
-  bufClearNamespace(buffer: Buffer, ns_id: Namespace, line_start: number, line_end: number): void;
+  bufClearNamespace(buffer: Buffer, nsId: Namespace, lineStart: number, lineEnd: number): void;
 
   // === Extmark Functions ===
 
@@ -1640,7 +1955,7 @@ export interface API {
    * They can be used for highlighting, virtual text, diagnostics, etc.
    *
    * @param buffer - Buffer handle (0 for current)
-   * @param ns_id - Namespace ID from `createNamespace()`
+   * @param nsId - Namespace ID from `createNamespace()`
    * @param line - Line number (0-indexed)
    * @param col - Column number (0-indexed, byte offset)
    * @param opts - Extmark options
@@ -1662,13 +1977,13 @@ export interface API {
    * // Update existing extmark
    * vim.api.bufSetExtmark(0, ns, 2, 0, { id: existingId });
    */
-  bufSetExtmark(buffer: Buffer, ns_id: Namespace, line: number, col: number, opts: ExtmarkOpts): ExtmarkID;
+  bufSetExtmark(buffer: Buffer, nsId: Namespace, line: number, col: number, opts: ExtmarkOpts): ExtmarkID;
 
   /**
    * Get extmarks in a range.
    *
    * @param buffer - Buffer handle (0 for current)
-   * @param ns_id - Namespace ID
+   * @param nsId - Namespace ID
    * @param start - Start position (0, -1, [line, col], or extmark ID)
    * @param end - End position (0, -1, [line, col], or extmark ID)
    * @param opts - Query options
@@ -1689,7 +2004,7 @@ export interface API {
    */
   bufGetExtmarks(
     buffer: Buffer,
-    ns_id: Namespace,
+    nsId: Namespace,
     start: ExtmarkPosition,
     end: ExtmarkPosition,
     opts?: ExtmarkGetOpts
@@ -1699,20 +2014,20 @@ export interface API {
    * Delete an extmark.
    *
    * @param buffer - Buffer handle (0 for current)
-   * @param ns_id - Namespace ID
+   * @param nsId - Namespace ID
    * @param id - Extmark ID to delete
    * @returns `true` if extmark was found and deleted, `false` otherwise
    *
    * @example
    * const deleted = vim.api.bufDelExtmark(0, ns, extmarkId);
    */
-  bufDelExtmark(buffer: Buffer, ns_id: Namespace, id: ExtmarkID): boolean;
+  bufDelExtmark(buffer: Buffer, nsId: Namespace, id: ExtmarkID): boolean;
 
   /**
    * Get extmark by ID.
    *
    * @param buffer - Buffer handle (0 for current)
-   * @param ns_id - Namespace ID
+   * @param nsId - Namespace ID
    * @param id - Extmark ID
    * @param opts - Query options
    * @returns `[line, col]` or `[line, col, details]` if found, `null` if not found
@@ -1734,7 +2049,7 @@ export interface API {
    */
   bufGetExtmarkById(
     buffer: Buffer,
-    ns_id: Namespace,
+    nsId: Namespace,
     id: ExtmarkID,
     opts?: ExtmarkGetOpts
   ): [number, number] | [number, number, ExtmarkDetails] | null;
@@ -1795,7 +2110,7 @@ export interface API {
   getMode(): { mode: string; blocking: boolean };
 
   /** Notify user */
-  notify(msg: string, log_level: number, opts: any): void;
+  notify(msg: string, logLevel: number, opts: any): void;
 
   /** Echo message */
   echo(chunks: Array<[string, string?]>, history: boolean, opts: any): void;
@@ -1842,8 +2157,71 @@ export interface VimFunctions {
   /** Get character from position */
   getcharpos(expr: string): [number, number, number, number];
 
-  /** Check if file exists */
-  filereadable(file: string): boolean;
+  /**
+   * Check if file exists and is readable
+   * @param file - File path to check
+   * @returns 1 if file exists and is readable, 0 otherwise
+   * @example
+   * if (vim.fn.filereadable('/path/to/file')) {
+   *   console.log('File exists and is readable');
+   * }
+   */
+  filereadable(file: string): number;
+
+  /**
+   * Check if path is a directory
+   * @param path - Path to check
+   * @returns 1 if path is a directory, 0 otherwise
+   * @example
+   * if (vim.fn.isdirectory('/path/to/dir')) {
+   *   console.log('Path is a directory');
+   * }
+   */
+  isdirectory(path: string): number;
+
+  /**
+   * Modify filename according to modifiers
+   * @param path - File path to modify
+   * @param mods - Modifiers string (e.g., ':p:h', ':t:r', ':e')
+   * @returns Modified path
+   *
+   * Modifiers:
+   * - `:p` - Full path (make absolute)
+   * - `:h` - Head (directory part)
+   * - `:t` - Tail (filename part)
+   * - `:r` - Root (remove extension)
+   * - `:e` - Extension only
+   *
+   * @example
+   * // Get directory of a path
+   * const dir = vim.fn.fnamemodify('/path/to/file.txt', ':h');
+   * // Returns: '/path/to'
+   *
+   * // Get filename without extension
+   * const name = vim.fn.fnamemodify('/path/to/file.txt', ':t:r');
+   * // Returns: 'file'
+   *
+   * // Get extension
+   * const ext = vim.fn.fnamemodify('file.txt', ':e');
+   * // Returns: 'txt'
+   */
+  fnamemodify(path: string, mods: string): string;
+
+  /**
+   * Get line content by line number
+   * @param lnum - Line number (1-indexed), '.' for current line, '$' for last line
+   * @returns Line content as string, or empty string if line doesn't exist
+   * @example
+   * // Get first line
+   * const line1 = vim.fn.getline(1);
+   *
+   * // Get current line
+   * const current = vim.fn.getline('.');
+   *
+   * // Get last line
+   * const last = vim.fn.getline('$');
+   */
+  getline(lnum: number | '.' | '$'): string;
 
   /** Get file type */
   getftype(fname: string): string;
@@ -3420,7 +3798,7 @@ export interface LspFramer {
  *   onAttach: (client, bufnr) => {
  *     // Setup keymaps when LSP attaches
  *     vim.keymap.set('n', 'K', async () => {
- *       const hover = await vim.lsp.buf_hover(bufnr, uri, line, col);
+ *       const hover = await vim.lsp.bufHover(bufnr, uri, line, col);
  *       if (hover) showHover(hover);
  *     }, { buffer: bufnr });
  *   },
@@ -3510,7 +3888,7 @@ export interface LSP {
    * @param languageId - Language identifier (e.g., 'typescript')
    * @param text - Document content
    */
-  buf_did_open(bufnr: number, uri: string, languageId: string, text: string): void;
+  bufDidOpen(bufnr: number, uri: string, languageId: string, text: string): void;
 
   /**
    * Send textDocument/didChange notification to all clients attached to buffer.
@@ -3520,7 +3898,7 @@ export interface LSP {
    * @param version - Document version number
    * @param text - Full document text (full sync mode)
    */
-  buf_did_change(bufnr: number, uri: string, version: number, text: string): void;
+  bufDidChange(bufnr: number, uri: string, version: number, text: string): void;
 
   /**
    * Send textDocument/didClose notification to all clients attached to buffer.
@@ -3528,7 +3906,7 @@ export interface LSP {
    * @param bufnr - Buffer number
    * @param uri - Document URI
    */
-  buf_did_close(bufnr: number, uri: string): void;
+  bufDidClose(bufnr: number, uri: string): void;
 
   /**
    * Send textDocument/didSave notification to all clients attached to buffer.
@@ -3537,7 +3915,7 @@ export interface LSP {
    * @param uri - Document URI
    * @param text - Document text (optional, for includeText capability)
    */
-  buf_did_save(bufnr: number, uri: string, text?: string): void;
+  bufDidSave(bufnr: number, uri: string, text?: string): void;
 
   // ========== Request helpers ==========
 
@@ -3550,7 +3928,7 @@ export interface LSP {
    * @param character - Character offset (0-indexed)
    * @returns Hover result or null
    */
-  buf_hover(bufnr: number, uri: string, line: number, character: number): Promise<any>;
+  bufHover(bufnr: number, uri: string, line: number, character: number): Promise<any>;
 
   /**
    * Request definition location at a position.
@@ -3561,7 +3939,7 @@ export interface LSP {
    * @param character - Character offset (0-indexed)
    * @returns Definition location(s) or null
    */
-  buf_definition(bufnr: number, uri: string, line: number, character: number): Promise<any>;
+  bufDefinition(bufnr: number, uri: string, line: number, character: number): Promise<any>;
 
   /**
    * Request references at a position.
@@ -3573,7 +3951,7 @@ export interface LSP {
    * @param includeDeclaration - Include declaration in results (default: true)
    * @returns Reference locations or null
    */
-  buf_references(
+  bufReferences(
     bufnr: number,
     uri: string,
     line: number,
@@ -5350,9 +5728,9 @@ export interface Vim {
    * @returns Namespace ID
    *
    * @example
-   * const ns = vim.create_namespace('my-plugin');
+   * const ns = vim.createNamespace('my-plugin');
    */
-  create_namespace?(name: string): Namespace;
+  createNamespace?(name: string): Namespace;
 
   /**
    * Schedule a function to run on the next event loop iteration.
