@@ -1456,24 +1456,31 @@ pub fn deinit() void {
 
     // Mark as not initialized to prevent any new operations
     registry_initialized = false;
-    pool_initialized = false;
 
-    // Kill all running processes
-    // Don't try to close handles or free memory - just kill processes
-    // and let the OS clean up when the process exits.
-    //
-    // The issue is that libuv_loop_close requires ALL handles to be closed,
-    // and properly closing handles requires running the event loop.
-    // Rather than fight with libuv's cleanup requirements, we simply
-    // kill processes and let the OS handle the rest.
+    // Kill all running processes and free memory
     registry_mutex.lock();
     var iter = process_registry.valueIterator();
     while (iter.next()) |proc| {
         if (!proc.*.exited) {
             _ = uv.processKill(proc.*.process.ptr(), 9) catch {};
         }
+        // Clean up process resources
+        proc.*.deinit();
+        proc.*.allocator.destroy(proc.*);
     }
+    process_registry.deinit();
     registry_mutex.unlock();
+
+    // Free pool entries
+    if (pool_initialized) {
+        pool_mutex.lock();
+        for (free_process_pool.items) |proc| {
+            proc.allocator.destroy(proc);
+        }
+        free_process_pool.deinit(pool_allocator);
+        pool_mutex.unlock();
+        pool_initialized = false;
+    }
 
     global_ctx = null;
 }

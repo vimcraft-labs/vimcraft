@@ -37,7 +37,22 @@ declare const vimOptLocal: Record<string, unknown>;
 declare const vimOptGlobal: Record<string, unknown>;
 declare const vimBo: Record<string, unknown>;
 declare const vimCursor: object | undefined;
-declare const vimLayer: object;
+declare const vimLayer: {
+  screenchar(row: number, col: number): number;
+  screenFg(row: number, col: number): number | null;
+  screenBg(row: number, col: number): number | null;
+  suppressCursor(): void;
+  unsuppressCursor(): void;
+  getViewportInfo(): { top: number; left: number; height: number; width: number };
+  getGutterWidth(): number;
+  createLayer(name: string, opts: { zIndex: number; opacity?: number; cacheable?: boolean }): void;
+  renderVirtualText(name: string, cells: Array<{ row: number; col: number; char: string | number; fg?: number; bg?: number }>): void;
+  setLayerOpacity(name: string, opacity: number): void;
+  clearLayer(name: string): void;
+  destroyLayer(name: string): void;
+  drawVirtualText(row: number, col: number, char: number, fg: number | null, bg: number | null): void;
+  clearVirtualText(): void;
+};
 declare const vimMotion: object;
 declare const vimKeymap: {
   set(mode: string, lhs: string, rhs: string | number, opts?: object): void;
@@ -485,6 +500,7 @@ interface VimAPI {
   bufGetOffset(buffer: number, line: number): number;
   bufCall(buffer: number, fun: () => unknown): unknown;
   bufGetCharAt(buffer: number, row: number, col: number): string;
+  bufSetOption(buffer: number, name: string, value: unknown): void;
 
   // Window functions
   getCurrentWin(): number;
@@ -635,6 +651,10 @@ const vimApi: VimAPI = {
 
   bufGetCharAt(buffer: number, row: number, col: number) {
     return typeof vimApiBufGetCharAt !== 'undefined' ? vimApiBufGetCharAt(buffer, row, col) : ' ';
+  },
+
+  bufSetOption(buffer: number, name: string, value: unknown) {
+    if (typeof vimApiBufSetOption !== 'undefined') vimApiBufSetOption(buffer, name, value);
   },
 
   // Window functions
@@ -968,7 +988,7 @@ const vimFn = {
     return 0;
   },
 
-  // LSP prerequisites - needed for vim.lsp.start() to work
+  // Get current working directory
   getCwd(): string {
     if (typeof __process !== 'undefined' && typeof __process.cwd === 'function') {
       return __process.cwd();
@@ -1143,6 +1163,36 @@ const vimFn = {
 
     return 0;
   },
+
+  // Screen functions (Neovim-compatible)
+  // Note: These read from the compositor output grid
+
+  /**
+   * Returns the character at screen position [row, col].
+   * Uses 0-based indexing (JavaScript convention).
+   * Returns 0 for out of range positions.
+   */
+  screenchar(row: number, col: number): number {
+    return vimLayer.screenchar(row, col);
+  },
+
+  /**
+   * Returns the foreground color at screen position [row, col] as hex (0xRRGGBB).
+   * Uses 0-based indexing (JavaScript convention).
+   * Returns null if no color is set.
+   */
+  screenFg(row: number, col: number): number | null {
+    return vimLayer.screenFg(row, col);
+  },
+
+  /**
+   * Returns the background color at screen position [row, col] as hex (0xRRGGBB).
+   * Uses 0-based indexing (JavaScript convention).
+   * Returns null if no color is set.
+   */
+  screenBg(row: number, col: number): number | null {
+    return vimLayer.screenBg(row, col);
+  },
 };
 
 Object.freeze(vimFn);
@@ -1152,7 +1202,7 @@ Object.freeze(vimFn);
 // ============================================================================
 
 const vimAutocmd = {
-  create(eventOrGroup: string | string[], optsOrEvent?: object | string, callbackOrUndef?: () => void): number {
+  create(eventOrGroup: string | string[], optsOrEvent?: object | string, callbackOrUndef?: () => void): number | number[] {
     if (typeof callbackOrUndef === 'function') {
       // smear-cursor style: (group, event, callback)
       const group = eventOrGroup as string;
@@ -1161,6 +1211,15 @@ const vimAutocmd = {
       return vimApi.createAutocmd(event, { callback, group });
     } else {
       // Neovim style: (event, opts)
+      // Handle array of events by creating multiple autocmds
+      if (Array.isArray(eventOrGroup)) {
+        const ids: number[] = [];
+        for (const event of eventOrGroup) {
+          const id = vimApi.createAutocmd(event, optsOrEvent as object);
+          ids.push(id);
+        }
+        return ids.length === 1 ? ids[0] : ids;
+      }
       return vimApi.createAutocmd(eventOrGroup, optsOrEvent as object);
     }
   },
@@ -1407,8 +1466,10 @@ const vim: VimObject = {
       if (typeof rhs === 'function') {
         const id = (globalThis as any)._nextKeymapId++;
         (globalThis as any)._keymapCallbacks[id] = rhs;
+        consoleAPI.log('[Keymap] Registering callback for', mode, lhs, '-> id:', id);
         vimKeymap.set(mode, lhs, id, opts);
       } else {
+        consoleAPI.log('[Keymap] Registering keys for', mode, lhs, '->', rhs);
         vimKeymap.set(mode, lhs, rhs, opts);
       }
     },
@@ -1490,6 +1551,7 @@ Object.freeze(vim.diagnostic);
 (globalThis as any)._nextKeymapId = 1;
 
 (globalThis as any).__handleKeymapCallback = (id: number): void => {
+  consoleAPI.log('[Keymap] Callback triggered, id:', id);
   const callback = (globalThis as any)._keymapCallbacks[id];
   if (callback) {
     try {
@@ -1497,6 +1559,8 @@ Object.freeze(vim.diagnostic);
     } catch (e) {
       consoleAPI.log('Keymap callback error:', e);
     }
+  } else {
+    consoleAPI.log('[Keymap] No callback found for id:', id);
   }
 };
 
@@ -2547,17 +2611,71 @@ LspClient.prototype.hasBuffer = function(this: LspClientInstance, bufnr: number)
   return !!this._attachedBuffers[bufnr];
 };
 
+// Helper to construct proper file:// URI from buffer name
+function bufferToFileUri(bufnr: number): string {
+  let path = vim.api.bufGetName(bufnr);
+  // If path is relative, prepend cwd
+  if (path && !path.startsWith('/')) {
+    const cwd = vimFn.getCwd();
+    if (cwd) {
+      path = cwd + '/' + path;
+    }
+  }
+  return 'file://' + path;
+}
+
 // vim.lsp API
 const vimLsp = {
   start(opts: LspClientOptions): Promise<LspClientInstance> {
+    consoleAPI.log('[LSP] vim.lsp.start called with:', opts.name, opts.cmd);
     if (!opts || !opts.cmd || !Array.isArray(opts.cmd) || opts.cmd.length === 0) {
       return Promise.reject(new Error('vim.lsp.start requires opts.cmd array'));
     }
 
     const client = new (LspClient as any)(opts) as LspClientInstance;
     LspClient._clients.push(client);
+    consoleAPI.log('[LSP] Client created, starting...');
 
-    return client.start().catch(function(e) {
+    // Attach current buffer IMMEDIATELY so hover() can find it before async start completes
+    // This is important because FileType autocmd fires synchronously and user may
+    // press K before the LSP server finishes initializing
+    const currentBuf = vim.api.getCurrentBuf();
+    client.attachBuffer(currentBuf);
+    consoleAPI.log('[LSP] Buffer', currentBuf, 'attached to client', client.name);
+
+    return client.start().then(function(c) {
+      consoleAPI.log('[LSP] Client', c.name, 'initialized, attached buffers:', Object.keys(c._attachedBuffers));
+
+      // Send didOpen for all attached buffers now that server is ready
+      for (const bufnrStr in c._attachedBuffers) {
+        const bufnr = parseInt(bufnrStr, 10);
+        const uri = bufferToFileUri(bufnr);
+        const lines = vim.api.bufGetLines(bufnr, 0, -1, false);
+        const text = lines.join('\n');
+        // Detect language from file extension
+        const bufName = vim.api.bufGetName(bufnr);
+        let languageId = 'plaintext';
+        if (bufName.endsWith('.ts') || bufName.endsWith('.tsx')) {
+          languageId = 'typescript';
+        } else if (bufName.endsWith('.js') || bufName.endsWith('.jsx')) {
+          languageId = 'javascript';
+        } else if (bufName.endsWith('.json')) {
+          languageId = 'json';
+        }
+
+        consoleAPI.log('[LSP:' + c.name + '] Sending didOpen for buffer', bufnr, 'uri:', uri);
+        c.notify('textDocument/didOpen', {
+          textDocument: {
+            uri: uri,
+            languageId: languageId,
+            version: 1,
+            text: text
+          }
+        });
+      }
+
+      return c;
+    }).catch(function(e) {
       // Kill the process if it was spawned but initialization failed
       if (client._process) {
         try {
@@ -2774,6 +2892,386 @@ const vimLsp = {
     return clients.length > 0 ? clients[0] : null;
   },
 
+  // ========== vim.lsp.util - Floating window utilities (Neovim compatible) ==========
+  util: {
+    /**
+     * Track the current preview floating window (for auto-close on cursor move)
+     * @internal
+     */
+    _previewWinId: null as number | null,
+    _previewBufId: null as number | null,
+    _closeAutocommandIds: null as number[] | null,
+
+    /**
+     * Computes floating window config with smart position clamping
+     * @param width - Desired window width
+     * @param height - Desired window height
+     * @param opts - Options for positioning
+     * @returns Configuration object for vim.api.openWin
+     */
+    makeFloatingPopupOptions(width: number, height: number, opts?: {
+      relative?: 'cursor' | 'editor' | 'mouse';
+      anchorBias?: 'auto' | 'above' | 'below';
+      offsetX?: number;
+      offsetY?: number;
+      border?: string;
+      focusable?: boolean;
+      zindex?: number;
+    }): object {
+      opts = opts || {};
+      const relative = opts.relative || 'cursor';
+      const anchorBias = opts.anchorBias || 'auto';
+      const offsetX = opts.offsetX || 0;
+      const offsetY = opts.offsetY || 0;
+
+      // Get terminal/window dimensions
+      const winHeight = vim.api.winGetHeight(0);
+      const winWidth = vim.api.winGetWidth(0);
+
+      // Get cursor position in window (1-indexed row, 0-indexed col)
+      const cursor = vim.api.winGetCursor(0);
+      const cursorRow = cursor[0]; // 1-indexed
+      const cursorCol = cursor[1]; // 0-indexed
+
+      // Calculate lines above and below cursor
+      const linesAbove = cursorRow - 1; // Rows above cursor (0-indexed)
+      const linesBelow = winHeight - cursorRow;
+
+      // Account for border height (2 = top + bottom border)
+      const borderHeight = opts.border && opts.border !== 'none' ? 2 : 0;
+      const borderWidth = opts.border && opts.border !== 'none' ? 2 : 0;
+
+      // Determine anchor position (above or below cursor)
+      let anchorBelow: boolean;
+      if (anchorBias === 'below') {
+        anchorBelow = linesBelow > linesAbove || height + borderHeight <= linesBelow;
+      } else if (anchorBias === 'above') {
+        const anchorAbove = linesAbove > linesBelow || height + borderHeight <= linesAbove;
+        anchorBelow = !anchorAbove;
+      } else {
+        // 'auto' - prefer side with more space
+        anchorBelow = linesBelow >= linesAbove;
+      }
+
+      // Clamp height to available space
+      let clampedHeight: number;
+      let row: number;
+      let anchor: string;
+
+      if (anchorBelow) {
+        // Position below cursor with 1-row gap
+        anchor = 'NW';
+        clampedHeight = Math.max(1, Math.min(height, linesBelow - borderHeight - 1));
+        row = 2 + offsetY; // 2 rows below cursor (1 row gap)
+      } else {
+        // Position above cursor with 1-row gap
+        anchor = 'SW';
+        clampedHeight = Math.max(1, Math.min(height, linesAbove - borderHeight - 1));
+        row = -1 + offsetY; // 1 row above cursor (SW anchor places bottom edge here)
+      }
+
+      // Handle horizontal positioning - left-aligned, 1 col after cursor
+      let col = 1 + offsetX; // Start 1 column after cursor
+      if (cursorCol + 1 + width + borderWidth + offsetX > winWidth) {
+        // Not enough space on the right, anchor to the left of cursor instead
+        anchor = anchor.charAt(0) + 'E'; // Change W to E
+        col = 0 + offsetX; // At cursor position (right edge of popup)
+      } else {
+        anchor = anchor.charAt(0) + 'W';
+      }
+
+      // Clamp width to available space
+      const clampedWidth = Math.max(1, Math.min(width, winWidth - borderWidth));
+
+      return {
+        relative: relative,
+        anchor: anchor,
+        row: row,
+        col: col,
+        width: clampedWidth,
+        height: clampedHeight,
+        style: 'minimal',
+        border: opts.border || 'none',
+        focusable: opts.focusable !== undefined ? opts.focusable : false,
+        zindex: opts.zindex || 50
+      };
+    },
+
+    /**
+     * Opens a floating preview window with smart positioning and auto-close
+     * @param contents - Array of lines to display
+     * @param syntax - Syntax type ('markdown', 'text', etc.)
+     * @param opts - Options for the floating window
+     * @returns [bufnr, winid] tuple
+     */
+    openFloatingPreview(contents: string[], syntax?: string, opts?: {
+      height?: number;
+      width?: number;
+      maxWidth?: number;
+      maxHeight?: number;
+      wrap?: boolean;
+      border?: string;
+      focusable?: boolean;
+      focusId?: string;
+      closeEvents?: string[];
+      relative?: 'cursor' | 'editor' | 'mouse';
+      anchorBias?: 'auto' | 'above' | 'below';
+      offsetX?: number;
+      offsetY?: number;
+      zindex?: number;
+      padding?: number;
+    }): [number, number] {
+      opts = opts || {};
+
+      // Close existing preview window if any
+      vimLsp.util.closePreviewWindow();
+
+      // Compute dimensions
+      const maxWidth = opts.maxWidth || 80;
+      const maxHeight = opts.maxHeight || 15;
+
+      // Calculate content width (longest line)
+      let contentWidth = 1;
+      for (let i = 0; i < contents.length; i++) {
+        if (contents[i].length > contentWidth) {
+          contentWidth = contents[i].length;
+        }
+      }
+
+      // Add padding if specified (add spaces to each line)
+      const padding = opts.padding || 0;
+      if (padding > 0) {
+        const paddedContents: string[] = [];
+        const padStr = ' '.repeat(padding);
+        for (let i = 0; i < contents.length; i++) {
+          paddedContents.push(padStr + contents[i] + padStr);
+        }
+        contents = paddedContents;
+        contentWidth += padding * 2;
+      }
+
+      const width = opts.width || Math.min(maxWidth, contentWidth);
+      const height = opts.height || Math.min(maxHeight, contents.length);
+
+      // Create buffer
+      const bufnr = vim.api.createBuf(false, true);
+      vim.api.bufSetLines(bufnr, 0, -1, false, contents);
+
+      // Set syntax/filetype for tree-sitter highlighting
+      if (syntax) {
+        vim.api.bufSetOption(bufnr, 'filetype', syntax);
+      }
+
+      // Get floating window options with smart positioning
+      const floatOpts = vimLsp.util.makeFloatingPopupOptions(width, height, {
+        relative: opts.relative,
+        anchorBias: opts.anchorBias,
+        offsetX: opts.offsetX,
+        offsetY: opts.offsetY,
+        border: opts.border,
+        focusable: opts.focusable,
+        zindex: opts.zindex
+      });
+
+      // Open the window
+      const winid = vim.api.openWin(bufnr, false, floatOpts);
+
+      // Track for auto-close
+      vimLsp.util._previewWinId = winid;
+      vimLsp.util._previewBufId = bufnr;
+
+      // Set up auto-close on cursor move
+      const closeEvents = opts.closeEvents || ['CursorMoved', 'CursorMovedI', 'InsertCharPre'];
+      if (closeEvents.length > 0) {
+        const result = vim.autocmd.create(closeEvents, {
+          once: true,
+          callback: function() {
+            vimLsp.util.closePreviewWindow();
+          }
+        });
+        // Normalize to array
+        vimLsp.util._closeAutocommandIds = Array.isArray(result) ? result : [result];
+      }
+
+      return [bufnr, winid];
+    },
+
+    /**
+     * Closes the current preview floating window
+     */
+    closePreviewWindow(): void {
+      // Remove autocommands if set
+      if (vimLsp.util._closeAutocommandIds !== null) {
+        for (const id of vimLsp.util._closeAutocommandIds) {
+          try {
+            vim.autocmd.del(id);
+          } catch (e) {
+            // Ignore if already deleted
+          }
+        }
+        vimLsp.util._closeAutocommandIds = null;
+      }
+
+      // Close window if valid
+      if (vimLsp.util._previewWinId !== null) {
+        try {
+          if (vim.api.winIsValid(vimLsp.util._previewWinId)) {
+            vim.api.winClose(vimLsp.util._previewWinId, true);
+          }
+        } catch (e) {
+          // Ignore close errors
+        }
+        vimLsp.util._previewWinId = null;
+      }
+
+      // Delete buffer if valid
+      if (vimLsp.util._previewBufId !== null) {
+        try {
+          if (vim.api.bufIsValid(vimLsp.util._previewBufId)) {
+            vim.api.bufDelete(vimLsp.util._previewBufId, { force: true });
+          }
+        } catch (e) {
+          // Ignore delete errors
+        }
+        vimLsp.util._previewBufId = null;
+      }
+    }
+  },
+
+  // ========== vim.lsp.handlers - Customizable response handlers ==========
+  // Plugins can override these to customize how LSP results are displayed
+  // Example: vim.lsp.handlers['textDocument/hover'] = function(result, ctx) { ... }
+  handlers: {
+    /**
+     * Default handler for textDocument/hover
+     * Displays hover content in a floating window with smart positioning
+     */
+    'textDocument/hover': function(result: any, ctx: { bufnr: number; client: LspClientInstance }) {
+      if (!result || !result.contents) {
+        return;
+      }
+
+      // Extract text from hover contents
+      let text = '';
+      const contents = result.contents;
+
+      if (typeof contents === 'string') {
+        text = contents;
+      } else if (contents.value) {
+        // MarkupContent: { kind: 'markdown'|'plaintext', value: string }
+        text = contents.value;
+      } else if (Array.isArray(contents)) {
+        // MarkedString[]
+        text = contents.map(function(c: any) {
+          return typeof c === 'string' ? c : (c.value || '');
+        }).join('\n');
+      }
+
+      if (!text) {
+        return;
+      }
+
+      // Strip markdown code fences for cleaner display
+      text = text.replace(/```\w*\n?/g, '').replace(/```$/g, '').trim();
+
+      // Split into lines
+      const lines = text.split('\n');
+
+      // Get current buffer's filetype for syntax highlighting
+      const filetype = vim.bo.filetype as string || undefined;
+
+      // Use the utility function for smart positioning and auto-close
+      vimLsp.util.openFloatingPreview(lines, filetype, {
+        maxWidth: 80,
+        maxHeight: 15,
+        border: 'rounded',
+        focusable: false,
+        closeEvents: ['CursorMoved', 'CursorMovedI', 'InsertCharPre', 'BufLeave'],
+        anchorBias: 'auto',  // Prefer below, flip above if no room
+        zindex: 100,
+        padding: 1  // 1 space padding between border and content
+      });
+    },
+
+    /**
+     * Default handler for textDocument/definition
+     * Jumps to the definition location
+     */
+    'textDocument/definition': function(result: any, ctx: { bufnr: number; client: LspClientInstance }) {
+      if (!result) return;
+
+      // Handle array of locations or single location
+      const locations = Array.isArray(result) ? result : [result];
+      if (locations.length === 0) return;
+
+      const loc = locations[0];
+      const uri = loc.uri || (loc.targetUri);
+      const range = loc.range || (loc.targetSelectionRange);
+
+      if (!uri || !range) return;
+
+      // Convert file:// URI to path
+      const path = uri.replace('file://', '');
+      const line = range.start.line + 1;  // LSP is 0-indexed, Vim is 1-indexed
+      const col = range.start.character;
+
+      // Open file and jump to position
+      consoleAPI.log('[LSP] Jumping to', path, 'line', line, 'col', col);
+      // TODO: Implement file open and cursor positioning
+      // vim.cmd('edit ' + path);
+      // vim.api.winSetCursor(0, [line, col]);
+    },
+
+    /**
+     * Default handler for textDocument/references
+     * Shows references in quickfix or floating window
+     */
+    'textDocument/references': function(result: any, ctx: { bufnr: number; client: LspClientInstance }) {
+      if (!result || !Array.isArray(result) || result.length === 0) {
+        consoleAPI.log('[LSP] No references found');
+        return;
+      }
+
+      consoleAPI.log('[LSP] Found', result.length, 'references');
+      // TODO: Display in quickfix list or floating window
+    },
+
+    /**
+     * Default handler for textDocument/signatureHelp
+     */
+    'textDocument/signatureHelp': function(result: any, ctx: { bufnr: number; client: LspClientInstance }) {
+      if (!result || !result.signatures || result.signatures.length === 0) {
+        return;
+      }
+
+      const sig = result.signatures[result.activeSignature || 0];
+      const label = sig.label;
+
+      // Build signature content
+      const lines = [label];
+      if (sig.documentation) {
+        const doc = typeof sig.documentation === 'string'
+          ? sig.documentation
+          : sig.documentation.value || '';
+        if (doc) {
+          lines.push('', doc);
+        }
+      }
+
+      // Use the utility function for smart positioning and auto-close
+      vimLsp.util.openFloatingPreview(lines, undefined, {
+        maxWidth: 80,
+        maxHeight: 10,
+        border: 'rounded',
+        focusable: false,
+        closeEvents: ['CursorMoved', 'CursorMovedI', 'InsertCharPre'],
+        anchorBias: 'above',  // Signature help typically appears above cursor
+        zindex: 100,
+        padding: 1  // 1 space padding between border and content
+      });
+    }
+  } as { [key: string]: (result: any, ctx: { bufnr: number; client: LspClientInstance }) => void },
+
   // vim.lsp.buf - buffer-level LSP operations
   // Following Neovim's vim.lsp.buf pattern
   buf: {
@@ -2781,59 +3279,91 @@ const vimLsp = {
 
     /**
      * Request hover information at cursor position
-     * Displays documentation/signature for symbol under cursor
+     * Result is passed to vim.lsp.handlers['textDocument/hover'] for display
      */
     hover(): Promise<any> {
-      const bufnr = vim.api.nvim_get_current_buf();
+      const bufnr = vim.api.getCurrentBuf();
       const client = vimLsp._findClientWithCapability(bufnr, 'hoverProvider');
+
       if (!client) {
+        consoleAPI.log('[LSP] No client attached to buffer', bufnr);
         return Promise.resolve(null);
       }
 
-      const win = vim.api.nvim_get_current_win();
-      const cursor = vim.api.nvim_win_get_cursor(win);
+      if (!client.initialized) {
+        consoleAPI.log('[LSP] Client', client.name, 'is still initializing...');
+        return Promise.resolve(null);
+      }
+
+      const win = vim.api.getCurrentWin();
+      const cursor = vim.api.winGetCursor(win);
       const line = cursor[0] - 1; // 0-indexed
       const col = cursor[1];
 
       return client.request('textDocument/hover', {
-        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        textDocument: { uri: bufferToFileUri(bufnr) },
         position: { line: line, character: col }
+      }).then(function(result: any) {
+        // Call handler to display result
+        const handler = vimLsp.handlers['textDocument/hover'];
+        if (handler) {
+          handler(result, { bufnr: bufnr, client: client });
+        }
+        return result;
       });
     },
 
     /**
      * Jump to definition of symbol under cursor
+     * Result is passed to vim.lsp.handlers['textDocument/definition'] for navigation
      */
     definition(): Promise<any> {
-      const bufnr = vim.api.nvim_get_current_buf();
+      const bufnr = vim.api.getCurrentBuf();
       const client = vimLsp._findClientWithCapability(bufnr, 'definitionProvider');
       if (!client) {
+        consoleAPI.log('[LSP] No client attached to buffer', bufnr);
+        return Promise.resolve(null);
+      }
+      if (!client.initialized) {
+        consoleAPI.log('[LSP] Client', client.name, 'is still initializing...');
         return Promise.resolve(null);
       }
 
-      const win = vim.api.nvim_get_current_win();
-      const cursor = vim.api.nvim_win_get_cursor(win);
+      const win = vim.api.getCurrentWin();
+      const cursor = vim.api.winGetCursor(win);
       const line = cursor[0] - 1;
       const col = cursor[1];
 
       return client.request('textDocument/definition', {
-        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        textDocument: { uri: bufferToFileUri(bufnr) },
         position: { line: line, character: col }
+      }).then(function(result: any) {
+        const handler = vimLsp.handlers['textDocument/definition'];
+        if (handler) {
+          handler(result, { bufnr: bufnr, client: client });
+        }
+        return result;
       });
     },
 
     /**
      * Find all references to symbol under cursor
+     * Result is passed to vim.lsp.handlers['textDocument/references'] for display
      */
     references(opts?: { includeDeclaration?: boolean }): Promise<any> {
-      const bufnr = vim.api.nvim_get_current_buf();
+      const bufnr = vim.api.getCurrentBuf();
       const client = vimLsp._findClientWithCapability(bufnr, 'referencesProvider');
       if (!client) {
+        consoleAPI.log('[LSP] No client attached to buffer', bufnr);
+        return Promise.resolve(null);
+      }
+      if (!client.initialized) {
+        consoleAPI.log('[LSP] Client', client.name, 'is still initializing...');
         return Promise.resolve(null);
       }
 
-      const win = vim.api.nvim_get_current_win();
-      const cursor = vim.api.nvim_win_get_cursor(win);
+      const win = vim.api.getCurrentWin();
+      const cursor = vim.api.winGetCursor(win);
       const line = cursor[0] - 1;
       const col = cursor[1];
 
@@ -2842,9 +3372,15 @@ const vimLsp = {
         : true;
 
       return client.request('textDocument/references', {
-        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        textDocument: { uri: bufferToFileUri(bufnr) },
         position: { line: line, character: col },
         context: { includeDeclaration: includeDeclaration }
+      }).then(function(result: any) {
+        const handler = vimLsp.handlers['textDocument/references'];
+        if (handler) {
+          handler(result, { bufnr: bufnr, client: client });
+        }
+        return result;
       });
     },
 
@@ -2852,19 +3388,24 @@ const vimLsp = {
      * Jump to implementation of symbol under cursor
      */
     implementation(): Promise<any> {
-      const bufnr = vim.api.nvim_get_current_buf();
+      const bufnr = vim.api.getCurrentBuf();
       const client = vimLsp._findClientWithCapability(bufnr, 'implementationProvider');
       if (!client) {
+        consoleAPI.log('[LSP] No client attached to buffer', bufnr);
+        return Promise.resolve(null);
+      }
+      if (!client.initialized) {
+        consoleAPI.log('[LSP] Client', client.name, 'is still initializing...');
         return Promise.resolve(null);
       }
 
-      const win = vim.api.nvim_get_current_win();
-      const cursor = vim.api.nvim_win_get_cursor(win);
+      const win = vim.api.getCurrentWin();
+      const cursor = vim.api.winGetCursor(win);
       const line = cursor[0] - 1;
       const col = cursor[1];
 
       return client.request('textDocument/implementation', {
-        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        textDocument: { uri: bufferToFileUri(bufnr) },
         position: { line: line, character: col }
       });
     },
@@ -2873,19 +3414,24 @@ const vimLsp = {
      * Jump to type definition of symbol under cursor
      */
     typeDefinition(): Promise<any> {
-      const bufnr = vim.api.nvim_get_current_buf();
+      const bufnr = vim.api.getCurrentBuf();
       const client = vimLsp._findClientWithCapability(bufnr, 'typeDefinitionProvider');
       if (!client) {
+        consoleAPI.log('[LSP] No client attached to buffer', bufnr);
+        return Promise.resolve(null);
+      }
+      if (!client.initialized) {
+        consoleAPI.log('[LSP] Client', client.name, 'is still initializing...');
         return Promise.resolve(null);
       }
 
-      const win = vim.api.nvim_get_current_win();
-      const cursor = vim.api.nvim_win_get_cursor(win);
+      const win = vim.api.getCurrentWin();
+      const cursor = vim.api.winGetCursor(win);
       const line = cursor[0] - 1;
       const col = cursor[1];
 
       return client.request('textDocument/typeDefinition', {
-        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        textDocument: { uri: bufferToFileUri(bufnr) },
         position: { line: line, character: col }
       });
     },
@@ -2896,9 +3442,14 @@ const vimLsp = {
      * Format current buffer using LSP
      */
     formatting(opts?: { tabSize?: number; insertSpaces?: boolean }): Promise<any> {
-      const bufnr = vim.api.nvim_get_current_buf();
+      const bufnr = vim.api.getCurrentBuf();
       const client = vimLsp._findClientWithCapability(bufnr, 'documentFormattingProvider');
       if (!client) {
+        consoleAPI.log('[LSP] No client attached to buffer', bufnr);
+        return Promise.resolve(null);
+      }
+      if (!client.initialized) {
+        consoleAPI.log('[LSP] Client', client.name, 'is still initializing...');
         return Promise.resolve(null);
       }
 
@@ -2906,7 +3457,7 @@ const vimLsp = {
       const insertSpaces = opts && opts.insertSpaces !== undefined ? opts.insertSpaces : true;
 
       return client.request('textDocument/formatting', {
-        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        textDocument: { uri: bufferToFileUri(bufnr) },
         options: {
           tabSize: tabSize,
           insertSpaces: insertSpaces
@@ -2918,9 +3469,14 @@ const vimLsp = {
      * Rename symbol under cursor
      */
     rename(newName?: string): Promise<any> {
-      const bufnr = vim.api.nvim_get_current_buf();
+      const bufnr = vim.api.getCurrentBuf();
       const client = vimLsp._findClientWithCapability(bufnr, 'renameProvider');
       if (!client) {
+        consoleAPI.log('[LSP] No client attached to buffer', bufnr);
+        return Promise.resolve(null);
+      }
+      if (!client.initialized) {
+        consoleAPI.log('[LSP] Client', client.name, 'is still initializing...');
         return Promise.resolve(null);
       }
 
@@ -2930,13 +3486,13 @@ const vimLsp = {
         return Promise.resolve(null);
       }
 
-      const win = vim.api.nvim_get_current_win();
-      const cursor = vim.api.nvim_win_get_cursor(win);
+      const win = vim.api.getCurrentWin();
+      const cursor = vim.api.winGetCursor(win);
       const line = cursor[0] - 1;
       const col = cursor[1];
 
       return client.request('textDocument/rename', {
-        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        textDocument: { uri: bufferToFileUri(bufnr) },
         position: { line: line, character: col },
         newName: newName
       });
@@ -2946,14 +3502,19 @@ const vimLsp = {
      * Request code actions at cursor position
      */
     codeAction(opts?: { only?: string[] }): Promise<any> {
-      const bufnr = vim.api.nvim_get_current_buf();
+      const bufnr = vim.api.getCurrentBuf();
       const client = vimLsp._findClientWithCapability(bufnr, 'codeActionProvider');
       if (!client) {
+        consoleAPI.log('[LSP] No client attached to buffer', bufnr);
+        return Promise.resolve(null);
+      }
+      if (!client.initialized) {
+        consoleAPI.log('[LSP] Client', client.name, 'is still initializing...');
         return Promise.resolve(null);
       }
 
-      const win = vim.api.nvim_get_current_win();
-      const cursor = vim.api.nvim_win_get_cursor(win);
+      const win = vim.api.getCurrentWin();
+      const cursor = vim.api.winGetCursor(win);
       const line = cursor[0] - 1;
       const col = cursor[1];
 
@@ -2963,7 +3524,7 @@ const vimLsp = {
       }
 
       return client.request('textDocument/codeAction', {
-        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        textDocument: { uri: bufferToFileUri(bufnr) },
         range: {
           start: { line: line, character: col },
           end: { line: line, character: col }
@@ -2976,22 +3537,34 @@ const vimLsp = {
 
     /**
      * Request signature help (parameter hints)
+     * Result is passed to vim.lsp.handlers['textDocument/signatureHelp'] for display
      */
     signatureHelp(): Promise<any> {
-      const bufnr = vim.api.nvim_get_current_buf();
+      const bufnr = vim.api.getCurrentBuf();
       const client = vimLsp._findClientWithCapability(bufnr, 'signatureHelpProvider');
       if (!client) {
+        consoleAPI.log('[LSP] No client attached to buffer', bufnr);
+        return Promise.resolve(null);
+      }
+      if (!client.initialized) {
+        consoleAPI.log('[LSP] Client', client.name, 'is still initializing...');
         return Promise.resolve(null);
       }
 
-      const win = vim.api.nvim_get_current_win();
-      const cursor = vim.api.nvim_win_get_cursor(win);
+      const win = vim.api.getCurrentWin();
+      const cursor = vim.api.winGetCursor(win);
       const line = cursor[0] - 1;
       const col = cursor[1];
 
       return client.request('textDocument/signatureHelp', {
-        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) },
+        textDocument: { uri: bufferToFileUri(bufnr) },
         position: { line: line, character: col }
+      }).then(function(result: any) {
+        const handler = vimLsp.handlers['textDocument/signatureHelp'];
+        if (handler) {
+          handler(result, { bufnr: bufnr, client: client });
+        }
+        return result;
       });
     },
 
@@ -2999,14 +3572,19 @@ const vimLsp = {
      * Request document symbols (outline)
      */
     documentSymbol(): Promise<any> {
-      const bufnr = vim.api.nvim_get_current_buf();
+      const bufnr = vim.api.getCurrentBuf();
       const client = vimLsp._findClientWithCapability(bufnr, 'documentSymbolProvider');
       if (!client) {
+        consoleAPI.log('[LSP] No client attached to buffer', bufnr);
+        return Promise.resolve(null);
+      }
+      if (!client.initialized) {
+        consoleAPI.log('[LSP] Client', client.name, 'is still initializing...');
         return Promise.resolve(null);
       }
 
       return client.request('textDocument/documentSymbol', {
-        textDocument: { uri: 'file://' + vim.api.nvim_buf_get_name(bufnr) }
+        textDocument: { uri: bufferToFileUri(bufnr) }
       });
     }
   }

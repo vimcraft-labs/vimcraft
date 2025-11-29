@@ -555,11 +555,9 @@ pub const Editor = struct {
 
         if (filetype) |ft| {
             buf.setFiletype(ft) catch {};
-            self.logger.info("✅ Detected filetype: {s} for {s}", .{ ft, path }) catch {};
-            // TODO: Parse with tree-sitter (need to handle multiple buffers)
+            self.logger.debug("Detected filetype: {s} for {s}", .{ ft, path }) catch {};
         } else {
             buf.setFiletype(null) catch {};
-            self.logger.info("❌ No filetype detected for {s}", .{path}) catch {};
         }
 
         // Switch to new buffer
@@ -573,6 +571,11 @@ pub const Editor = struct {
         // Trigger autocommands
         self.triggerAutocommand("BufRead");
         self.triggerAutocommand("BufEnter");
+
+        // Trigger FileType autocmd if filetype was detected
+        if (filetype) |ft| {
+            self.triggerFileTypeAutocommand(ft);
+        }
 
         return new_id;
     }
@@ -1114,8 +1117,13 @@ pub const Editor = struct {
             .cursor => {
                 // Relative to cursor position in current window
                 if (self.getCurrentWindow()) |cur_win| {
-                    base_row = @intCast(cur_win.screen_row + cur_win.viewport.cursor_screen_row);
-                    base_col = @intCast(cur_win.screen_col + cur_win.viewport.cursor_screen_col);
+                    // Calculate gutter width for this window
+                    const gutter_width = self.calculateGutterWidth(cur_win);
+                    // Calculate cursor screen position directly (don't rely on cached viewport values)
+                    const cursor_screen_row = cur_win.cursor.row -| cur_win.viewport.top_line;
+                    const cursor_screen_col = cur_win.cursor.col -| cur_win.viewport.left_col;
+                    base_row = @intCast(cur_win.screen_row + cursor_screen_row);
+                    base_col = @intCast(cur_win.screen_col + gutter_width + cursor_screen_col);
                 }
             },
             .mouse => {
@@ -1163,6 +1171,29 @@ pub const Editor = struct {
         window.screen_col = @intCast(final_col);
         window.width = config.width;
         window.height = config.height;
+    }
+
+    /// Calculate gutter width for a window (line numbers + sign column)
+    fn calculateGutterWidth(self: *Editor, window: *const Window) usize {
+        var width: usize = 0;
+
+        // Sign column
+        if (window.options.signcolumn == .yes) {
+            width += 2;
+        }
+
+        // Line numbers
+        if (window.options.number or window.options.relativenumber) {
+            const buffer = self.buffers.get(window.buffer_id) orelse return width;
+            const line_count = buffer.lineCount();
+            const digits = if (line_count > 0)
+                std.math.log10(line_count) + 1
+            else
+                1;
+            width += @max(digits, 4) + 1; // minimum 4 digits + 1 space
+        }
+
+        return width;
     }
 
     /// Update floating window configuration
@@ -1278,6 +1309,11 @@ pub const Editor = struct {
         // BufEnter: After entering buffer
         self.triggerAutocommand("BufRead");
         self.triggerAutocommand("BufEnter");
+
+        // Trigger FileType autocmd if filetype was detected
+        if (filetype) |ft| {
+            self.triggerFileTypeAutocommand(ft);
+        }
     }
 
     /// Execute a string of keys through the editor
@@ -2945,6 +2981,32 @@ pub const Editor = struct {
         const c_args = [_]*c.OVHermesValue{args_obj};
         emitter.emit(event_name, &c_args) catch |err| {
             self.logger.err("Failed to emit autocommand '{s}': {}", .{ event_name, err }) catch {};
+        };
+    }
+
+    /// Trigger FileType autocommand with filetype as the match pattern
+    /// This is separate from triggerAutocommand because FileType needs the filetype
+    /// string as the match field, not the filepath.
+    ///
+    /// Usage:
+    ///   editor.triggerFileTypeAutocommand("typescript");
+    pub fn triggerFileTypeAutocommand(self: *Editor, filetype: []const u8) void {
+        const autocmd_api = @import("../system/jsi/autocmd_api.zig");
+        const jsi_api = @import("../system/jsi/jsi_api.zig");
+
+        // Use global autocmd manager (same pattern as fireCursorMoved)
+        const autocmd_mgr = jsi_api.global_autocmd_manager orelse return;
+
+        const buf = self.getCurrentBuffer();
+        const file_path = if (buf) |b| b.filepath orelse "" else "";
+
+        // Execute FileType autocmds - the match field contains the filetype
+        autocmd_mgr.execAutocmds("FileType", autocmd_api.AutocmdEventData{
+            .buf = if (self.current_buffer_id) |id| @truncate(id.id) else 0,
+            .file = file_path,
+            .match = filetype, // Pattern matching uses this field for FileType events
+        }) catch |err| {
+            self.logger.err("Failed to trigger FileType autocmd: {}", .{err}) catch {};
         };
     }
 

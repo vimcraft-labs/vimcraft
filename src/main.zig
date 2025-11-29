@@ -688,6 +688,15 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
                     }
                 }
             }
+
+            // CRITICAL: Re-trigger FileType autocmd after plugins load
+            // The initial file was loaded before plugins, so FileType autocmds weren't called.
+            // Now that plugins have registered their autocmds, trigger FileType for the current buffer.
+            if (editor.getCurrentBuffer()) |buf| {
+                if (buf.filetype) |ft| {
+                    editor.triggerFileTypeAutocommand(ft);
+                }
+            }
         }
     }
 
@@ -1086,6 +1095,15 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
                     const load_time = std.time.milliTimestamp() - load_start;
                     m.recordPluginLoad(plugin.name, load_time) catch {};
                 }
+            }
+        }
+
+        // CRITICAL: Re-trigger FileType autocmd after plugins load
+        // The initial file was loaded before plugins, so FileType autocmds weren't called.
+        // Now that plugins have registered their autocmds, trigger FileType for the current buffer.
+        if (editor.getCurrentBuffer()) |buf| {
+            if (buf.filetype) |ft| {
+                editor.triggerFileTypeAutocommand(ft);
             }
         }
     }

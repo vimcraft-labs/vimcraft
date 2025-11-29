@@ -1098,6 +1098,57 @@ pub export fn apiBufCall(
 }
 
 // ============================================================================
+// vim.api.bufSetOption(buf, name, value) -> void
+// Sets buffer-local options (currently supports 'filetype')
+// ============================================================================
+
+pub export fn apiBufSetOption(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const rt = runtime orelse return null;
+
+    if (count < 3) return c.hermes_value_create_undefined(rt);
+
+    const buf_handle_val = args[0] orelse return c.hermes_value_create_undefined(rt);
+    const opt_name_val = args[1] orelse return c.hermes_value_create_undefined(rt);
+    const opt_value_val = args[2] orelse return c.hermes_value_create_undefined(rt);
+
+    const buf_handle = @as(i64, @intFromFloat(c.hermes_value_get_number(buf_handle_val)));
+
+    // Get option name
+    var opt_name_len: usize = 0;
+    const opt_name_ptr = c.hermes_value_get_string(rt, opt_name_val, &opt_name_len);
+    if (opt_name_ptr == null or opt_name_len == 0) return c.hermes_value_create_undefined(rt);
+    const opt_name = opt_name_ptr[0..opt_name_len];
+
+    const buffer = getBufferByHandle(buf_handle) orelse return c.hermes_value_create_undefined(rt);
+
+    // Handle 'filetype' option
+    if (std.mem.eql(u8, opt_name, "filetype")) {
+        var value_len: usize = 0;
+        const value_ptr = c.hermes_value_get_string(rt, opt_value_val, &value_len);
+
+        if (value_ptr) |ptr| {
+            if (value_len > 0) {
+                buffer.setFiletype(ptr[0..value_len]) catch {};
+            } else {
+                buffer.setFiletype(null) catch {};
+            }
+        } else {
+            buffer.setFiletype(null) catch {};
+        }
+    }
+    // Other options can be added here as needed
+
+    return c.hermes_value_create_undefined(rt);
+}
+
+// ============================================================================
 // Registration
 // ============================================================================
 
@@ -1150,6 +1201,7 @@ fn registerFunctions(runtime: *c.OVHermesRuntime) void {
     c.hermes_register_host_function(runtime, "vimApiBufGetOffset", apiBufGetOffset, null);
     c.hermes_register_host_function(runtime, "vimApiBufCall", apiBufCall, null);
     c.hermes_register_host_function(runtime, "vimApiBufGetCharAt", apiBufGetCharAt, null);
+    c.hermes_register_host_function(runtime, "vimApiBufSetOption", apiBufSetOption, null);
 }
 
 pub fn deinit() void {

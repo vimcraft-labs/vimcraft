@@ -188,7 +188,15 @@ pub const AutocmdManager = struct {
         for (list.items) |entry| {
             // Check pattern match if pattern specified
             if (entry.pattern) |pattern| {
-                if (!matchPattern(pattern, ev_data.file orelse "")) {
+                // For FileType events, match against filetype (ev_data.match)
+                // For other events, match against file path (ev_data.file)
+                const is_filetype_event = std.mem.eql(u8, event, "FileType");
+                const match_target = if (is_filetype_event)
+                    (ev_data.match orelse "")
+                else
+                    (ev_data.file orelse "");
+
+                if (!matchPatternList(pattern, match_target)) {
                     continue; // Pattern doesn't match, skip
                 }
             }
@@ -299,7 +307,21 @@ pub const AutocmdEventData = struct {
     match: ?[]const u8 = null,
 };
 
+/// Match against a comma-separated list of patterns
+/// e.g., "typescript,javascript,typescriptreact" matches any of these
+/// Public for testing
+pub fn matchPatternList(pattern_list: []const u8, target: []const u8) bool {
+    var iter = std.mem.splitScalar(u8, pattern_list, ',');
+    while (iter.next()) |pattern| {
+        if (matchPattern(pattern, target)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Simple glob pattern matching (supports * wildcard)
+/// Case-insensitive for FileType patterns (go-enry returns "TypeScript", users expect "typescript")
 /// Public for testing
 pub fn matchPattern(pattern: []const u8, filename: []const u8) bool {
     // Handle exact match
@@ -311,12 +333,12 @@ pub fn matchPattern(pattern: []const u8, filename: []const u8) bool {
         return std.mem.endsWith(u8, filename, ext);
     }
 
-    // Handle exact match
-    if (std.mem.eql(u8, pattern, filename)) return true;
+    // Handle exact match (case-insensitive for FileType compatibility)
+    if (std.ascii.eqlIgnoreCase(pattern, filename)) return true;
 
-    // Handle basename match
+    // Handle basename match (case-insensitive)
     const basename = std.fs.path.basename(filename);
-    if (std.mem.eql(u8, pattern, basename)) return true;
+    if (std.ascii.eqlIgnoreCase(pattern, basename)) return true;
 
     return false;
 }

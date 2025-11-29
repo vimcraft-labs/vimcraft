@@ -598,7 +598,7 @@ pub export fn clearLayer(
 /// Zig host function: screenchar(row, col) -> number
 /// JavaScript: vim.layer.screenchar(row, col) -> codepoint
 /// Returns the character code at screen position (like vim.fn.screenchar)
-/// This reads from the compositor's output grid - the final blended result
+/// This reads from screen_grid - the actual rendered content with real colors
 pub export fn screenchar(
     runtime: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
@@ -637,14 +637,123 @@ pub export fn screenchar(
     const row: usize = @intFromFloat(row_f);
     const col: usize = @intFromFloat(col_f);
 
-    // Get cell from compositor output grid
-    const output = display.compositor.getOutput();
-    const cell = output.getCell(row, col) orelse {
+    // Get cell from screen_grid (the actual rendered content with real colors)
+    const cell = display.grid.getCell(row, col) orelse {
         return c.hermes_value_create_number(runtime, 0);
     };
 
     // Return character codepoint as number
     return c.hermes_value_create_number(runtime, @floatFromInt(cell.char));
+}
+
+/// Zig host function: screenFg(row, col) -> number | null
+/// JavaScript: vim.layer.screenFg(row, col) -> 0xRRGGBB or null
+/// Returns the foreground color at screen position as hex number
+/// This reads from screen_grid - the actual rendered content with real colors
+pub export fn screenFg(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const display = global_display orelse return c.hermes_value_create_null(runtime);
+
+    if (count < 2) {
+        return c.hermes_value_create_null(runtime);
+    }
+
+    // Arg 0: row (number)
+    if (args[0] == null or !c.hermes_value_is_number(args[0])) {
+        return c.hermes_value_create_null(runtime);
+    }
+
+    // Arg 1: col (number)
+    if (args[1] == null or !c.hermes_value_is_number(args[1])) {
+        return c.hermes_value_create_null(runtime);
+    }
+
+    const row_f = c.hermes_value_get_number(args[0]);
+    const col_f = c.hermes_value_get_number(args[1]);
+
+    // Validate coordinates
+    if (std.math.isNan(row_f) or std.math.isInf(row_f) or row_f < 0) {
+        return c.hermes_value_create_null(runtime);
+    }
+    if (std.math.isNan(col_f) or std.math.isInf(col_f) or col_f < 0) {
+        return c.hermes_value_create_null(runtime);
+    }
+
+    const row: usize = @intFromFloat(row_f);
+    const col: usize = @intFromFloat(col_f);
+
+    // Get cell from screen_grid (the actual rendered content with real colors)
+    const cell = display.grid.getCell(row, col) orelse {
+        return c.hermes_value_create_null(runtime);
+    };
+
+    // Return foreground color as hex number (0xRRGGBB) or null if not set
+    if (cell.fg) |fg| {
+        const hex: u32 = (@as(u32, fg.r) << 16) | (@as(u32, fg.g) << 8) | @as(u32, fg.b);
+        return c.hermes_value_create_number(runtime, @floatFromInt(hex));
+    }
+    return c.hermes_value_create_null(runtime);
+}
+
+/// Zig host function: screenBg(row, col) -> number | null
+/// JavaScript: vim.layer.screenBg(row, col) -> 0xRRGGBB or null
+/// Returns the background color at screen position as hex number
+/// This reads from screen_grid - the actual rendered content with real colors
+pub export fn screenBg(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const display = global_display orelse return c.hermes_value_create_null(runtime);
+
+    if (count < 2) {
+        return c.hermes_value_create_null(runtime);
+    }
+
+    // Arg 0: row (number)
+    if (args[0] == null or !c.hermes_value_is_number(args[0])) {
+        return c.hermes_value_create_null(runtime);
+    }
+
+    // Arg 1: col (number)
+    if (args[1] == null or !c.hermes_value_is_number(args[1])) {
+        return c.hermes_value_create_null(runtime);
+    }
+
+    const row_f = c.hermes_value_get_number(args[0]);
+    const col_f = c.hermes_value_get_number(args[1]);
+
+    // Validate coordinates
+    if (std.math.isNan(row_f) or std.math.isInf(row_f) or row_f < 0) {
+        return c.hermes_value_create_null(runtime);
+    }
+    if (std.math.isNan(col_f) or std.math.isInf(col_f) or col_f < 0) {
+        return c.hermes_value_create_null(runtime);
+    }
+
+    const row: usize = @intFromFloat(row_f);
+    const col: usize = @intFromFloat(col_f);
+
+    // Get cell from screen_grid (the actual rendered content with real colors)
+    const cell = display.grid.getCell(row, col) orelse {
+        return c.hermes_value_create_null(runtime);
+    };
+
+    // Return background color as hex number (0xRRGGBB) or null if not set
+    if (cell.bg) |bg| {
+        const hex: u32 = (@as(u32, bg.r) << 16) | (@as(u32, bg.g) << 8) | @as(u32, bg.b);
+        return c.hermes_value_create_number(runtime, @floatFromInt(hex));
+    }
+    return c.hermes_value_create_null(runtime);
 }
 
 /// Zig host function: suppressCursor()
@@ -769,6 +878,8 @@ pub export fn layerHostObjectGet(
         .{ "clearLayer", clearLayer },
         .{ "destroyLayer", destroyLayer },
         .{ "screenchar", screenchar },
+        .{ "screenFg", screenFg },
+        .{ "screenBg", screenBg },
         .{ "suppressCursor", suppressCursor },
         .{ "unsuppressCursor", unsuppressCursor },
     });
@@ -798,6 +909,8 @@ pub export fn layerHostObjectEnumerator(
         "clearLayer",
         "destroyLayer",
         "screenchar",
+        "screenFg",
+        "screenBg",
         "suppressCursor",
         "unsuppressCursor",
     };

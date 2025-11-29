@@ -187,6 +187,11 @@ pub const HighlightRegistry = struct {
 
         // Yank flash
         try self.set("YankFlash", .{ .bg = yank_flash_bg });
+
+        // Floating window highlights (neutral gray border for LSP hover, etc.)
+        const float_border_fg = Color{ .rgb = .{ .r = 0x80, .g = 0x80, .b = 0x80 } }; // Neutral gray #808080
+        try self.set("FloatBorder", .{ .fg = float_border_fg });
+        try self.set("NormalFloat", .{ .bg = default_bg }); // Same bg as Normal
     }
 
     pub fn deinit(self: *HighlightRegistry) void {

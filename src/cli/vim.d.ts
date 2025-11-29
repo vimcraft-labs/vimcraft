@@ -3805,6 +3805,76 @@ export interface LspFramer {
 }
 
 /**
+ * Context passed to LSP handler functions.
+ */
+export interface LspHandlerContext {
+  /** Buffer number the request was made for */
+  bufnr: number;
+  /** LSP client that made the request */
+  client: LspClient;
+}
+
+/**
+ * LSP response handler function type.
+ *
+ * Handlers are called when LSP methods receive responses from the server.
+ * They can be overridden to customize how results are displayed.
+ *
+ * @param result - The LSP response (varies by method)
+ * @param ctx - Context including buffer and client info
+ */
+export type LspHandler = (result: any, ctx: LspHandlerContext) => void;
+
+/**
+ * vim.lsp.handlers - Customizable response handlers.
+ *
+ * Override these to customize how LSP results are displayed.
+ * Default handlers show floating windows, jump to locations, etc.
+ *
+ * @example
+ * ```typescript
+ * // Custom hover handler with fancy formatting
+ * vim.lsp.handlers['textDocument/hover'] = (result, ctx) => {
+ *   if (!result?.contents) return;
+ *
+ *   // Custom popup implementation
+ *   const text = extractHoverText(result.contents);
+ *   showFancyPopup(text);
+ * };
+ *
+ * // Disable default definition jump (handle manually)
+ * vim.lsp.handlers['textDocument/definition'] = (result, ctx) => {
+ *   console.log('Definition result:', result);
+ *   // Custom navigation logic
+ * };
+ * ```
+ */
+export interface LspHandlers {
+  /** Handler for hover results - displays floating window */
+  'textDocument/hover'?: LspHandler;
+  /** Handler for definition results - jumps to location */
+  'textDocument/definition'?: LspHandler;
+  /** Handler for references results - shows in quickfix/floating */
+  'textDocument/references'?: LspHandler;
+  /** Handler for signature help - shows parameter hints */
+  'textDocument/signatureHelp'?: LspHandler;
+  /** Handler for implementation results */
+  'textDocument/implementation'?: LspHandler;
+  /** Handler for type definition results */
+  'textDocument/typeDefinition'?: LspHandler;
+  /** Handler for code action results */
+  'textDocument/codeAction'?: LspHandler;
+  /** Handler for formatting results */
+  'textDocument/formatting'?: LspHandler;
+  /** Handler for rename results */
+  'textDocument/rename'?: LspHandler;
+  /** Handler for document symbol results */
+  'textDocument/documentSymbol'?: LspHandler;
+  /** Allow custom handlers for any method */
+  [method: string]: LspHandler | undefined;
+}
+
+/**
  * vim.lsp - LSP client management interface.
  *
  * Provides high-level API for managing Language Server Protocol clients.
@@ -3980,6 +4050,24 @@ export interface LSP {
     character: number,
     includeDeclaration?: boolean
   ): Promise<any>;
+
+  // ========== vim.lsp.handlers namespace ==========
+
+  /**
+   * Customizable response handlers.
+   *
+   * Override these to customize how LSP results are displayed.
+   * Default handlers show floating windows, jump to locations, etc.
+   *
+   * @example
+   * ```typescript
+   * // Custom hover handler
+   * vim.lsp.handlers['textDocument/hover'] = (result, ctx) => {
+   *   // Your custom popup implementation
+   * };
+   * ```
+   */
+  handlers: LspHandlers;
 
   // ========== vim.lsp.buf namespace ==========
 

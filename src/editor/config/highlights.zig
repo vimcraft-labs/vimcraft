@@ -64,6 +64,10 @@ pub const HighlightConfig = struct {
     statusline: ?Highlight = null, // Active window status line (StatusLine)
     statusline_nc: ?Highlight = null, // Inactive window status line (StatusLineNC)
 
+    // Floating window highlighting
+    float_border: ?Highlight = null, // Floating window border (FloatBorder)
+    normal_float: ?Highlight = null, // Floating window background (NormalFloat)
+
     // Options
     cursorline_enabled: bool = true, // Enabled by default (standard Vim/Neovim behavior)
 
@@ -109,6 +113,10 @@ pub const HighlightConfig = struct {
             self.statusline = hl;
         } else if (std.mem.eql(u8, name, "StatusLineNC")) {
             self.statusline_nc = hl;
+        } else if (std.mem.eql(u8, name, "FloatBorder")) {
+            self.float_border = hl;
+        } else if (std.mem.eql(u8, name, "NormalFloat")) {
+            self.normal_float = hl;
         }
         // Add more highlight groups as needed
     }
@@ -139,6 +147,10 @@ pub const HighlightConfig = struct {
             return self.statusline;
         } else if (std.mem.eql(u8, name, "StatusLineNC")) {
             return self.statusline_nc;
+        } else if (std.mem.eql(u8, name, "FloatBorder")) {
+            return self.float_border;
+        } else if (std.mem.eql(u8, name, "NormalFloat")) {
+            return self.normal_float;
         }
         return null;
     }

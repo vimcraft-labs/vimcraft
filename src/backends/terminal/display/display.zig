@@ -960,7 +960,10 @@ pub const Display = struct {
             // Render window statusline to base_layer BEFORE compositor runs
             // This ensures statuslines are part of the compositor state and don't
             // bypass the diff algorithm (which was causing separator gaps!)
-            if (laststatus > 0) {
+            // SKIP statusline for ALL floating windows (Neovim behavior: w_status_height = 0)
+            // See winfloat.c:107 - ALL floating windows have no statusline regardless of style
+            const should_render_statusline = laststatus > 0 and !win.*.isFloating();
+            if (should_render_statusline) {
                 try window_renderer.renderWindowStatusline(
                     self,
                     win.*,

@@ -1522,6 +1522,21 @@ fn parseFloatingConfig(rt: *c.OVHermesRuntime, config_val: *c.OVHermesValue) ?Fl
         config.hide = c.hermes_value_get_boolean(hide_val);
     }
 
+    // Optional: style (default: minimal) - Neovim compatibility
+    // style: 'minimal' removes statusline, line numbers, etc. from floating windows
+    if (c.hermes_value_get_property(rt, config_val, "style")) |style_val| {
+        defer c.hermes_value_destroy(style_val);
+        var style_len: usize = 0;
+        const style_ptr = c.hermes_value_get_string(rt, style_val, &style_len);
+        if (style_ptr != null and style_len > 0) {
+            const style_str = style_ptr[0..style_len];
+            if (std.mem.eql(u8, style_str, "minimal")) {
+                config.style = .minimal;
+            }
+            // Future: add other styles as Neovim adds them
+        }
+    }
+
     return config;
 }
 
@@ -1646,6 +1661,15 @@ fn floatingConfigToJs(rt: *c.OVHermesRuntime, config: FloatingConfig) ?*c.OVHerm
     // hide
     if (c.hermes_value_create_boolean(rt, config.hide)) |v| {
         c.hermes_value_set_property(rt, obj, "hide", v);
+        c.hermes_value_destroy(v);
+    }
+
+    // style
+    const style_str: []const u8 = switch (config.style) {
+        .minimal => "minimal",
+    };
+    if (c.hermes_value_create_string(rt, style_str.ptr, style_str.len)) |v| {
+        c.hermes_value_set_property(rt, obj, "style", v);
         c.hermes_value_destroy(v);
     }
 
