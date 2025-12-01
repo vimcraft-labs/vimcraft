@@ -25,6 +25,9 @@ const Range = @import("../../../editor/treesitter/highlight.zig").Range;
 // Namespace highlights (LSP diagnostics, plugin highlights)
 const namespace_api = @import("../../../system/jsi/namespace_api.zig");
 
+// Shared listchars rendering (DRY: used by both layer_renderer and window_renderer)
+const listchars_renderer = @import("listchars_renderer.zig");
+
 // ============================================================================
 // Window Renderer
 // ============================================================================
@@ -180,6 +183,9 @@ fn renderWindowBaseLayer(
     const fg_color = if (normal_style.fg) |c| convertColor(c) else null;
     const bg_color = if (normal_style.bg) |c| convertColor(c) else null;
 
+    // Pre-compute listchars colors using shared module (DRY)
+    const lc_colors = listchars_renderer.ListCharsColors.fromRegistry(ctx.registry, convertColor);
+
     // Create syntax highlighter if syntax is available
     var syntax_highlighter: ?SyntaxHighlighter = null;
     if (ctx.syntax) |syntax| {
@@ -254,6 +260,7 @@ fn renderWindowBaseLayer(
             const start_col = region.col + gutter_width;
             var screen_col: usize = start_col;
             var byte_idx: usize = 0;
+            var last_non_space_col: usize = start_col; // For trailing space detection (listchars)
 
             while (byte_idx < remaining.len and screen_col < region.col + region.width) {
                 const char_len = std.unicode.utf8ByteSequenceLength(remaining[byte_idx]) catch 1;
@@ -301,6 +308,54 @@ fn renderWindowBaseLayer(
                     }
                 }
 
+                // Handle listchars replacements using shared module (DRY)
+                if (ctx.list_enabled) {
+                    if (codepoint == '\t') {
+                        // Tab: use shared tab renderer
+                        const max_col = region.col + region.width;
+                        if (screen_col >= region.col + gutter_width and screen_col < max_col) {
+                            const tab_result = listchars_renderer.renderTab(
+                                &display.base_layer.grid,
+                                screen_row,
+                                screen_col,
+                                max_col,
+                                ctx.listchars,
+                                lc_colors,
+                            );
+                            if (tab_result.cols_consumed > 0) {
+                                screen_col += tab_result.cols_consumed;
+                                if (tab_result.is_non_space) {
+                                    last_non_space_col = screen_col;
+                                }
+                                byte_idx += char_len;
+                                continue;
+                            }
+                        }
+                    } else if (listchars_renderer.getCharReplacement(codepoint, ctx.listchars, lc_colors)) |replacement| {
+                        // Space/nbsp replacement
+                        if (screen_col >= region.col + gutter_width and screen_col < region.col + region.width) {
+                            display.base_layer.grid.setCell(screen_row, screen_col, .{
+                                .char = replacement.char,
+                                .fg = replacement.fg,
+                                .bg = replacement.bg,
+                            });
+                        }
+                        if (replacement.is_non_space) {
+                            last_non_space_col = screen_col + 1;
+                        }
+                        screen_col += 1;
+                        byte_idx += char_len;
+                        continue;
+                    } else if (listchars_renderer.isNonSpace(codepoint)) {
+                        last_non_space_col = screen_col + 1;
+                    }
+                } else {
+                    // Track last non-space column even when listchars disabled
+                    if (listchars_renderer.isNonSpace(codepoint)) {
+                        last_non_space_col = screen_col + 1;
+                    }
+                }
+
                 // Clip to window bounds
                 if (screen_col >= region.col + gutter_width and screen_col < region.col + region.width) {
                     display.base_layer.grid.setCell(screen_row, screen_col, .{
@@ -322,6 +377,28 @@ fn renderWindowBaseLayer(
 
                 screen_col += display_width;
                 byte_idx += char_len;
+            }
+
+            // Post-process: mark trailing spaces using shared module (DRY)
+            if (ctx.list_enabled) {
+                listchars_renderer.markTrailingSpaces(
+                    &display.base_layer.grid,
+                    screen_row,
+                    last_non_space_col,
+                    screen_col,
+                    ctx.listchars,
+                    lc_colors,
+                );
+
+                // Render EOL character if configured
+                screen_col += listchars_renderer.renderEol(
+                    &display.base_layer.grid,
+                    screen_row,
+                    screen_col,
+                    region.col + region.width,
+                    ctx.listchars,
+                    lc_colors,
+                );
             }
 
             // Fill rest of line with spaces
@@ -477,7 +554,9 @@ fn renderWindowCursorLayer(
 
     const cursorline_bg = convertColor(cursorline_style.bg.?);
 
-    // Render cursorline background (text area only, not gutter)
+    // Render cursorline background for TEXT AREA ONLY (not gutter)
+    // Neovim-compatible: CursorLine = text area, CursorLineNr = gutter
+    // The gutter layer handles cursor line highlighting via CursorLineNr
     const start_col = region.col + gutter_width;
     var col = start_col;
     while (col < region.col + region.width) : (col += 1) {
@@ -858,11 +937,9 @@ pub fn renderWindowStatusline(
 }
 
 /// Convert highlight_api.Color to highlights.Color
+// Use shared color conversion (DRY)
 fn convertColor(api_color: Color) highlights.Color {
-    return switch (api_color) {
-        .rgb => |rgb| highlights.Color{ .r = rgb.r, .g = rgb.g, .b = rgb.b },
-        .indexed => |idx| highlights.Color{ .r = idx, .g = idx, .b = idx },
-    };
+    return highlights.Color.fromApiColor(api_color);
 }
 
 // ============================================================================

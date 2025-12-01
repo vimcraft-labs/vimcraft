@@ -6,6 +6,17 @@ pub const Color = struct {
     g: u8,
     b: u8,
 
+    /// Convert from highlight_api.Color to this Color type
+    /// This is the ONE place for this conversion (DRY principle)
+    /// Used by: layer_renderer, window_renderer, separator_renderer, text_renderer
+    pub fn fromApiColor(api_color: anytype) Color {
+        // Handle both .rgb and .indexed variants
+        return switch (api_color) {
+            .rgb => |rgb| Color{ .r = rgb.r, .g = rgb.g, .b = rgb.b },
+            .indexed => |idx| Color{ .r = idx, .g = idx, .b = idx }, // TODO: proper 256-color palette
+        };
+    }
+
     /// Parse hex color string like "#2b2b2b" or "2b2b2b"
     pub fn fromHex(hex: []const u8) !Color {
         var start: usize = 0;

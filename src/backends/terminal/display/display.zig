@@ -1005,6 +1005,14 @@ pub const Display = struct {
 
             const is_active = if (active_win_id) |id| win.*.id.eql(id) else false;
 
+            // When statuslines are hidden (floating windows visible), we can use that
+            // extra row to show one more buffer line instead of wasting it
+            const render_height = if (show_per_window_statusline)
+                win.*.height
+            else
+                // Use statusline row for content (but don't exceed terminal bounds)
+                @min(win.*.height + 1, self.terminal_rows -| win.*.screen_row -| 1);
+
             // Create render context for this window
             const context = window_renderer.WindowRenderContext{
                 .window = win.*,
@@ -1013,7 +1021,7 @@ pub const Display = struct {
                 .region = .{
                     .row = win.*.screen_row,
                     .col = win.*.screen_col,
-                    .height = win.*.height,
+                    .height = render_height,
                     .width = win.*.width,
                 },
                 .is_active = is_active,
@@ -1047,6 +1055,8 @@ pub const Display = struct {
                     &editor.highlight_registry,
                 );
             }
+            // When statuslines are hidden, the extra row is used for content (render_height)
+            // so no need to fill with spaces
         }
 
         // PASS 2: Render all FLOATING windows (on top of regular windows)

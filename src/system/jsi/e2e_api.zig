@@ -1232,6 +1232,15 @@ fn ptyRender(
     // Get default listchars
     var listchars = ListChars{};
 
+    // Process libuv event loop first (timers, I/O, etc.)
+    // This is critical for setTimeout/setInterval callbacks to fire
+    const event_loop = @import("../event_loop/libuv.zig");
+    _ = event_loop.runOnce();
+
+    // Process timer queue (setTimeout/setInterval callbacks)
+    const timer_api = @import("timer_api.zig");
+    timer_api.processQueue(ctx.allocator);
+
     // Process pending requestAnimationFrame callbacks (for smear cursor animation, etc.)
     // This is critical for testing plugins that use animation - without this,
     // the animation callbacks never execute during E2E tests

@@ -15,6 +15,9 @@ const Style = @import("../../../system/jsi/highlight_api.zig").Style;
 const Color = @import("../../../system/jsi/highlight_api.zig").Color;
 const HighlightRegistry = @import("../../../system/jsi/highlight_api.zig").HighlightRegistry;
 
+// Shared listchars rendering (DRY: used by both layer_renderer and window_renderer)
+const listchars_renderer = @import("listchars_renderer.zig");
+
 // ============================================================================
 // PHASE 2.5: Layer-based Rendering Pipeline
 // ============================================================================
@@ -76,46 +79,8 @@ pub fn updateLayers(
     // Virtual text layer is updated by plugins, so skip it here
 }
 
-/// Pre-computed listchars highlight colors (optimization)
-const ListCharsColors = struct {
-    ws_fg: ?highlights.Color, // Whitespace foreground
-    ws_bg: ?highlights.Color, // Whitespace background
-    sk_fg: ?highlights.Color, // SpecialKey foreground
-    sk_bg: ?highlights.Color, // SpecialKey background
-};
-
-/// Compute listchars highlight colors once per frame (performance optimization)
-/// This avoids repeating the same registry.get() calls on every line render
-/// Uses Neovim/Helix unified highlight system (ONE registry for all highlights)
-fn computeListCharsColors(
-    registry: *const HighlightRegistry,
-    normal_fg: ?highlights.Color,
-    normal_bg: ?highlights.Color,
-) ListCharsColors {
-    // Get highlights from unified registry (Neovim/Helix pattern)
-    const whitespace_style = registry.get("Whitespace");
-    const special_key_style = registry.get("SpecialKey");
-    const non_text_style = registry.get("NonText");
-
-    // Extract colors (convert from highlight_api.Color to highlights.Color)
-    const whitespace_fg = if (whitespace_style.fg) |c| convertColor(c) else null;
-    const whitespace_bg = if (whitespace_style.bg) |c| convertColor(c) else null;
-    const special_key_fg = if (special_key_style.fg) |c| convertColor(c) else null;
-    const special_key_bg = if (special_key_style.bg) |c| convertColor(c) else null;
-    const non_text_fg = if (non_text_style.fg) |c| convertColor(c) else null;
-    const non_text_bg = if (non_text_style.bg) |c| convertColor(c) else null;
-
-    // Compute fallback chains once (Neovim-compatible)
-    return .{
-        // Whitespace colors: Whitespace → SpecialKey → NonText → Normal
-        .ws_fg = whitespace_fg orelse special_key_fg orelse non_text_fg orelse normal_fg,
-        .ws_bg = whitespace_bg orelse special_key_bg orelse non_text_bg orelse normal_bg,
-
-        // SpecialKey colors: SpecialKey → NonText → Normal
-        .sk_fg = special_key_fg orelse non_text_fg orelse normal_fg,
-        .sk_bg = special_key_bg orelse non_text_bg orelse normal_bg,
-    };
-}
+// ListCharsColors is now in shared listchars_renderer module (DRY)
+const ListCharsColors = listchars_renderer.ListCharsColors;
 
 /// Update base layer: Render buffer text content (z=0)
 /// Generic over Editor/EditorContext types (both have same fields)
@@ -149,9 +114,9 @@ fn updateBaseLayer(
     const eob_fg = if (eob_style.fg) |c| convertColor(c) else if (non_text_style.fg) |c| convertColor(c) else fg_color;
     const eob_bg = if (eob_style.bg) |c| convertColor(c) else if (non_text_style.bg) |c| convertColor(c) else bg_color;
 
-    // Pre-compute listchars colors once per frame (optimization)
+    // Pre-compute listchars colors using shared module (DRY)
     const lc_colors = if (list_enabled)
-        computeListCharsColors(registry, fg_color, bg_color)
+        ListCharsColors.fromRegistry(registry, convertColor)
     else
         undefined; // Won't be used if list_enabled = false
 
@@ -472,11 +437,9 @@ fn updateYankLayer(
 }
 
 /// Convert tree-sitter Style.Color to terminal highlights.Color
-fn convertColor(ts_color: Color) highlights.Color {
-    return switch (ts_color) {
-        .rgb => |rgb| highlights.Color{ .r = rgb.r, .g = rgb.g, .b = rgb.b },
-        .indexed => |idx| highlights.Color{ .r = idx, .g = idx, .b = idx }, // TODO: Handle 256-color palette
-    };
+// Use shared color conversion (DRY)
+fn convertColor(api_color: Color) highlights.Color {
+    return highlights.Color.fromApiColor(api_color);
 }
 
 /// Render text with syntax highlighting from tree-sitter
@@ -551,8 +514,7 @@ fn renderWithSyntaxHighlight(
     }
 
     // Render text character by character with syntax colors
-    const ws_fg = lc_colors.ws_fg;
-    const ws_bg = lc_colors.ws_bg;
+    // Note: lc_colors.ws_fg/ws_bg used by shared module, sk_fg/sk_bg for EOL
     const sk_fg = lc_colors.sk_fg;
     const sk_bg = lc_colors.sk_bg;
     var col = start_col;
@@ -579,123 +541,71 @@ fn renderWithSyntaxHighlight(
         else
             null;
 
-        // Handle listchars replacements (same logic as renderWithListChars)
+        // Handle listchars replacements using shared module (DRY)
         if (list_enabled) {
-            switch (codepoint) {
-                '\t' => {
-                    // Tab: render as multiple characters with Whitespace colors
-                    if (listchars.tab[0] != 0) {
-                        self.base_layer.grid.setCell(row, col, .{
-                            .char = listchars.tab[0],
-                            .fg = ws_fg,
-                            .bg = ws_bg,
-                        });
-                        col += 1;
-                        last_non_space_col = col;
-
-                        const tab_width: usize = char_width.getTabWidth();
-                        if (self.terminal_cols == 0 or tab_width == 0) {
-                            byte_idx += char_len;
-                            continue;
-                        }
-
-                        const chars_to_fill = tab_width - 1;
-                        if (listchars.tab[1] != 0) {
-                            var i: usize = 0;
-                            const middle_count = if (listchars.tab[2] != 0 and chars_to_fill > 0)
-                                chars_to_fill - 1
-                            else
-                                chars_to_fill;
-
-                            while (i < middle_count and col < self.terminal_cols) : (i += 1) {
-                                self.base_layer.grid.setCell(row, col, .{
-                                    .char = listchars.tab[1],
-                                    .fg = ws_fg,
-                                    .bg = ws_bg,
-                                });
-                                col += 1;
-                            }
-                        }
-
-                        if (listchars.tab[2] != 0 and col < self.terminal_cols) {
-                            self.base_layer.grid.setCell(row, col, .{
-                                .char = listchars.tab[2],
-                                .fg = ws_fg,
-                                .bg = ws_bg,
-                            });
-                            col += 1;
-                            last_non_space_col = col;
-                        }
-                    } else {
-                        // No tab replacement - use syntax colors
-                        self.base_layer.grid.setCell(row, col, .{
-                            .char = codepoint,
-                            .fg = syntax_fg orelse fg_color,
-                            .bg = syntax_bg orelse bg_color,
-                        });
-                        col += 1;
+            if (codepoint == '\t') {
+                // Tab: use shared tab renderer
+                const tab_result = listchars_renderer.renderTab(
+                    &self.base_layer.grid,
+                    row,
+                    col,
+                    self.terminal_cols,
+                    listchars,
+                    lc_colors,
+                );
+                if (tab_result.cols_consumed > 0) {
+                    col += tab_result.cols_consumed;
+                    if (tab_result.is_non_space) {
                         last_non_space_col = col;
                     }
                     byte_idx += char_len;
                     continue;
-                },
-                ' ' => {
-                    if (listchars.space != 0) {
-                        display_char = listchars.space;
-                    }
-                },
-                0xA0 => { // Non-breaking space
-                    if (listchars.nbsp != 0) {
-                        display_char = listchars.nbsp;
-                    }
-                },
-                else => {
-                    last_non_space_col = col + 1;
-                },
+                }
+                // Fall through to render tab as regular char if no listchar configured
+            } else if (listchars_renderer.getCharReplacement(codepoint, listchars, lc_colors)) |replacement| {
+                // Space/nbsp replacement
+                display_char = replacement.char;
+                // Use replacement colors for whitespace chars
+                self.base_layer.grid.setCell(row, col, .{
+                    .char = replacement.char,
+                    .fg = replacement.fg,
+                    .bg = replacement.bg,
+                });
+                col += 1;
+                if (replacement.is_non_space) {
+                    last_non_space_col = col;
+                }
+                byte_idx += char_len;
+                continue;
+            } else if (listchars_renderer.isNonSpace(codepoint)) {
+                last_non_space_col = col + 1;
             }
         } else {
-            if (codepoint != ' ' and codepoint != '\t') {
+            if (listchars_renderer.isNonSpace(codepoint)) {
                 last_non_space_col = col + 1;
             }
         }
 
-        // Determine final colors (priority: listchars > syntax > normal)
-        const use_ws_colors = list_enabled and ((codepoint == ' ' and listchars.space != 0) or
-            (codepoint == 0xA0 and listchars.nbsp != 0));
-
-        const final_fg = if (use_ws_colors)
-            ws_fg
-        else
-            syntax_fg orelse fg_color;
-
-        const final_bg = if (use_ws_colors)
-            ws_bg
-        else
-            syntax_bg orelse bg_color;
-
+        // Render regular character with syntax colors
         self.base_layer.grid.setCell(row, col, .{
             .char = display_char,
-            .fg = final_fg,
-            .bg = final_bg,
+            .fg = syntax_fg orelse fg_color,
+            .bg = syntax_bg orelse bg_color,
         });
         col += 1;
         byte_idx += char_len;
     }
 
-    // Post-process: mark trailing spaces (same as renderWithListChars)
-    if (list_enabled and listchars.trail != 0) {
-        var trail_col = last_non_space_col;
-        while (trail_col < col) : (trail_col += 1) {
-            if (self.base_layer.grid.getCell(row, trail_col)) |cell| {
-                if (cell.char == ' ' or cell.char == listchars.space) {
-                    self.base_layer.grid.setCell(row, trail_col, .{
-                        .char = listchars.trail,
-                        .fg = sk_fg,
-                        .bg = sk_bg,
-                    });
-                }
-            }
-        }
+    // Post-process: mark trailing spaces using shared module (DRY)
+    if (list_enabled) {
+        listchars_renderer.markTrailingSpaces(
+            &self.base_layer.grid,
+            row,
+            last_non_space_col,
+            col,
+            listchars,
+            lc_colors,
+        );
     }
 
     // Render EOL character if configured
@@ -752,15 +662,9 @@ fn renderWithListChars(
     fg_color: ?highlights.Color,
     bg_color: ?highlights.Color,
 ) !usize {
-    // Use pre-computed colors (optimization - no optional unwraps in hot loop)
-    const ws_fg = colors.ws_fg;
-    const ws_bg = colors.ws_bg;
-    const sk_fg = colors.sk_fg;
-    const sk_bg = colors.sk_bg;
+    // Use shared listchars_renderer module (DRY - same logic as renderWithSyntaxHighlight)
     var col = start_col;
     var byte_idx: usize = 0;
-
-    // Track if we're in trailing whitespace
     var last_non_space_col = start_col;
 
     while (byte_idx < text.len and col < self.terminal_cols) {
@@ -768,139 +672,77 @@ fn renderWithListChars(
         if (byte_idx + char_len > text.len) break;
 
         const codepoint = std.unicode.utf8Decode(text[byte_idx .. byte_idx + char_len]) catch text[byte_idx];
-        var display_char = codepoint;
 
-        // Replace invisible characters based on listchars config
-        switch (codepoint) {
-            '\t' => {
-                // Tab: render as multiple characters (start, middle*, end)
-                // Use Whitespace colors for tabs
-                if (listchars.tab[0] != 0) {
-                    // Render first character
-                    self.base_layer.grid.setCell(row, col, .{
-                        .char = listchars.tab[0],
-                        .fg = ws_fg,
-                        .bg = ws_bg,
-                    });
-                    col += 1;
-                    last_non_space_col = col;
-
-                    // Calculate tab width from global setting (synchronized with vim.opt.tabstop)
-                    const tab_width: usize = char_width.getTabWidth();
-
-                    // CRITICAL FIX: Prevent infinite loop when terminal_cols is 0
-                    if (self.terminal_cols == 0) {
-                        byte_idx += char_len;
-                        continue;
-                    }
-
-                    // CRITICAL FIX: Prevent underflow when tab_width is 0
-                    if (tab_width == 0) {
-                        byte_idx += char_len;
-                        continue;
-                    }
-
-                    const chars_to_fill = tab_width - 1;
-
-                    // Render middle characters
-                    if (listchars.tab[1] != 0) {
-                        var i: usize = 0;
-                        const middle_count = if (listchars.tab[2] != 0 and chars_to_fill > 0)
-                            chars_to_fill - 1
-                        else
-                            chars_to_fill;
-
-                        // CRITICAL: Loop must have BOTH conditions to prevent infinite loop
-                        while (i < middle_count and col < self.terminal_cols) : (i += 1) {
-                            self.base_layer.grid.setCell(row, col, .{
-                                .char = listchars.tab[1],
-                                .fg = ws_fg,
-                                .bg = ws_bg,
-                            });
-                            col += 1;
-                        }
-                    }
-
-                    // Render end character if configured
-                    if (listchars.tab[2] != 0 and col < self.terminal_cols) {
-                        self.base_layer.grid.setCell(row, col, .{
-                            .char = listchars.tab[2],
-                            .fg = ws_fg,
-                            .bg = ws_bg,
-                        });
-                        col += 1;
-                        last_non_space_col = col;
-                    }
-                } else {
-                    // No tab replacement configured, render normally
-                    self.base_layer.grid.setCell(row, col, .{
-                        .char = codepoint,
-                        .fg = fg_color,
-                        .bg = bg_color,
-                    });
-                    col += 1;
+        // Handle tabs using shared module
+        if (codepoint == '\t') {
+            const tab_result = listchars_renderer.renderTab(
+                &self.base_layer.grid,
+                row,
+                col,
+                self.terminal_cols,
+                listchars,
+                colors,
+            );
+            if (tab_result.cols_consumed > 0) {
+                col += tab_result.cols_consumed;
+                if (tab_result.is_non_space) {
                     last_non_space_col = col;
                 }
                 byte_idx += char_len;
                 continue;
-            },
-            ' ' => {
-                // Regular space
-                if (listchars.space != 0) {
-                    display_char = listchars.space;
-                }
-            },
-            0xA0 => { // Non-breaking space (U+00A0)
-                if (listchars.nbsp != 0) {
-                    display_char = listchars.nbsp;
-                }
-            },
-            else => {
-                last_non_space_col = col + 1;
-            },
+            }
+            // Fall through to render tab as regular char if no listchar configured
         }
 
-        // Render the character
-        // Use Whitespace colors if character was replaced (space or nbsp)
-        const use_ws_colors = (codepoint == ' ' and listchars.space != 0) or
-            (codepoint == 0xA0 and listchars.nbsp != 0);
+        // Handle space/nbsp replacements using shared module
+        if (listchars_renderer.getCharReplacement(codepoint, listchars, colors)) |replacement| {
+            self.base_layer.grid.setCell(row, col, .{
+                .char = replacement.char,
+                .fg = replacement.fg,
+                .bg = replacement.bg,
+            });
+            col += 1;
+            if (replacement.is_non_space) {
+                last_non_space_col = col;
+            }
+            byte_idx += char_len;
+            continue;
+        }
 
+        // Track non-space characters for trailing detection
+        if (listchars_renderer.isNonSpace(codepoint)) {
+            last_non_space_col = col + 1;
+        }
+
+        // Render regular character
         self.base_layer.grid.setCell(row, col, .{
-            .char = display_char,
-            .fg = if (use_ws_colors) ws_fg else fg_color,
-            .bg = if (use_ws_colors) ws_bg else bg_color,
+            .char = codepoint,
+            .fg = fg_color,
+            .bg = bg_color,
         });
         col += 1;
         byte_idx += char_len;
     }
 
-    // Post-process: mark trailing spaces
-    // Use SpecialKey colors for trailing spaces
-    if (listchars.trail != 0) {
-        var trail_col = last_non_space_col;
-        while (trail_col < col) : (trail_col += 1) {
-            if (self.base_layer.grid.getCell(row, trail_col)) |cell| {
-                if (cell.char == ' ' or cell.char == listchars.space) {
-                    self.base_layer.grid.setCell(row, trail_col, .{
-                        .char = listchars.trail,
-                        .fg = sk_fg,
-                        .bg = sk_bg,
-                    });
-                }
-            }
-        }
-    }
+    // Post-process: mark trailing spaces using shared module (DRY)
+    listchars_renderer.markTrailingSpaces(
+        &self.base_layer.grid,
+        row,
+        last_non_space_col,
+        col,
+        listchars,
+        colors,
+    );
 
-    // Render EOL character if configured and there's space
-    // Use SpecialKey colors for EOL
-    if (listchars.eol != 0 and col < self.terminal_cols) {
-        self.base_layer.grid.setCell(row, col, .{
-            .char = listchars.eol,
-            .fg = sk_fg,
-            .bg = sk_bg,
-        });
-        col += 1;
-    }
+    // Render EOL using shared module (DRY)
+    col += listchars_renderer.renderEol(
+        &self.base_layer.grid,
+        row,
+        col,
+        self.terminal_cols,
+        listchars,
+        colors,
+    );
 
     return col;
 }
@@ -926,10 +768,11 @@ fn updateCursorLayer(
 
     const cursorline_bg = convertColor(cursorline_style.bg.?);
 
-    // PHASE 6 FIX: Render cursorline background WITHOUT characters
-    // We use char=0 (null) which the blend function will treat as "no character"
-    // This allows the background to show through without hiding the base layer text
-    for (0..self.terminal_cols) |col| {
+    // Render cursorline background for TEXT AREA ONLY (not gutter)
+    // Neovim-compatible: CursorLine = text area, CursorLineNr = gutter
+    // The gutter layer handles cursor line highlighting via CursorLineNr
+    const gutter_width = self.gutter_manager.getTotalWidth();
+    for (gutter_width..self.terminal_cols) |col| {
         self.cursor_layer.grid.setCell(screen_row, col, .{
             .char = 0, // NULL character - won't hide base layer text
             .bg = cursorline_bg,

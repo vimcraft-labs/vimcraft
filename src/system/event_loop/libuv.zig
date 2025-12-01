@@ -28,6 +28,12 @@ pub fn getLoop() ?*uv.uv_loop_t {
 pub fn runOnce() bool {
     if (loop == null) return false;
 
+    // CRITICAL: Update libuv's cached time before running
+    // Without this, timers scheduled with delay=0 may not fire promptly
+    // because libuv compares against its cached "now" time.
+    // This enables setTimeout(0) to fire on the next runOnce() call.
+    uv.uv_update_time(loop);
+
     const result = uv.uv_run(loop, uv.UV_RUN_NOWAIT);
     return result != 0;
 }

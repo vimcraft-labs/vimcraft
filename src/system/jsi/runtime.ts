@@ -3084,8 +3084,11 @@ const vimLsp = {
       });
 
       // Open the window
-      consoleAPI.log('[LSP] Opening preview window with opts:', floatOpts);
+      const beforeOpenWin = Date.now();
+      consoleAPI.log('[HOVER TIMING] Before openWin at', beforeOpenWin);
       const winid = vim.api.openWin(bufnr, false, floatOpts);
+      const afterOpenWin = Date.now();
+      consoleAPI.log('[HOVER TIMING] After openWin at', afterOpenWin, '(openWin took', afterOpenWin - beforeOpenWin, 'ms)');
       consoleAPI.log('[LSP] Preview window opened: winid=', winid, 'bufnr=', bufnr);
 
       // Track for auto-close
@@ -3300,6 +3303,9 @@ const vimLsp = {
      * Result is passed to vim.lsp.handlers['textDocument/hover'] for display
      */
     hover(): Promise<any> {
+      const hoverStartTime = Date.now();
+      consoleAPI.log('[HOVER TIMING] hover() called at', hoverStartTime);
+
       const bufnr = vim.api.getCurrentBuf();
       const client = vimLsp._findClientWithCapability(bufnr, 'hoverProvider');
 
@@ -3318,15 +3324,24 @@ const vimLsp = {
       const line = cursor[0] - 1; // 0-indexed
       const col = cursor[1];
 
+      const requestSendTime = Date.now();
+      consoleAPI.log('[HOVER TIMING] Sending request at', requestSendTime, '(+' + (requestSendTime - hoverStartTime) + 'ms)');
+
       return client.request('textDocument/hover', {
         textDocument: { uri: bufferToFileUri(bufnr) },
         position: { line: line, character: col }
       }).then(function(result: any) {
+        const responseTime = Date.now();
+        consoleAPI.log('[HOVER TIMING] Response received at', responseTime, '(+' + (responseTime - hoverStartTime) + 'ms from start)');
+
         // Call handler to display result
         const handler = vimLsp.handlers['textDocument/hover'];
         if (handler) {
-          handler(result, { bufnr: bufnr, client: client });
+          handler(result, { bufnr: bufnr, client: client, _hoverStartTime: hoverStartTime });
         }
+
+        const handlerDoneTime = Date.now();
+        consoleAPI.log('[HOVER TIMING] Handler done at', handlerDoneTime, '(+' + (handlerDoneTime - hoverStartTime) + 'ms total)');
         return result;
       });
     },

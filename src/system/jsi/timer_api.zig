@@ -157,7 +157,7 @@ pub fn processQueue(allocator: std.mem.Allocator) void {
     // If no pending timers, nothing to do
     if (pending.items.len == 0) return;
 
-    debug_log.log("[TIMER] processQueue: {d} timers to process", .{pending.items.len});
+    debug_log.log("[TIMER] processQueue: {d} timers to process at {d}ns", .{ pending.items.len, std.time.nanoTimestamp() });
 
     // Now we're on the main thread - SAFE to call JavaScript!
     // Process each timer individually
@@ -242,6 +242,9 @@ fn onTimerFire(handle: [*c]uv.uv_timer_t) callconv(.c) void {
 
     // Skip if already closing (prevents double-close)
     if (timer_data.closing) return;
+
+    // DEBUG: Log when timer fires
+    debug_log.log("[TIMER FIRE] timer_id={d} fired at {d}ns", .{ timer_data.timer_id, std.time.nanoTimestamp() });
 
     // ✅ SAFE: Add timer ID to queue (thread-safe operation)
     // Main event loop will process this and call JavaScript
@@ -331,6 +334,10 @@ export fn setTimeoutNative(
 
     // Start the timer (one-shot: repeat = 0)
     const delay = @as(u64, @intFromFloat(@max(0, delay_ms)));
+
+    // DEBUG: Log when timer is started
+    debug_log.log("[TIMER START] timer_id={d} delay={d}ms at {d}ns", .{ timer_id, delay, std.time.nanoTimestamp() });
+
     const start_result = uv.uv_timer_start(&timer_data.timer, onTimerFire, delay, 0);
     if (start_result != 0) {
         uv.uv_close(@ptrCast(&timer_data.timer), onTimerClose);

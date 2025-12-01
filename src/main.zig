@@ -763,7 +763,7 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var running = true;
     var needs_render = false;
     var render_stats = RenderStats.init();
-    var render_throttle = RenderThrottle.init(60); // 60 FPS max (protection against plugin spam)
+    var render_throttle = RenderThrottle.init(240); // 240 FPS for lower latency (4.2ms per frame)
     var event_processor = EventLoopProcessor.init(allocator);
 
     while (running) {
@@ -792,6 +792,14 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
         // Use 1ms timeout for responsive input without CPU spinning
         // 0ms = 100% CPU (causes thermal throttling), 10ms = sluggish, 1ms = perfect balance
         running = try backend.handleInput(1, &needs_render);
+
+        // CRITICAL: Process event loop AGAIN after input handling
+        // JavaScript keymap callbacks may have scheduled setTimeout(0) timers
+        // that need to fire BEFORE rendering (e.g., LSP hover popup positioning)
+        // Without this second tick(), timers would wait until next iteration (~16ms)
+        if (event_processor.tick()) {
+            needs_render = true;
+        }
 
         // Render if state changed (with throttling to protect against plugin spam)
         if (needs_render) {
@@ -1175,7 +1183,7 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     var running = true;
     var needs_render = false;
     var render_stats = RenderStats.init();
-    var render_throttle = RenderThrottle.init(60); // 60 FPS max (protection against plugin spam)
+    var render_throttle = RenderThrottle.init(240); // 240 FPS for lower latency (4.2ms per frame)
     var event_processor = EventLoopProcessor.init(allocator);
 
     while (running) {
@@ -1204,6 +1212,14 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         // Use 1ms timeout for responsive input without CPU spinning
         // 0ms = 100% CPU (causes thermal throttling), 10ms = sluggish, 1ms = perfect balance
         running = try backend.handleInput(1, &needs_render);
+
+        // CRITICAL: Process event loop AGAIN after input handling
+        // JavaScript keymap callbacks may have scheduled setTimeout(0) timers
+        // that need to fire BEFORE rendering (e.g., LSP hover popup positioning)
+        // Without this second tick(), timers would wait until next iteration (~16ms)
+        if (event_processor.tick()) {
+            needs_render = true;
+        }
 
         // Render if needed (with throttling to protect against plugin spam)
         if (needs_render) {

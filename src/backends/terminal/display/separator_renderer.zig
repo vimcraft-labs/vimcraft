@@ -146,11 +146,9 @@ fn getBounds(node: *LayoutNode, windows: *std.AutoHashMap(WindowId, *Window)) Bo
 }
 
 /// Convert highlight_api.Color to highlights.Color
+// Use shared color conversion (DRY)
 fn convertColor(api_color: Color) highlights.Color {
-    return switch (api_color) {
-        .rgb => |rgb| highlights.Color{ .r = rgb.r, .g = rgb.g, .b = rgb.b },
-        .indexed => |idx| highlights.Color{ .r = idx, .g = idx, .b = idx },
-    };
+    return highlights.Color.fromApiColor(api_color);
 }
 
 // ============================================================================
