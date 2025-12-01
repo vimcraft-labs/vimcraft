@@ -703,6 +703,18 @@ export interface VimOptions {
   relativeNumber?: boolean;
 
   /**
+   * Minimum number of columns to use for line numbers.
+   * The actual width will be larger if needed to fit the highest line number.
+   * Valid range: 1-20.
+   * @default 4
+   *
+   * @example
+   * vim.opt.numberWidth = 2;  // Compact line numbers (e.g., " 1 " instead of "   1 ")
+   * vim.opt.numberWidth = 6;  // Extra padding for alignment
+   */
+  numberWidth?: number;
+
+  /**
    * Highlight the current line the cursor is on.
    * @default false
    */

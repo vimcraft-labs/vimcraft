@@ -27,6 +27,15 @@ pub const OPTIONS = [_]OptionMeta{
     },
 
     .{
+        .name = "numberwidth",
+        .short_name = "nuw",
+        .js_name = "numberWidth",
+        .type = .number,
+        .default = .{ .number = 4 }, // Neovim default: minimum 4 digits
+        .scope = .window,
+    },
+
+    .{
         .name = "cursorline",
         .short_name = "cul",
         .js_name = "cursorLine",

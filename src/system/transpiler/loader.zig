@@ -132,14 +132,16 @@ pub fn loadFromSource(
 
 /// Load and bundle TypeScript config file with runtime wrapper
 /// This function:
-/// 1. Checks cache based on source file mtime + runtime_wrapper content hash
-/// 2. If cache miss: bundles the config file using esbuild.build() (resolves imports)
-/// 3. Wraps the bundle with runtime wrapper
-/// 4. Compiles to Hermes bytecode
-/// 5. Saves to cache
+/// 1. Scans ALL source files in config directory for latest mtime (multi-file support)
+/// 2. Checks cache based on latest mtime + runtime_wrapper content hash
+/// 3. If cache miss: bundles the config file using esbuild.build() (resolves imports)
+/// 4. Wraps the bundle with runtime wrapper
+/// 5. Compiles to Hermes bytecode
+/// 6. Saves to cache
 ///
-/// CRITICAL: Cache key includes runtime_wrapper hash to ensure cache invalidation
-/// when the runtime wrapper changes (e.g., after editor recompilation).
+/// CRITICAL: Cache key includes:
+/// - Latest mtime of ANY .ts/.js file in config directory (invalidates on any change)
+/// - runtime_wrapper hash (invalidates when runtime.js changes after recompilation)
 ///
 /// Use this for index.ts that may have imports. For simple plugins without imports,
 /// use loadFromSource() directly.
@@ -149,14 +151,57 @@ pub fn loadConfigWithBundle(
     filepath: []const u8,
     runtime_wrapper: []const u8,
 ) LoadError![]const u8 {
-    // 1. Compute cache key based on source file path + runtime_wrapper content
+    // 1. Get config directory (parent of entry file)
+    const config_dir = std.fs.path.dirname(filepath) orelse {
+        std.log.err("Cannot determine config directory for: {s}", .{filepath});
+        return LoadError.InvalidPath;
+    };
+
+    // 2. Scan ALL source files in config directory AND plugin directories
+    // This ensures cache invalidates when ANY imported .ts/.js file changes
+    // CRITICAL: Must scan plugin directories too, since config may import from them
+    var latest_mtime: i128 = blk: {
+        if (getLatestMtimeInDir(config_dir, allocator)) |mtime_opt| {
+            if (mtime_opt) |mtime| {
+                break :blk mtime;
+            }
+        } else |err| {
+            std.log.warn("Failed to scan config directory {s}: {}, falling back to entry file mtime", .{ config_dir, err });
+        }
+        // Fallback: use entry file mtime only
+        const stat = std.fs.cwd().statFile(filepath) catch {
+            return LoadError.PathNotFound;
+        };
+        break :blk stat.mtime;
+    };
+
+    // 2b. CRITICAL FIX: Also scan ~/.config/vimcraft/plugins/ if it exists
+    // This catches changes to plugins imported via require('./plugins/...')
+    if (std.posix.getenv("HOME")) |home| {
+        var plugins_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const plugins_dir = std.fmt.bufPrint(&plugins_buf, "{s}/.config/vimcraft/plugins", .{home}) catch "";
+
+        if (plugins_dir.len > 0) {
+            if (getLatestMtimeInDir(plugins_dir, allocator)) |mtime_opt| {
+                if (mtime_opt) |plugins_mtime| {
+                    if (plugins_mtime > latest_mtime) {
+                        latest_mtime = plugins_mtime;
+                    }
+                }
+            } else |_| {
+                // plugins/ doesn't exist or can't be scanned - that's OK
+            }
+        }
+    }
+
+    // 3. Compute cache key from path + latest mtime + runtime_wrapper hash
     // CRITICAL: Include runtime_wrapper hash to invalidate cache when wrapper changes
-    // This ensures cache invalidation after editor recompilation with new runtime.js
     const path_hash = std.hash.Wyhash.hash(0, filepath);
     const wrapper_hash = std.hash.Wyhash.hash(0, runtime_wrapper);
     const combined_hash = path_hash ^ wrapper_hash;
 
-    const cache_key = try std.fmt.allocPrint(allocator, "{x:0>16}", .{combined_hash});
+    // Include mtime in cache key so any source file change creates a new cache path
+    const cache_key = try std.fmt.allocPrint(allocator, "{x:0>16}_{d}", .{ combined_hash, latest_mtime });
     defer allocator.free(cache_key);
 
     const cache_path = try std.fmt.allocPrint(
@@ -166,14 +211,14 @@ pub fn loadConfigWithBundle(
     );
     defer allocator.free(cache_path);
 
-    // 2. Check cache freshness BEFORE expensive bundling
-    // Cache is valid if: cache file exists AND source mtime <= cache mtime
-    if (config.enable_cache and cache.isCacheFresh(filepath, cache_path)) {
+    // 4. Try to load from cache (FAST PATH)
+    // Cache hit means: same path + same runtime_wrapper + no source file changed
+    if (config.enable_cache) {
         if (cache.loadFromCache(allocator, cache_path)) |bytecode| {
             config.stats.recordHit();
             return bytecode;
         } else |_| {
-            // Cache read failed - rebuild
+            // Cache miss - need to bundle and compile
         }
     }
 
@@ -350,6 +395,65 @@ pub fn loadModule(
     config.stats.recordMiss(hbc.len);
 
     return hbc;
+}
+
+// ============================================================================
+// Directory Mtime Scanning for Cache Invalidation
+// ============================================================================
+
+/// Directories to exclude from mtime scanning (common build outputs, dependencies)
+const EXCLUDED_DIRS = [_][]const u8{ "node_modules", ".git", "dist", "build", "target", "zig-out", "zig-cache" };
+
+/// Check if path contains any excluded directory
+fn isExcludedPath(path: []const u8) bool {
+    for (EXCLUDED_DIRS) |excluded| {
+        if (std.mem.indexOf(u8, path, excluded) != null) return true;
+    }
+    return false;
+}
+
+/// Scan directory recursively for .ts/.js/.tsx/.jsx files and return latest mtime
+/// Returns null if no source files found
+/// This enables cache invalidation when ANY source file in the directory changes
+fn getLatestMtimeInDir(dir_path: []const u8, allocator: std.mem.Allocator) !?i128 {
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+        return err;
+    };
+    defer dir.close();
+
+    var latest_mtime: ?i128 = null;
+
+    // Use passed allocator (proper memory management)
+    var walker = dir.walk(allocator) catch |err| {
+        return err;
+    };
+    defer walker.deinit();
+
+    while (walker.next() catch null) |entry| {
+        // Fast rejection: skip non-files first
+        if (entry.kind != .file) continue;
+
+        // Skip excluded directories (node_modules, .git, build outputs)
+        if (isExcludedPath(entry.path)) continue;
+
+        // Only check .ts, .tsx, .js, .jsx files
+        const ext = std.fs.path.extension(entry.basename);
+        const is_source = std.mem.eql(u8, ext, ".ts") or
+            std.mem.eql(u8, ext, ".tsx") or
+            std.mem.eql(u8, ext, ".js") or
+            std.mem.eql(u8, ext, ".jsx");
+
+        if (!is_source) continue;
+
+        // Get file mtime
+        const stat = entry.dir.statFile(entry.basename) catch continue;
+
+        if (latest_mtime == null or stat.mtime > latest_mtime.?) {
+            latest_mtime = stat.mtime;
+        }
+    }
+
+    return latest_mtime;
 }
 
 /// Expand ~ to home directory

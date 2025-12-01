@@ -315,10 +315,13 @@ pub export fn apiWinGetHeight(
 
     // Try to get actual window dimensions
     if (getWindowFromHandle(ctx, win_handle)) |window| {
-        return c.hermes_value_create_number(rt, @floatFromInt(window.height));
+        // FIX: If window dimensions are 0 (layout not yet calculated), fall through to terminal fallback
+        if (window.height > 0) {
+            return c.hermes_value_create_number(rt, @floatFromInt(window.height));
+        }
     }
 
-    // Fallback: return terminal rows for window 0
+    // Fallback: return terminal rows for window 0 (or when window.height is 0)
     if (win_handle == 0) {
         const dims = ctx.get_dimensions_fn(ctx.context_ptr);
         return c.hermes_value_create_number(rt, @floatFromInt(dims.rows));
@@ -348,10 +351,13 @@ pub export fn apiWinGetWidth(
 
     // Try to get actual window dimensions
     if (getWindowFromHandle(ctx, win_handle)) |window| {
-        return c.hermes_value_create_number(rt, @floatFromInt(window.width));
+        // FIX: If window dimensions are 0 (layout not yet calculated), fall through to terminal fallback
+        if (window.width > 0) {
+            return c.hermes_value_create_number(rt, @floatFromInt(window.width));
+        }
     }
 
-    // Fallback: return terminal cols for window 0
+    // Fallback: return terminal cols for window 0 (or when window.width is 0)
     if (win_handle == 0) {
         const dims = ctx.get_dimensions_fn(ctx.context_ptr);
         return c.hermes_value_create_number(rt, @floatFromInt(dims.cols));
@@ -1069,11 +1075,9 @@ fn getBufferFromEditorContext(ptr: *anyopaque) ?*Buffer {
 }
 
 fn getDimensionsFromEditor(ptr: *anyopaque) Dimensions {
-    _ = ptr;
-    // Editor mode doesn't store terminal dimensions directly
-    // For now, return default terminal size (actual size handled by terminal backend)
-    // TODO: Store terminal dimensions in Editor or pass via registration
-    return .{ .rows = 24, .cols = 80 };
+    const editor: *Editor = @ptrCast(@alignCast(ptr));
+    // Editor stores terminal dimensions (set by backend on resize)
+    return .{ .rows = editor.terminal_rows, .cols = editor.terminal_cols };
 }
 
 fn getDimensionsFromEditorContext(ptr: *anyopaque) Dimensions {

@@ -1,5 +1,6 @@
 const std = @import("std");
 const Rope = @import("rope.zig").Rope;
+const Syntax = @import("../treesitter/syntax.zig").Syntax;
 
 /// Cursor position in the buffer
 pub const Cursor = struct {
@@ -72,6 +73,10 @@ pub const Buffer = struct {
     // Incremented on any modification - used to detect use-after-free in JavaScript
     version: u64 = 0,
 
+    // Tree-sitter syntax highlighting (per-buffer, following Neovim's architecture)
+    // Each buffer owns its own Syntax instance for proper floating window highlighting
+    syntax: ?*Syntax = null,
+
     pub fn init(allocator: std.mem.Allocator) Buffer {
         return .{
             .allocator = allocator,
@@ -93,6 +98,9 @@ pub const Buffer = struct {
         if (self.filetype) |ft| {
             self.allocator.free(ft);
         }
+
+        // Clean up syntax highlighting
+        self.deinitSyntax();
 
         // Clean up active transaction if any
         if (self.active_transaction) |*trans| {
@@ -641,6 +649,52 @@ pub const Buffer = struct {
             self.filetype = try self.allocator.dupe(u8, new_ft);
         } else {
             self.filetype = null;
+        }
+    }
+
+    // ===== Syntax Highlighting Functions =====
+
+    /// Initialize syntax highlighting for this buffer
+    /// Called when filetype is set or changed
+    /// Requires: parser - shared Parser instance from Editor
+    ///           lang - TSLanguage pointer for the filetype
+    ///           lang_name - language name for query loading (e.g., "typescript")
+    pub fn initSyntax(
+        self: *Buffer,
+        parser: anytype, // *Parser
+        lang: anytype, // *const c.TSLanguage
+        lang_name: []const u8,
+    ) !void {
+        // Clean up existing syntax if any
+        self.deinitSyntax();
+
+        // Get buffer content as string for parsing
+        const source = self.content.toString() catch return;
+        defer self.allocator.free(source);
+
+        // Parse the content with tree-sitter
+        const tree = parser.parseString(null, source) catch return;
+
+        // Allocate Syntax on the heap (Buffer owns it)
+        const syntax_ptr = self.allocator.create(Syntax) catch return;
+        errdefer self.allocator.destroy(syntax_ptr);
+
+        // Initialize the Syntax instance
+        syntax_ptr.* = Syntax.init(self.allocator, tree, lang, lang_name) catch {
+            self.allocator.destroy(syntax_ptr);
+            return;
+        };
+
+        self.syntax = syntax_ptr;
+    }
+
+    /// Clean up syntax highlighting
+    /// Called on deinit or when filetype changes
+    pub fn deinitSyntax(self: *Buffer) void {
+        if (self.syntax) |syntax_ptr| {
+            syntax_ptr.deinit();
+            self.allocator.destroy(syntax_ptr);
+            self.syntax = null;
         }
     }
 

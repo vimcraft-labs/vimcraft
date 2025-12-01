@@ -64,21 +64,19 @@ fn closeAllHandlesCallback(handle: [*c]uv.uv_handle_t, _: ?*anyopaque) callconv(
 /// Clean up and close the event loop
 /// Properly closes all handles before calling uv_loop_close
 pub fn deinit() void {
-    if (loop) |l| {
-        // First, close all active handles
-        uv.uv_walk(l, closeAllHandlesCallback, null);
+    // CRITICAL: When using uv_default_loop(), we should do NOTHING during cleanup.
+    // The default loop is a static singleton managed by libuv itself.
+    // All handles are owned by their respective subsystems (ConfigWatcher, timers, etc.)
+    // which close them when they deinit. We must not interfere with this process.
+    //
+    // Attempting to:
+    // - uv_walk() and close handles → use-after-free segfault
+    // - uv_loop_close() the default loop → corrupts singleton state
+    // - uv_run() during shutdown → crashes if handles are in inconsistent state
+    //
+    // The correct pattern: Just set loop to null and let the OS clean up on exit.
 
-        // Run the loop until all handles are closed
-        // UV_RUN_DEFAULT will block until no more active handles
-        var iterations: u32 = 0;
-        while (uv.uv_loop_alive(l) != 0 and iterations < 1000) : (iterations += 1) {
-            _ = uv.uv_run(l, uv.UV_RUN_NOWAIT);
-        }
-
-        // Now safe to close the loop
-        _ = uv.uv_loop_close(l);
-        loop = null;
-    }
+    loop = null;
 }
 
 /// Check if loop is alive (has active handles)

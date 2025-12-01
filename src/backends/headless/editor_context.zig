@@ -119,10 +119,10 @@ pub const EditorContext = struct {
         return &self.editor.parser;
     }
 
-    /// Get syntax (convenience accessor)
+    /// Get syntax from current buffer (per-buffer syntax following Neovim architecture)
     pub fn syntax(self: *EditorContext) ?*Syntax {
-        if (self.editor.syntax) |*s| return s;
-        return null;
+        const buf = self.editor.getCurrentBuffer() orelse return null;
+        return buf.syntax;
     }
 
     // =========================================================================
@@ -204,8 +204,7 @@ pub const EditorContext = struct {
     /// CRITICAL: Editor.terminal_rows/cols are used by splitWindow/relayout
     /// Without this sync, window splits use default 24x80 dimensions
     pub fn syncTerminalDimensions(self: *EditorContext) void {
-        self.editor.terminal_rows = self.display.terminal_rows;
-        self.editor.terminal_cols = self.display.terminal_cols;
+        self.display.syncDimensionsToEditor(&self.editor);
     }
 
     /// Execute a string of keys through the editor

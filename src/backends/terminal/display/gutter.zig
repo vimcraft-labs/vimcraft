@@ -98,6 +98,9 @@ pub const LineNumberConfig = struct {
     number: bool = false,
     /// Show relative line numbers
     relative_number: bool = false,
+    /// Minimum width for line number column (Neovim's numberwidth option)
+    /// Default is 4 to match Neovim. Valid range: 1-20
+    min_width: u8 = 4,
 
     /// Get the effective mode
     pub fn getMode(self: LineNumberConfig) LineNumberMode {
@@ -133,20 +136,30 @@ pub const LineNumberMode = enum {
     hybrid, // Both absolute on cursor line, relative elsewhere
 };
 
-/// Calculate width needed for line numbers
+/// Calculate width needed for line numbers with configurable minimum width
 /// Uses fast integer log10 (Helix approach)
 /// IMPORTANT: Includes 1 space separator after the number
-pub fn calculateLineNumberWidth(line_count: usize) usize {
-    if (line_count == 0) return 2; // "0 " = 1 digit + 1 space
-    // Use checked_ilog10 equivalent to count digits
-    var count = line_count;
-    var width: usize = 1;
-    while (count >= 10) {
-        width += 1;
-        count /= 10;
+/// @param line_count: Number of lines in buffer
+/// @param min_width: Minimum digit width (Neovim's numberwidth option, default 4)
+/// @return: Total width including separator space
+pub fn calculateLineNumberWidthWithMin(line_count: usize, min_width: u8) usize {
+    // Count digits needed for largest line number
+    var digits: usize = 1;
+    if (line_count > 0) {
+        var count = line_count;
+        while (count >= 10) {
+            digits += 1;
+            count /= 10;
+        }
     }
-    // Add 1 for the space separator after the number
-    return width + 1;
+    // Use configured minimum width, plus 1 for the space separator
+    return @max(digits, min_width) + 1;
+}
+
+/// Calculate width needed for line numbers (uses default min_width of 4)
+/// Kept for backward compatibility
+pub fn calculateLineNumberWidth(line_count: usize) usize {
+    return calculateLineNumberWidthWithMin(line_count, 4);
 }
 
 /// Absolute line number renderer
@@ -271,10 +284,33 @@ pub fn renderSignColumn(line_num: usize, cursor_line: usize, buf: []u8) usize {
 }
 
 test "calculateLineNumberWidth" {
-    try std.testing.expectEqual(@as(usize, 2), calculateLineNumberWidth(0)); // "0 " = 1 digit + 1 space
-    try std.testing.expectEqual(@as(usize, 2), calculateLineNumberWidth(9)); // "9 " = 1 digit + 1 space
-    try std.testing.expectEqual(@as(usize, 3), calculateLineNumberWidth(10)); // "10 " = 2 digits + 1 space
-    try std.testing.expectEqual(@as(usize, 3), calculateLineNumberWidth(99)); // "99 " = 2 digits + 1 space
-    try std.testing.expectEqual(@as(usize, 4), calculateLineNumberWidth(100)); // "100 " = 3 digits + 1 space
-    try std.testing.expectEqual(@as(usize, 5), calculateLineNumberWidth(1000)); // "1000 " = 4 digits + 1 space
+    // Now enforces minimum 4 digits + 1 space = 5 chars (matching window_renderer)
+    try std.testing.expectEqual(@as(usize, 5), calculateLineNumberWidth(0)); // min 4 digits + 1 space
+    try std.testing.expectEqual(@as(usize, 5), calculateLineNumberWidth(9)); // min 4 digits + 1 space
+    try std.testing.expectEqual(@as(usize, 5), calculateLineNumberWidth(10)); // min 4 digits + 1 space
+    try std.testing.expectEqual(@as(usize, 5), calculateLineNumberWidth(99)); // min 4 digits + 1 space
+    try std.testing.expectEqual(@as(usize, 5), calculateLineNumberWidth(100)); // min 4 digits + 1 space
+    try std.testing.expectEqual(@as(usize, 5), calculateLineNumberWidth(1000)); // 4 digits + 1 space
+    try std.testing.expectEqual(@as(usize, 6), calculateLineNumberWidth(10000)); // 5 digits + 1 space
+}
+
+test "calculateLineNumberWidthWithMin" {
+    // Test with min_width = 1 (minimal gutter)
+    try std.testing.expectEqual(@as(usize, 2), calculateLineNumberWidthWithMin(0, 1)); // 1 digit + 1 space
+    try std.testing.expectEqual(@as(usize, 2), calculateLineNumberWidthWithMin(9, 1)); // 1 digit + 1 space
+    try std.testing.expectEqual(@as(usize, 3), calculateLineNumberWidthWithMin(10, 1)); // 2 digits + 1 space
+    try std.testing.expectEqual(@as(usize, 3), calculateLineNumberWidthWithMin(99, 1)); // 2 digits + 1 space
+    try std.testing.expectEqual(@as(usize, 4), calculateLineNumberWidthWithMin(100, 1)); // 3 digits + 1 space
+
+    // Test with min_width = 2 (user wants compact gutter)
+    try std.testing.expectEqual(@as(usize, 3), calculateLineNumberWidthWithMin(0, 2)); // min 2 + 1 space
+    try std.testing.expectEqual(@as(usize, 3), calculateLineNumberWidthWithMin(9, 2)); // min 2 + 1 space
+    try std.testing.expectEqual(@as(usize, 3), calculateLineNumberWidthWithMin(57, 2)); // 2 digits + 1 space
+    try std.testing.expectEqual(@as(usize, 4), calculateLineNumberWidthWithMin(100, 2)); // 3 digits + 1 space
+
+    // Test with min_width = 6 (user wants extra padding)
+    try std.testing.expectEqual(@as(usize, 7), calculateLineNumberWidthWithMin(0, 6)); // min 6 + 1 space
+    try std.testing.expectEqual(@as(usize, 7), calculateLineNumberWidthWithMin(99999, 6)); // 5 digits but min 6 + 1 space
+    try std.testing.expectEqual(@as(usize, 7), calculateLineNumberWidthWithMin(100000, 6)); // 6 digits + 1 space
+    try std.testing.expectEqual(@as(usize, 8), calculateLineNumberWidthWithMin(1000000, 6)); // 7 digits + 1 space
 }

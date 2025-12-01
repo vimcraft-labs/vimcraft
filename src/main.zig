@@ -727,8 +727,9 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
                 watcher = w;
             } else |_| {
                 w.close();
-                var i: u8 = 0;
-                while (i < 5) : (i += 1) {
+                // Drain event loop until watcher handle is fully closed
+                var iterations: u32 = 0;
+                while (event_loop.isAlive() and iterations < 100) : (iterations += 1) {
                     _ = event_loop.runOnce();
                 }
             }
@@ -818,11 +819,14 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     try display.clearScreen();
     try display.moveCursor(0, 0);
 
-    // Close file watcher
+    // Close file watcher BEFORE event loop deinit
     if (watcher) |w| {
         w.close();
-        var i: u8 = 0;
-        while (i < 10) : (i += 1) {
+        // Run event loop until the watcher handle is fully closed
+        // CRITICAL: This prevents segfault in event_loop.deinit() from accessing
+        // a partially-closed handle
+        var iterations: u32 = 0;
+        while (event_loop.isAlive() and iterations < 100) : (iterations += 1) {
             _ = event_loop.runOnce();
         }
     }
@@ -1135,8 +1139,9 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
                 watcher = w;
             } else |_| {
                 w.close();
-                var i: u8 = 0;
-                while (i < 5) : (i += 1) {
+                // Drain event loop until watcher handle is fully closed
+                var iterations: u32 = 0;
+                while (event_loop.isAlive() and iterations < 100) : (iterations += 1) {
                     _ = event_loop.runOnce();
                 }
             }
@@ -1226,11 +1231,14 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
     try display.clearScreen();
     try display.moveCursor(0, 0);
 
-    // Close watcher
+    // Close watcher BEFORE event loop deinit
     if (watcher) |w| {
         w.close();
-        var i: u8 = 0;
-        while (i < 10) : (i += 1) {
+        // Run event loop until the watcher handle is fully closed
+        // CRITICAL: This prevents segfault in event_loop.deinit() from accessing
+        // a partially-closed handle
+        var iterations: u32 = 0;
+        while (event_loop.isAlive() and iterations < 100) : (iterations += 1) {
             _ = event_loop.runOnce();
         }
     }

@@ -50,6 +50,9 @@ pub const WindowOptions = struct {
     number: bool = true,
     /// Show relative line numbers
     relativenumber: bool = false,
+    /// Minimum width for line number column (Neovim's numberwidth)
+    /// Default 4 matches Neovim. Valid range: 1-20
+    numberwidth: u8 = 4,
     /// Wrap long lines
     wrap: bool = true,
     /// Highlight current line

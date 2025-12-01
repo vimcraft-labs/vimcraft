@@ -542,18 +542,26 @@ pub const Display = struct {
             if (self.gutter_manager.getColumn("line_numbers")) |col| {
                 col.renderer = renderer;
                 col.enabled = true; // Ensure it's enabled
+                // FIX: Update cached_width when numberwidth changes at runtime
+                const new_width = gutter.calculateLineNumberWidthWithMin(
+                    self.cached_line_count,
+                    self.line_number_config.min_width,
+                );
+                if (col.cached_width != new_width) {
+                    col.cached_width = new_width;
+                    col.cache_key = self.cached_line_count;
+                }
             } else {
                 // Register new line number column
                 try self.gutter_manager.registerColumn("line_numbers", renderer);
 
                 // CRITICAL FIX: Set initial width immediately after registration
-                // Use a reasonable default since cached_line_count is 0 at startup
-                // (updateGutterCache() hasn't run yet). Will be updated on first render.
+                // Use configured min_width (numberwidth option, default 4)
                 if (self.gutter_manager.getColumn("line_numbers")) |col| {
-                    const initial_width = if (self.cached_line_count > 0)
-                        gutter.calculateLineNumberWidth(self.cached_line_count)
-                    else
-                        2; // Default: handles files up to 99 lines, updated on first render
+                    const initial_width = gutter.calculateLineNumberWidthWithMin(
+                        self.cached_line_count,
+                        self.line_number_config.min_width,
+                    );
                     col.cached_width = initial_width;
                     col.cache_key = self.cached_line_count;
                     col.enabled = true; // Ensure it's enabled
@@ -581,7 +589,10 @@ pub const Display = struct {
             if (self.line_number_config.getMode() != .none) {
                 if (self.gutter_manager.getColumn("line_numbers")) |col| {
                     const old_width = col.cached_width;
-                    const new_width = gutter.calculateLineNumberWidth(line_count);
+                    const new_width = gutter.calculateLineNumberWidthWithMin(
+                        line_count,
+                        self.line_number_config.min_width,
+                    );
                     col.cached_width = new_width;
                     col.cache_key = line_count;
 
@@ -638,6 +649,17 @@ pub const Display = struct {
         }
     }
 
+    /// Sync terminal dimensions from Display to Editor
+    /// CRITICAL: Editor.terminal_rows/cols are used by calculateFloatPosition() and relayout()
+    /// Without this sync, floating window positioning and window splits use stale/default dimensions
+    ///
+    /// This is a shared helper function used by both TerminalBackend and EditorContext
+    /// to avoid code duplication and ensure consistent behavior across backends.
+    pub fn syncDimensionsToEditor(self: *const Display, editor: anytype) void {
+        editor.terminal_rows = self.terminal_rows;
+        editor.terminal_cols = self.terminal_cols;
+    }
+
     /// Render buffer content to screen using grid-based rendering
     /// This is the main rendering function following Neovim's architecture
     /// Generic over Editor/EditorContext types (both have same fields)
@@ -676,7 +698,48 @@ pub const Display = struct {
         // Adjust viewport to keep cursor visible
         self.adjustViewport(buffer);
 
-        // Get gutter width for horizontal positioning
+        // CRITICAL FIX: Sync gutter_manager with window options BEFORE calculating gutter_width
+        // This ensures layer_renderer.updateLayers() uses the same gutter settings as renderAllWindows()
+        // Without this sync, single-window mode has no line numbers, multi-window mode has them,
+        // causing visual shift when a floating window appears (1→2 windows)
+        if (T == *Editor) {
+            // Get window options (try getCurrentWindow first, then iterate)
+            const win = editor.getCurrentWindow() orelse blk: {
+                var win_iter = editor.windows.valueIterator();
+                break :blk if (win_iter.next()) |wp| wp.* else null;
+            };
+            if (win) |w| {
+                var needs_gutter_update = false;
+
+                // Sync line_number_config from window options (compare actual values, not just boolean)
+                if (self.line_number_config.number != w.options.number or
+                    self.line_number_config.relative_number != w.options.relativenumber or
+                    self.line_number_config.min_width != w.options.numberwidth)
+                {
+                    self.line_number_config.number = w.options.number;
+                    self.line_number_config.relative_number = w.options.relativenumber;
+                    self.line_number_config.min_width = w.options.numberwidth;
+                    needs_gutter_update = true;
+                }
+
+                // Sync sign_column_config from window options
+                const window_sign_mode: gutter.SignColumnConfig.SignColumnMode = switch (w.options.signcolumn) {
+                    .yes => .yes,
+                    .auto => .auto,
+                    .no => .no,
+                };
+                if (self.sign_column_config.mode != window_sign_mode) {
+                    self.sign_column_config.mode = window_sign_mode;
+                    needs_gutter_update = true;
+                }
+
+                if (needs_gutter_update) {
+                    self.updateGutterColumns() catch {};
+                }
+            }
+        }
+
+        // Get gutter width for horizontal positioning (now synced with window options)
         const gutter_width = self.gutter_manager.getTotalWidth();
 
         // Adjust horizontal scroll for cursor line (account for gutter)
@@ -913,23 +976,40 @@ pub const Display = struct {
             }
         }
 
-        // Render each window
+        // TWO-PASS RENDERING: Regular windows first, then floating windows
+        // This ensures floating windows render ON TOP of regular windows.
+        // Without this, HashMap iteration order is unpredictable, and floating
+        // windows may render before the main window, getting overwritten.
+
+        // Determine if per-window statuslines should be shown
+        // laststatus: 0=never, 1=only if multiple windows (splits, not floating), 2=always, 3=global
+        // Neovim convention: floating windows don't count toward "multiple windows" for laststatus=1
+        // CRITICAL FIX: Don't render per-window statuslines when floating windows are visible.
+        // Statuslines are rendered BEFORE compositor output (to avoid separator gap bug),
+        // but this means floating windows (rendered via compositor) can't cover them.
+        // Hiding statuslines when floating windows appear prevents visual overlap.
+        const total_windows = editor.windows.count();
+        const non_floating_count = editor.countNonFloatingWindows();
+        const has_floating_windows = total_windows > non_floating_count;
+        const show_per_window_statusline = !has_floating_windows and
+            ((laststatus >= 2) or (laststatus == 1 and non_floating_count > 1));
+
+        // PASS 1: Render all NON-floating windows
         var window_iter = editor.windows.valueIterator();
         while (window_iter.next()) |win| {
-            // Skip hidden floating windows (P0 fix: don't render content for hidden windows)
-            if (win.*.floating_config) |config| {
-                if (config.hide) continue;
-            }
+            // Skip floating windows - they're rendered in pass 2
+            if (win.*.isFloating()) continue;
 
             // HashMap stores *Buffer, so get returns *Buffer directly
             const buffer = editor.buffers.get(win.*.buffer_id) orelse continue;
+
             const is_active = if (active_win_id) |id| win.*.id.eql(id) else false;
 
             // Create render context for this window
             const context = window_renderer.WindowRenderContext{
                 .window = win.*,
                 .buffer = buffer,
-                .buffer_handle = @intCast(win.*.buffer_id.id), // For namespace highlight lookups
+                .buffer_handle = @intCast(win.*.buffer_id.id),
                 .region = .{
                     .row = win.*.screen_row,
                     .col = win.*.screen_col,
@@ -943,27 +1023,16 @@ pub const Display = struct {
                 .cursorline_enabled = cursorline_enabled and is_active,
                 .list_enabled = list_enabled,
                 .listchars = listchars,
-                // Pass tree-sitter syntax for highlighting (shared across all windows)
-                .syntax = if (editor.syntax) |*s| s else null,
+                .syntax = buffer.syntax,
             };
 
             // Render window to compositor layers
             try window_renderer.renderWindow(self, &context);
 
-            // Render floating window border (if applicable)
-            // This renders AROUND the window content area, not inside it
-            // Border is rendered to base_layer so it appears behind content
-            if (win.*.isFloating()) {
-                window_renderer.renderFloatingWindowBorder(self, win.*, &editor.highlight_registry);
-            }
-
-            // Render window statusline to base_layer BEFORE compositor runs
-            // This ensures statuslines are part of the compositor state and don't
-            // bypass the diff algorithm (which was causing separator gaps!)
-            // SKIP statusline for ALL floating windows (Neovim behavior: w_status_height = 0)
-            // See winfloat.c:107 - ALL floating windows have no statusline regardless of style
-            const should_render_statusline = laststatus > 0 and !win.*.isFloating();
-            if (should_render_statusline) {
+            // Render window statusline (non-floating windows only)
+            // Uses show_per_window_statusline which respects Neovim convention:
+            // floating windows don't count toward "multiple windows" for laststatus=1
+            if (show_per_window_statusline) {
                 try window_renderer.renderWindowStatusline(
                     self,
                     win.*,
@@ -978,6 +1047,53 @@ pub const Display = struct {
                     &editor.highlight_registry,
                 );
             }
+        }
+
+        // PASS 2: Render all FLOATING windows (on top of regular windows)
+        // Floating windows are sorted by zindex for proper stacking
+        var floating_iter = editor.windows.valueIterator();
+        while (floating_iter.next()) |win| {
+            // Only render floating windows in this pass
+            if (!win.*.isFloating()) continue;
+
+            // Skip hidden floating windows
+            if (win.*.floating_config) |config| {
+                if (config.hide) continue;
+            }
+
+            // HashMap stores *Buffer, so get returns *Buffer directly
+            const buffer = editor.buffers.get(win.*.buffer_id) orelse continue;
+
+            const is_active = if (active_win_id) |id| win.*.id.eql(id) else false;
+
+            // Create render context for this window
+            const context = window_renderer.WindowRenderContext{
+                .window = win.*,
+                .buffer = buffer,
+                .buffer_handle = @intCast(win.*.buffer_id.id),
+                .region = .{
+                    .row = win.*.screen_row,
+                    .col = win.*.screen_col,
+                    .height = win.*.height,
+                    .width = win.*.width,
+                },
+                .is_active = is_active,
+                .registry = &editor.highlight_registry,
+                .visual_state = visual_state,
+                .yank_highlight = yank_highlight,
+                .cursorline_enabled = cursorline_enabled and is_active,
+                .list_enabled = list_enabled,
+                .listchars = listchars,
+                .syntax = buffer.syntax,
+            };
+
+            // Render window to compositor layers
+            try window_renderer.renderWindow(self, &context);
+
+            // Render floating window border AROUND the content area
+            window_renderer.renderFloatingWindowBorder(self, win.*, &editor.highlight_registry);
+
+            // Floating windows don't have statuslines (Neovim behavior)
         }
 
         // Render separators between windows

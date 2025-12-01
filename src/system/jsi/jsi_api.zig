@@ -31,7 +31,7 @@ pub const module_api = @import("module_api.zig");
 pub const metrics_api = @import("metrics_api.zig");
 pub const autocmd_api = @import("autocmd_api.zig");
 pub const usercommand_api = @import("usercommand_api.zig");
-pub const loader = @import("loader.zig");
+// NOTE: Old loader.zig removed - use loadPlugin/loadConfig functions in this file instead
 pub const fs_api = @import("fs_api.zig");
 pub const process_api = @import("process_api.zig");
 pub const process_async_api = @import("process_async_api.zig");

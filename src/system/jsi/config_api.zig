@@ -548,28 +548,50 @@ pub export fn getAllOptionsWithScope(
 }
 
 /// Apply side effects when certain options are set
-/// For example, cursorline should update HighlightConfig, number should toggle line numbers
+/// Updates window.options which is the single source of truth for rendering.
+/// Display syncs from window.options during render (see display.zig sync code).
 fn applySideEffects(ctx: *ConfigContext, name: []const u8, value: OptionValue) void {
+    // Get current window - window.options is the source of truth for rendering
+    const current_window = if (ctx.editor) |editor| editor.getCurrentWindow() else null;
+
     if (std.mem.eql(u8, name, "cursorline")) {
         if (value == .boolean) {
             ctx.highlight_config.cursorline_enabled = value.boolean;
+            if (current_window) |win| {
+                win.options.cursorline = value.boolean;
+            }
         }
     } else if (std.mem.eql(u8, name, "signcolumn")) {
         if (value == .string) {
             ctx.highlight_config.signcolumn_mode = value.string;
+            if (current_window) |win| {
+                const WindowOptions = @import("../../editor/window.zig").WindowOptions;
+                win.options.signcolumn = if (std.mem.eql(u8, value.string, "yes"))
+                    WindowOptions.SignColumn.yes
+                else if (std.mem.eql(u8, value.string, "auto"))
+                    WindowOptions.SignColumn.auto
+                else
+                    WindowOptions.SignColumn.no;
+            }
         }
     } else if (std.mem.eql(u8, name, "number")) {
         if (value == .boolean) {
-            // Toggle line numbers display
-            if (ctx.display) |display| {
-                display.setLineNumbers(value.boolean) catch {};
+            if (current_window) |win| {
+                win.options.number = value.boolean;
             }
         }
     } else if (std.mem.eql(u8, name, "relativenumber")) {
         if (value == .boolean) {
-            // Toggle relative line numbers display
-            if (ctx.display) |display| {
-                display.setRelativeLineNumbers(value.boolean) catch {};
+            if (current_window) |win| {
+                win.options.relativenumber = value.boolean;
+            }
+        }
+    } else if (std.mem.eql(u8, name, "numberwidth")) {
+        if (value == .number) {
+            // Clamp to valid range: 1-20 (Neovim uses 1-20)
+            const width: u8 = @intCast(@max(1, @min(20, value.number)));
+            if (current_window) |win| {
+                win.options.numberwidth = width;
             }
         }
     }

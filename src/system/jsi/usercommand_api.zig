@@ -112,6 +112,7 @@ pub const UserCommandContext = struct {
         if (opts.desc) |desc| {
             owned_opts.desc = try self.allocator.dupe(u8, desc);
         }
+        errdefer if (owned_opts.desc) |d| self.allocator.free(d);
 
         // Note: callback is already protected via Hermes internal reference counting
         // when stored in the HashMap

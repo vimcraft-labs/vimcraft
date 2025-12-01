@@ -367,6 +367,12 @@ pub export fn apiBufSetLines(
     };
     buffer.version += 1;
 
+    // CRITICAL: Set js_state_dirty to trigger re-render
+    // Without this, UI won't update after bufSetLines is called
+    if (ctx.editor) |editor| {
+        editor.js_state_dirty = true;
+    }
+
     return c.hermes_value_create_undefined(rt);
 }
 
@@ -743,6 +749,12 @@ pub export fn apiBufSetText(
     };
     buffer.version += 1;
 
+    // CRITICAL: Set js_state_dirty to trigger re-render
+    // Without this, UI won't update after bufSetText is called
+    if (ctx.editor) |editor| {
+        editor.js_state_dirty = true;
+    }
+
     return c.hermes_value_create_undefined(rt);
 }
 
@@ -1100,6 +1112,8 @@ pub export fn apiBufCall(
 // ============================================================================
 // vim.api.bufSetOption(buf, name, value) -> void
 // Sets buffer-local options (currently supports 'filetype')
+// When 'filetype' is set, also triggers tree-sitter syntax parsing for the buffer
+// (per-buffer syntax following Neovim architecture for floating window highlighting)
 // ============================================================================
 
 pub export fn apiBufSetOption(
@@ -1111,6 +1125,7 @@ pub export fn apiBufSetOption(
     _ = context;
 
     const rt = runtime orelse return null;
+    const ctx = global_ctx orelse return c.hermes_value_create_undefined(rt);
 
     if (count < 3) return c.hermes_value_create_undefined(rt);
 
@@ -1135,12 +1150,25 @@ pub export fn apiBufSetOption(
 
         if (value_ptr) |ptr| {
             if (value_len > 0) {
-                buffer.setFiletype(ptr[0..value_len]) catch {};
+                const filetype = ptr[0..value_len];
+                buffer.setFiletype(filetype) catch {};
+
+                // Trigger tree-sitter syntax parsing for this buffer (Neovim architecture)
+                // This enables syntax highlighting in floating windows (LSP hover, etc.)
+                if (ctx.editor) |editor| {
+                    editor.parseBufferSyntax(buffer, filetype) catch {};
+                } else if (ctx.editor_ctx) |editor_ctx| {
+                    editor_ctx.editor.parseBufferSyntax(buffer, filetype) catch {};
+                }
             } else {
                 buffer.setFiletype(null) catch {};
+                // Clear syntax when filetype is cleared
+                buffer.deinitSyntax();
             }
         } else {
             buffer.setFiletype(null) catch {};
+            // Clear syntax when filetype is cleared
+            buffer.deinitSyntax();
         }
     }
     // Other options can be added here as needed

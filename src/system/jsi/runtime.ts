@@ -2944,13 +2944,23 @@ const vimLsp = {
       // Determine anchor position (above or below cursor)
       let anchorBelow: boolean;
       if (anchorBias === 'below') {
-        anchorBelow = linesBelow > linesAbove || height + borderHeight <= linesBelow;
+        // Explicit below bias: place below if fits, otherwise place below anyway (will clamp)
+        anchorBelow = true;
       } else if (anchorBias === 'above') {
-        const anchorAbove = linesAbove > linesBelow || height + borderHeight <= linesAbove;
-        anchorBelow = !anchorAbove;
+        // Explicit above bias: place above if fits, otherwise place above anyway (will clamp)
+        anchorBelow = false;
       } else {
-        // 'auto' - prefer side with more space
-        anchorBelow = linesBelow >= linesAbove;
+        // 'auto' - prefer below, flip above only if doesn't fit below
+        if (height + borderHeight <= linesBelow) {
+          // Fits below, place below (preferred)
+          anchorBelow = true;
+        } else if (height + borderHeight <= linesAbove) {
+          // Doesn't fit below but fits above, flip to above
+          anchorBelow = false;
+        } else {
+          // Doesn't fit either side, pick side with more space
+          anchorBelow = linesBelow >= linesAbove;
+        }
       }
 
       // Clamp height to available space
@@ -3028,7 +3038,7 @@ const vimLsp = {
 
       // Compute dimensions
       const maxWidth = opts.maxWidth || 80;
-      const maxHeight = opts.maxHeight || 15;
+      const maxHeight = opts.maxHeight || 24;
 
       // Calculate content width (longest line)
       let contentWidth = 1;
@@ -3074,7 +3084,9 @@ const vimLsp = {
       });
 
       // Open the window
+      consoleAPI.log('[LSP] Opening preview window with opts:', floatOpts);
       const winid = vim.api.openWin(bufnr, false, floatOpts);
+      consoleAPI.log('[LSP] Preview window opened: winid=', winid, 'bufnr=', bufnr);
 
       // Track for auto-close
       vimLsp.util._previewWinId = winid;
@@ -3148,12 +3160,14 @@ const vimLsp = {
      */
     'textDocument/hover': function(result: any, ctx: { bufnr: number; client: LspClientInstance }) {
       if (!result || !result.contents) {
+        consoleAPI.log('[LSP] Hover: No result or contents', result);
         return;
       }
 
       // Extract text from hover contents
       let text = '';
       const contents = result.contents;
+      consoleAPI.log('[LSP] Hover contents type:', typeof contents, 'value:', contents);
 
       if (typeof contents === 'string') {
         text = contents;
@@ -3168,14 +3182,18 @@ const vimLsp = {
       }
 
       if (!text) {
+        consoleAPI.log('[LSP] Hover: Extracted text is empty');
         return;
       }
+
+      consoleAPI.log('[LSP] Hover extracted text:', text);
 
       // Strip markdown code fences for cleaner display
       text = text.replace(/```\w*\n?/g, '').replace(/```$/g, '').trim();
 
       // Split into lines
       const lines = text.split('\n');
+      consoleAPI.log('[LSP] Hover lines count:', lines.length, 'first line:', lines[0]);
 
       // Get current buffer's filetype for syntax highlighting
       const filetype = vim.bo.filetype as string || undefined;
@@ -3183,7 +3201,7 @@ const vimLsp = {
       // Use the utility function for smart positioning and auto-close
       vimLsp.util.openFloatingPreview(lines, filetype, {
         maxWidth: 80,
-        maxHeight: 15,
+        maxHeight: 24,
         border: 'rounded',
         focusable: false,
         closeEvents: ['CursorMoved', 'CursorMovedI', 'InsertCharPre', 'BufLeave'],

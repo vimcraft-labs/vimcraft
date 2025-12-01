@@ -155,28 +155,25 @@ fn updateBaseLayer(
     else
         undefined; // Won't be used if list_enabled = false
 
-    // Create syntax highlighter if tree-sitter syntax available
-    // Editor has .syntax field, EditorContext has .syntax() method
+    // Create syntax highlighter if tree-sitter syntax available (per-buffer)
+    // Following Neovim architecture: each buffer owns its own Syntax for proper
+    // floating window highlighting (e.g., LSP hover with markdown syntax)
     var syntax_highlighter: ?SyntaxHighlighter = null;
-    // Note: T is already defined above as @TypeOf(editor)
-    if (T == *Editor) {
-        if (editor.syntax) |*syntax| {
-            // SAFETY: Syntax and HighlightRegistry outlive this function
-            syntax_highlighter = SyntaxHighlighter.init(
-                self.allocator, // Use Display's allocator (not page_allocator)
-                @constCast(syntax),
-                &editor.highlight_registry,
-            );
-        }
-    } else if (T == *EditorContext) {
-        if (editor.syntax()) |syntax| {
-            // SAFETY: Syntax and HighlightRegistry outlive this function
-            syntax_highlighter = SyntaxHighlighter.init(
-                self.allocator, // Use Display's allocator (not page_allocator)
-                @constCast(syntax),
-                editor.highlight_registry(),
-            );
-        }
+    if (buffer.syntax) |syntax| {
+        // Get registry based on editor type (Editor has .highlight_registry field, EditorContext has method)
+        const registry_ptr = if (T == *Editor)
+            &editor.highlight_registry
+        else if (T == *EditorContext)
+            editor.highlight_registry()
+        else
+            &editor.highlight_registry; // Duck-typed fallback
+
+        // SAFETY: Syntax and HighlightRegistry outlive this function
+        syntax_highlighter = SyntaxHighlighter.init(
+            self.allocator, // Use Display's allocator (not page_allocator)
+            syntax,
+            registry_ptr,
+        );
     }
 
     var row: usize = 0;

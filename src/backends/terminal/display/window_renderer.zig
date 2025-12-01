@@ -147,7 +147,7 @@ fn ensureCursorVisible(window: *Window, buffer: *const Buffer, visible_height: u
 }
 
 /// Calculate gutter width for a specific window
-/// Uses window-specific options and ensures minimum 4 digits for line numbers
+/// Uses window-specific options including numberwidth for minimum line number field width
 /// This must be used consistently for both rendering and cursor positioning
 pub fn calculateWindowGutterWidth(window: *const Window, buffer: *const Buffer) usize {
     var width: usize = 0;
@@ -157,14 +157,9 @@ pub fn calculateWindowGutterWidth(window: *const Window, buffer: *const Buffer) 
         width += 2;
     }
 
-    // Line numbers
+    // Line numbers - use window's numberwidth setting for minimum field width
     if (window.options.number or window.options.relativenumber) {
-        const line_count = buffer.lineCount();
-        const digits = if (line_count > 0)
-            std.math.log10(line_count) + 1
-        else
-            1;
-        width += @max(digits, 4) + 1; // minimum 4 digits + 1 space
+        width += gutter.calculateLineNumberWidthWithMin(buffer.lineCount(), window.options.numberwidth);
     }
 
     return width;
@@ -400,33 +395,52 @@ fn renderWindowGutterLayer(
         const gutter_fg = if (style.fg) |c| convertColor(c) else null;
         const style_bg = if (style.bg) |c| convertColor(c) else gutter_bg;
 
-        // Render line number
+        // Render sign column first (if enabled)
+        var gutter_offset: usize = 0;
+        if (window.options.signcolumn == .yes) {
+            // Render empty sign column (2 spaces)
+            // TODO: Render actual signs (git, LSP diagnostics, etc.)
+            display.gutter_layer.grid.setCell(screen_row, region.col, .{
+                .char = ' ',
+                .fg = gutter_fg,
+                .bg = style_bg,
+            });
+            display.gutter_layer.grid.setCell(screen_row, region.col + 1, .{
+                .char = ' ',
+                .fg = gutter_fg,
+                .bg = style_bg,
+            });
+            gutter_offset = 2;
+        }
+
+        // Render line number after sign column
         if (window.options.number or window.options.relativenumber) {
-            const display_num = if (window.options.relativenumber and !is_cursor_line)
-                if (line_num > window.cursor.row)
-                    line_num - window.cursor.row
-                else
-                    window.cursor.row - line_num
+            // Calculate line number width using window's numberwidth setting
+            const line_num_width = gutter.calculateLineNumberWidthWithMin(buffer.lineCount(), window.options.numberwidth);
+
+            // Allocate buffer for line number rendering
+            var render_buf: [16]u8 = undefined;
+            const num_buf = render_buf[0..line_num_width];
+
+            // Use shared gutter renderer for consistent behavior
+            const rendered_len = if (window.options.relativenumber and !is_cursor_line)
+                gutter.renderRelativeLineNumber(line_num, window.cursor.row, num_buf)
             else
-                line_num + 1; // Convert to 1-indexed
+                gutter.renderAbsoluteLineNumber(line_num, window.cursor.row, num_buf);
 
-            var buf: [16]u8 = undefined;
-            const num_str = std.fmt.bufPrint(&buf, "{d: >4} ", .{display_num}) catch " 0 ";
-
-            var gutter_col: usize = 0;
-            for (num_str) |ch| {
-                if (gutter_col >= gutter_width) break;
-                display.gutter_layer.grid.setCell(screen_row, region.col + gutter_col, .{
-                    .char = ch,
+            // Render the generated line number to gutter layer (after sign column)
+            var num_col: usize = 0;
+            while (num_col < rendered_len and num_col < line_num_width) : (num_col += 1) {
+                display.gutter_layer.grid.setCell(screen_row, region.col + gutter_offset + num_col, .{
+                    .char = num_buf[num_col],
                     .fg = gutter_fg,
                     .bg = style_bg,
                 });
-                gutter_col += 1;
             }
 
-            // Pad remaining gutter space
-            while (gutter_col < gutter_width) : (gutter_col += 1) {
-                display.gutter_layer.grid.setCell(screen_row, region.col + gutter_col, .{
+            // Pad remaining line number space
+            while (num_col < line_num_width) : (num_col += 1) {
+                display.gutter_layer.grid.setCell(screen_row, region.col + gutter_offset + num_col, .{
                     .char = ' ',
                     .fg = gutter_fg,
                     .bg = style_bg,

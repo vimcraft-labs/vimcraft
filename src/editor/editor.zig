@@ -38,6 +38,7 @@ pub const BorderStyle = @import("window.zig").BorderStyle;
 const WindowLayout = @import("window_layout.zig").WindowLayout;
 const SplitDirection = @import("window_layout.zig").SplitDirection;
 const NavigationDirection = @import("window_layout.zig").NavigationDirection;
+const gutter = @import("../backends/terminal/display/gutter.zig");
 
 /// Buffer identifier (Helix-style architecture)
 /// Re-export from window.zig to avoid type mismatch issues
@@ -173,9 +174,9 @@ pub const Editor = struct {
     // Tree-sitter filetype detection
     ts_loader: Loader,
 
-    // Tree-sitter parser and syntax highlighting
+    // Tree-sitter parser (shared across all buffers for parsing)
+    // Note: Syntax is now per-buffer (Buffer.syntax) for proper floating window highlighting
     parser: Parser,
-    syntax: ?Syntax, // null if file has no tree-sitter support
 
     // Logger (Core→Backend architecture: Core produces logs, backends consume them)
     logger: Logger,
@@ -303,7 +304,6 @@ pub const Editor = struct {
             .keymap_mgr = KeymapManager.init(allocator),
             .ts_loader = ts_loader,
             .parser = parser,
-            .syntax = null,
             .logger = Logger.init(allocator),
             .highlight_registry = highlight_registry,
             .pending_cmd = PendingCommand{},
@@ -477,9 +477,7 @@ pub const Editor = struct {
         self.register_mgr.deinit();
         self.keymap_mgr.deinit();
         self.ts_loader.deinit();
-        if (self.syntax) |*syntax| {
-            syntax.deinit();
-        }
+        // Note: Buffer.syntax is cleaned up by each buffer's deinit() - no global cleanup needed
         self.parser.deinit();
         self.highlight_registry.deinit();
         self.cmd_buffer.deinit();
@@ -909,7 +907,6 @@ pub const Editor = struct {
     /// Close a window
     pub fn closeWindow(self: *Editor, win_id: WindowId, force: bool) !void {
         const window = self.windows.get(win_id) orelse return error.InvalidWindow;
-        var layout = &(self.window_layout orelse return error.NoLayout);
 
         // Check if buffer is modified (unless force)
         // BUT: Allow closing if other windows also show this buffer (Vim behavior)
@@ -932,6 +929,22 @@ pub const Editor = struct {
                 }
             }
         }
+
+        // Floating windows are NOT in the layout tree - handle them separately
+        if (window.isFloating()) {
+            // Just remove from windows HashMap, don't touch layout
+            if (self.windows.fetchRemove(win_id)) |kv| {
+                const win_ptr = kv.value;
+                win_ptr.*.deinit();
+                self.allocator.destroy(win_ptr);
+            }
+            self.js_state_dirty = true;
+            self.logger.info("Closed floating window {}", .{win_id.id}) catch {};
+            return;
+        }
+
+        // Regular window - need layout
+        var layout = &(self.window_layout orelse return error.NoLayout);
 
         // Remove from layout (returns new active window or null if last window)
         const new_active = try layout.removeWindow(win_id) orelse {
@@ -1036,6 +1049,27 @@ pub const Editor = struct {
         return self.windows.count();
     }
 
+    /// Get count of non-floating windows only (splits/panes)
+    /// Neovim convention: floating windows don't count for laststatus=1 or similar checks
+    pub fn countNonFloatingWindows(self: *Editor) usize {
+        var count: usize = 0;
+        var iter = self.windows.valueIterator();
+        while (iter.next()) |win| {
+            if (!win.*.isFloating()) count += 1;
+        }
+        return count;
+    }
+
+    /// Check if any floating windows exist
+    /// Used to determine if we need multi-window render path
+    pub fn hasFloatingWindows(self: *Editor) bool {
+        var iter = self.windows.valueIterator();
+        while (iter.next()) |win| {
+            if (win.*.isFloating()) return true;
+        }
+        return false;
+    }
+
     // ========================================================================
     // Floating Windows
     // ========================================================================
@@ -1123,7 +1157,10 @@ pub const Editor = struct {
                     const cursor_screen_row = cur_win.cursor.row -| cur_win.viewport.top_line;
                     const cursor_screen_col = cur_win.cursor.col -| cur_win.viewport.left_col;
                     base_row = @intCast(cur_win.screen_row + cursor_screen_row);
-                    base_col = @intCast(cur_win.screen_col + gutter_width + cursor_screen_col);
+                    // Neovim positions cursor-relative popups 1 column to the left
+                    // This aligns the popup border with the cursor character
+                    const raw_col = cur_win.screen_col + gutter_width + cursor_screen_col;
+                    base_col = @intCast(if (raw_col > 0) raw_col - 1 else raw_col);
                 }
             },
             .mouse => {
@@ -1182,15 +1219,10 @@ pub const Editor = struct {
             width += 2;
         }
 
-        // Line numbers
+        // Line numbers - delegate to shared gutter module for DRY
         if (window.options.number or window.options.relativenumber) {
             const buffer = self.buffers.get(window.buffer_id) orelse return width;
-            const line_count = buffer.lineCount();
-            const digits = if (line_count > 0)
-                std.math.log10(line_count) + 1
-            else
-                1;
-            width += @max(digits, 4) + 1; // minimum 4 digits + 1 space
+            width += gutter.calculateLineNumberWidth(buffer.lineCount());
         }
 
         return width;
@@ -2875,21 +2907,30 @@ pub const Editor = struct {
         // Set parser language
         try self.parser.setLanguage(lang);
 
-        // Parse buffer content (get owned string from Rope)
+        // Initialize syntax on the buffer (per-buffer tree-sitter following Neovim architecture)
         const buf = self.getCurrentBuffer() orelse return;
-        const source = try buf.content.toString();
-        defer self.allocator.free(source);
-        const tree = try self.parser.parseString(null, source);
+        try buf.initSyntax(&self.parser, lang, lang_name);
 
-        // Clean up old syntax if it exists
-        if (self.syntax) |*old_syntax| {
-            old_syntax.deinit();
-        }
+        self.logger.info("✅ Parsed buffer with tree-sitter for {s} (buffer.syntax created)", .{lang_name}) catch {};
+    }
 
-        // Create new Syntax instance
-        self.syntax = try Syntax.init(self.allocator, tree, lang, lang_name);
+    /// Parse syntax for a specific buffer (used for floating windows and scratch buffers)
+    /// This allows any buffer to have its own syntax highlighting
+    pub fn parseBufferSyntax(self: *Editor, buf: *Buffer, filetype: []const u8) !void {
+        // Normalize language name
+        const lang_name = normalizeLangName(filetype);
 
-        self.logger.info("✅ Parsed {d} bytes of {s} with tree-sitter (syntax instance created)", .{ source.len, lang_name }) catch {};
+        // Get language from registry
+        const lang = languages.getLanguage(lang_name) orelse {
+            self.logger.info("❌ No tree-sitter parser for language: {s}", .{lang_name}) catch {};
+            return;
+        };
+
+        // Set parser language
+        try self.parser.setLanguage(lang);
+
+        // Initialize syntax on the buffer
+        try buf.initSyntax(&self.parser, lang, lang_name);
     }
 
     /// Trigger an autocommand event

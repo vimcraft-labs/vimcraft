@@ -4,7 +4,7 @@
 const std = @import("std");
 const config_api = @import("config_api.zig");
 const helpers = @import("helpers.zig");
-const loader = @import("loader.zig");
+const jsi_api = @import("jsi_api.zig");
 
 // Import shared Hermes C API
 const c_api = @import("c_api.zig");
@@ -188,8 +188,8 @@ fn executeModule(
     ctx.current_file_path = abs_path;
     defer ctx.current_file_path = prev_file_path;
 
-    // Execute the file using loader.loadPlugin (NO wrapper, uses existing globals)
-    loader.loadPlugin(runtime, abs_path, allocator) catch |err| {
+    // Execute the file using jsi_api.loadPlugin (directory-based mtime tracking for cache invalidation)
+    jsi_api.loadPlugin(runtime, abs_path, allocator) catch |err| {
         c.hermes_value_destroy(module_obj);
         c.hermes_value_destroy(exports_obj);
         return err;

@@ -630,7 +630,8 @@ pub const TerminalBackend = struct {
             const screen_col = if (col > 0) col - 1 else 0;
 
             // Check if we have multiple windows (split mode)
-            const has_multiple_windows = self.editor.windows.count() > 1;
+            // Neovim convention: floating windows don't count as "multiple windows"
+            const has_multiple_windows = self.editor.countNonFloatingWindows() > 1;
 
             if (has_multiple_windows) {
                 // MULTI-WINDOW MODE: Find which window was clicked and focus it
@@ -783,6 +784,20 @@ pub const TerminalBackend = struct {
             self.editor.yank_highlight.deactivate();
         }
 
+        // CRITICAL FIX: Sync terminal dimensions from Display to Editor
+        // Editor.terminal_rows/cols are used by:
+        //   - calculateFloatPosition() for floating window positioning
+        //   - splitWindow()/relayout for window layout calculation
+        // Without this sync, editor uses defaults (24x80) causing:
+        //   - Floating windows positioned at wrong screen location
+        //   - Window splits using wrong dimensions
+        //
+        // TIMING: We must call getTerminalSize() FIRST to get actual terminal dimensions,
+        // THEN sync to editor. This ensures any code that runs between render cycles
+        // (like openWin() creating floating windows) has correct dimensions available.
+        try self.display.getTerminalSize();
+        self.display.syncDimensionsToEditor(self.editor);
+
         // CRITICAL: Sync tab width from vim.opt.tabstop (default 8 to match Vim)
         const char_width = @import("display/char_width.zig");
         const tabstop = if (self.editor.options_manager) |opts|
@@ -887,7 +902,8 @@ pub const TerminalBackend = struct {
         // renderCursorOnly() and renderVisualCursorMovement() calculate cursor position
         // relative to screen origin (0,0), not the active window's position.
         // In multi-window mode, this causes cursor to appear on wrong window!
-        const has_multiple_windows = self.editor.windows.count() > 1;
+        // Neovim convention: floating windows don't count as "multiple windows"
+        const has_multiple_windows = self.editor.countNonFloatingWindows() > 1;
 
         // CURSOR-ONLY RENDER PATH: Skip compositor if only cursor moved AND no viewport scroll needed
         // This reduces 457 cursor position codes to 1!
@@ -986,10 +1002,11 @@ pub const TerminalBackend = struct {
             2;
 
         // Choose render path: single-window vs multi-window
-        // Use renderAllWindows when there are multiple windows (splits active)
+        // Use renderAllWindows when there are multiple windows (splits active) OR floating windows exist
         // NOTE: has_multiple_windows already declared above (line 871) for cursor-only optimization check
+        const has_floating_windows = self.editor.hasFloatingWindows();
 
-        if (has_multiple_windows) {
+        if (has_multiple_windows or has_floating_windows) {
             // MULTI-WINDOW RENDER PATH: Use the window renderer
             try self.display.renderAllWindows(
                 self.editor,

@@ -1241,32 +1241,55 @@ fn ptyRender(
     // When capture mode is active (for PTY testing), always use full render
     // to generate ANSI escape codes. Otherwise, use headless for clean output.
     if (g_verbose or display.capture_mode) {
-        // E2E Test Simplification: Always use single-window render path
-        //
-        // The multi-window renderAllWindows() requires a properly initialized window_layout
-        // with a valid root node. In E2E test context, the window_layout may not be fully
-        // initialized (the root pointer can be uninitialized sentinel 0xaaaa...).
-        //
-        // Since E2E tests primarily test single-window scenarios, we use the simpler
-        // render() function which works with *Editor directly.
-        display.render(
-            editor,
-            "-- NORMAL --", // Default status line
-            false, // cursorline disabled
-            ctx.visual_state,
-            &editor.yank_highlight,
-            false, // list mode disabled
-            &listchars,
-            2, // laststatus = always show
-        ) catch |err| {
-            var msg_buf: [256]u8 = undefined;
-            const msg = std.fmt.bufPrint(&msg_buf, "render failed: {}", .{err}) catch "render failed";
-            if (msg.len < msg_buf.len) {
-                msg_buf[msg.len] = 0;
-            }
-            c.hermes_throw_error(runtime, msg.ptr);
-            return null;
-        };
+        // Check if there are multiple split/pane windows (not floating) OR any floating windows
+        // If so, use renderAllWindows() to properly render all windows including floating
+        // Otherwise, use single-window render() for backwards compatibility
+        // Neovim convention: floating windows don't count as "multiple windows" for statusline
+        const has_multiple_windows = editor.countNonFloatingWindows() > 1;
+        const has_floating_windows = editor.hasFloatingWindows();
+
+        if (has_multiple_windows or has_floating_windows) {
+            // Multi-window path: Renders all windows including floating windows
+            // Floating windows don't require window_layout (they store their own screen position)
+            display.renderAllWindows(
+                editor,
+                "-- NORMAL --",
+                ctx.visual_state,
+                &editor.yank_highlight,
+                false, // cursorline disabled
+                false, // list mode disabled
+                &listchars,
+                2, // laststatus = always show
+            ) catch |err| {
+                var msg_buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "renderAllWindows failed: {}", .{err}) catch "render failed";
+                if (msg.len < msg_buf.len) {
+                    msg_buf[msg.len] = 0;
+                }
+                c.hermes_throw_error(runtime, msg.ptr);
+                return null;
+            };
+        } else {
+            // Single-window path: Original render for backwards compatibility
+            display.render(
+                editor,
+                "-- NORMAL --", // Default status line
+                false, // cursorline disabled
+                ctx.visual_state,
+                &editor.yank_highlight,
+                false, // list mode disabled
+                &listchars,
+                2, // laststatus = always show
+            ) catch |err| {
+                var msg_buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "render failed: {}", .{err}) catch "render failed";
+                if (msg.len < msg_buf.len) {
+                    msg_buf[msg.len] = 0;
+                }
+                c.hermes_throw_error(runtime, msg.ptr);
+                return null;
+            };
+        }
 
         // CRITICAL FIX: Match backend.render() behavior after display.render()
         // backend.render() calls showCursor() to re-show cursor after rendering cells.
