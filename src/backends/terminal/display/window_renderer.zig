@@ -22,6 +22,10 @@ const Syntax = @import("../../../editor/treesitter/syntax.zig").Syntax;
 const SyntaxHighlighter = @import("../../../editor/treesitter/syntax_highlighter.zig").SyntaxHighlighter;
 const Range = @import("../../../editor/treesitter/highlight.zig").Range;
 
+// Highlight cache for efficient repeated rendering
+const HighlightCache = @import("../../../editor/highlight_cache.zig").HighlightCache;
+const StyleSpan = @import("../../../editor/highlight_cache.zig").StyleSpan;
+
 // Namespace highlights (LSP diagnostics, plugin highlights)
 const namespace_api = @import("../../../system/jsi/namespace_api.zig");
 
@@ -169,6 +173,9 @@ pub fn calculateWindowGutterWidth(window: *const Window, buffer: *const Buffer) 
 }
 
 /// Render window text content to base layer
+// Debug timing flag - set to true to enable performance logging
+const RENDER_TIMING_DEBUG = true;
+
 fn renderWindowBaseLayer(
     display: *Display,
     ctx: *const WindowRenderContext,
@@ -177,6 +184,14 @@ fn renderWindowBaseLayer(
     const buffer = ctx.buffer;
     const window = ctx.window;
     const region = ctx.region;
+
+    // Timing instrumentation
+    const start_time = if (RENDER_TIMING_DEBUG) std.time.nanoTimestamp() else 0;
+    var setup_time: i128 = 0;
+    var syntax_time: i128 = 0;
+    var namespace_time: i128 = 0;
+    var char_loop_time: i128 = 0;
+    const is_floating = window.isFloating();
 
     // Get Normal highlight from registry
     const normal_style = ctx.registry.get("Normal");
@@ -187,6 +202,7 @@ fn renderWindowBaseLayer(
     const lc_colors = listchars_renderer.ListCharsColors.fromRegistry(ctx.registry, convertColor);
 
     // Create syntax highlighter if syntax is available
+    // Now enabled for ALL windows including floating (hover/diagnostics) with caching
     var syntax_highlighter: ?SyntaxHighlighter = null;
     if (ctx.syntax) |syntax| {
         syntax_highlighter = SyntaxHighlighter.init(
@@ -194,6 +210,14 @@ fn renderWindowBaseLayer(
             syntax,
             ctx.registry,
         );
+    }
+
+    // Get or create highlight cache for this buffer
+    const highlight_cache: ?*HighlightCache = buffer.getOrCreateHighlightCache() catch null;
+
+    // Capture setup time (before main loop)
+    if (RENDER_TIMING_DEBUG) {
+        setup_time = std.time.nanoTimestamp() - start_time;
     }
 
     var row: usize = 0;
@@ -225,35 +249,102 @@ fn renderWindowBaseLayer(
             const line_byte_offset = buffer.content.byteOfLine(line_num);
             const text_byte_offset = line_byte_offset + start_byte;
 
-            // Build syntax highlight map for this line (if syntax available)
+            // Build syntax highlight map for this line
+            // PERFORMANCE: Check cache first, only compute via tree-sitter on cache miss
+            const syntax_start = if (RENDER_TIMING_DEBUG) std.time.nanoTimestamp() else 0;
+
             var highlight_map = std.AutoHashMap(usize, Style).init(display.allocator);
             defer highlight_map.deinit();
 
-            if (syntax_highlighter) |*sh| {
-                const range = Range{
-                    .start_byte = @intCast(text_byte_offset),
-                    .end_byte = @intCast(text_byte_offset + remaining.len),
-                };
+            var cache_hit = false;
 
-                var iter = sh.highlights(range) catch null;
-                if (iter) |*it| {
-                    defer it.deinit();
-                    while (it.next()) |styled| {
-                        const range_start = if (styled.range.start_byte >= text_byte_offset)
-                            styled.range.start_byte - text_byte_offset
+            // Try to get cached highlights first
+            if (highlight_cache) |cache| {
+                if (cache.getStyleLine(line_num)) |cached_styles| {
+                    // Cache hit! Populate highlight_map from cache
+                    for (cached_styles.spans) |span| {
+                        // Adjust for horizontal scroll
+                        const span_start = if (span.start_byte >= start_byte)
+                            span.start_byte - start_byte
                         else
                             0;
-                        const range_end = if (styled.range.end_byte >= text_byte_offset)
-                            @min(styled.range.end_byte - text_byte_offset, remaining.len)
+                        const span_end = if (span.end_byte >= start_byte)
+                            @min(span.end_byte - start_byte, remaining.len)
                         else
                             0;
 
-                        var byte_offset = range_start;
-                        while (byte_offset < range_end) : (byte_offset += 1) {
-                            highlight_map.put(byte_offset, styled.style) catch {};
+                        if (span_start < span_end) {
+                            var byte_offset = span_start;
+                            while (byte_offset < span_end) : (byte_offset += 1) {
+                                highlight_map.put(byte_offset, span.style) catch {};
+                            }
                         }
                     }
+                    cache_hit = true;
                 }
+            }
+
+            // Cache miss - compute via tree-sitter and cache the result
+            if (!cache_hit) {
+                if (syntax_highlighter) |*sh| {
+                    const range = Range{
+                        .start_byte = @intCast(text_byte_offset),
+                        .end_byte = @intCast(text_byte_offset + remaining.len),
+                    };
+
+                    // Temporary buffer for spans to cache
+                    var spans_to_cache: std.ArrayList(StyleSpan) = .empty;
+                    defer spans_to_cache.deinit(display.allocator);
+
+                    var iter = sh.highlights(range) catch null;
+                    if (iter) |*it| {
+                        defer it.deinit();
+                        while (it.next()) |styled| {
+                            const range_start = if (styled.range.start_byte >= text_byte_offset)
+                                styled.range.start_byte - text_byte_offset
+                            else
+                                0;
+                            const range_end = if (styled.range.end_byte >= text_byte_offset)
+                                @min(styled.range.end_byte - text_byte_offset, remaining.len)
+                            else
+                                0;
+
+                            // Populate highlight_map for rendering
+                            var byte_offset = range_start;
+                            while (byte_offset < range_end) : (byte_offset += 1) {
+                                highlight_map.put(byte_offset, styled.style) catch {};
+                            }
+
+                            // Collect span for caching (relative to line start, not scroll)
+                            const cache_start = if (styled.range.start_byte >= line_byte_offset)
+                                @as(u32, @intCast(styled.range.start_byte - line_byte_offset))
+                            else
+                                0;
+                            const cache_end = if (styled.range.end_byte >= line_byte_offset)
+                                @as(u32, @intCast(@min(styled.range.end_byte - line_byte_offset, line_without_newline.len)))
+                            else
+                                0;
+
+                            if (cache_start < cache_end) {
+                                spans_to_cache.append(display.allocator, StyleSpan{
+                                    .start_byte = cache_start,
+                                    .end_byte = cache_end,
+                                    .style = styled.style,
+                                }) catch {};
+                            }
+                        }
+                    }
+
+                    // Store in cache for next render
+                    if (highlight_cache) |cache| {
+                        cache.setStyleLine(line_num, spans_to_cache.items) catch {};
+                    }
+                }
+            }
+
+            // Accumulate syntax highlighting time
+            if (RENDER_TIMING_DEBUG) {
+                syntax_time += std.time.nanoTimestamp() - syntax_start;
             }
 
             // Render text to base layer (clipped to window region)
@@ -261,6 +352,41 @@ fn renderWindowBaseLayer(
             var screen_col: usize = start_col;
             var byte_idx: usize = 0;
             var last_non_space_col: usize = start_col; // For trailing space detection (listchars)
+
+            // PERFORMANCE FIX: Collect namespace highlights for this line ONCE (outside char loop)
+            // Previous code was O(chars × highlights) - now O(highlights) per line
+            const namespace_start = if (RENDER_TIMING_DEBUG) std.time.nanoTimestamp() else 0;
+
+            const NamespaceHighlight = struct {
+                col_start: usize,
+                col_end: usize,
+                fg: ?highlights.Color,
+                bg: ?highlights.Color,
+            };
+            var ns_highlights: [32]NamespaceHighlight = undefined; // Stack buffer, max 32 highlights per line
+            var ns_highlight_count: usize = 0;
+
+            const buf_handle = ctx.buffer_handle;
+            if (namespace_api.getBufferHighlights(buf_handle)) |buf_hls| {
+                var hl_iter = buf_hls.iterHighlightsForLine(line_num);
+                while (hl_iter.next()) |hl| {
+                    if (ns_highlight_count >= 32) break; // Safety limit
+                    const hl_style = ctx.registry.get(hl.hl_group);
+                    ns_highlights[ns_highlight_count] = .{
+                        .col_start = hl.col_start,
+                        .col_end = hl.col_end,
+                        .fg = if (hl_style.fg) |c| convertColor(c) else null,
+                        .bg = if (hl_style.bg) |c| convertColor(c) else null,
+                    };
+                    ns_highlight_count += 1;
+                }
+            }
+
+            if (RENDER_TIMING_DEBUG) {
+                namespace_time += std.time.nanoTimestamp() - namespace_start;
+            }
+
+            const char_loop_start = if (RENDER_TIMING_DEBUG) std.time.nanoTimestamp() else 0;
 
             while (byte_idx < remaining.len and screen_col < region.col + region.width) {
                 const char_len = std.unicode.utf8ByteSequenceLength(remaining[byte_idx]) catch 1;
@@ -289,22 +415,13 @@ fn renderWindowBaseLayer(
                     bg_color;
 
                 // Apply namespace highlights (LSP diagnostics, plugin highlights)
-                // These overlay on top of syntax highlighting
-                // Buffer handle 0 = current buffer (Neovim convention)
-                const buf_handle = ctx.buffer_handle;
-                if (namespace_api.getBufferHighlights(buf_handle)) |buf_hls| {
-                    var hl_iter = buf_hls.iterHighlightsForLine(line_num);
-                    while (hl_iter.next()) |hl| {
-                        // Check if this byte position is within the highlight range
-                        const buffer_col = start_byte + byte_idx;
-                        if (buffer_col >= hl.col_start and buffer_col < hl.col_end) {
-                            // Look up highlight group style from registry
-                            const hl_style = ctx.registry.get(hl.hl_group);
-                            // Apply highlight colors (overwrite syntax highlighting)
-                            if (hl_style.fg) |c| char_fg = convertColor(c);
-                            if (hl_style.bg) |c| char_bg = convertColor(c);
-                            break; // First matching highlight wins
-                        }
+                // PERFORMANCE: Now O(highlights) instead of O(chars × highlights)
+                const buffer_col = start_byte + byte_idx;
+                for (ns_highlights[0..ns_highlight_count]) |hl| {
+                    if (buffer_col >= hl.col_start and buffer_col < hl.col_end) {
+                        if (hl.fg) |c| char_fg = c;
+                        if (hl.bg) |c| char_bg = c;
+                        break; // First matching highlight wins
                     }
                 }
 
@@ -379,6 +496,11 @@ fn renderWindowBaseLayer(
                 byte_idx += char_len;
             }
 
+            // Accumulate char loop time
+            if (RENDER_TIMING_DEBUG) {
+                char_loop_time += std.time.nanoTimestamp() - char_loop_start;
+            }
+
             // Post-process: mark trailing spaces using shared module (DRY)
             if (ctx.list_enabled) {
                 listchars_renderer.markTrailingSpaces(
@@ -426,6 +548,20 @@ fn renderWindowBaseLayer(
                 });
             }
         }
+    }
+
+    // Output timing results for floating windows (popup hover)
+    // Note: We can't access editor.logger here, so this goes to stderr
+    // The high-level Phase 2 timing goes to Chrome console from display.zig
+    if (RENDER_TIMING_DEBUG and is_floating) {
+        std.debug.print("\n🔍 Phase2 Breakdown: Setup={d:.2}ms Syntax={d:.2}ms Namespace={d:.2}ms CharLoop={d:.2}ms HasSyntax={} Rows={d}\n", .{
+            @as(f64, @floatFromInt(setup_time)) / 1_000_000.0,
+            @as(f64, @floatFromInt(syntax_time)) / 1_000_000.0,
+            @as(f64, @floatFromInt(namespace_time)) / 1_000_000.0,
+            @as(f64, @floatFromInt(char_loop_time)) / 1_000_000.0,
+            ctx.syntax != null,
+            region.height,
+        });
     }
 
     display.base_layer.markDirty();

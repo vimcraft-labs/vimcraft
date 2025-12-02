@@ -1466,10 +1466,8 @@ const vim: VimObject = {
       if (typeof rhs === 'function') {
         const id = (globalThis as any)._nextKeymapId++;
         (globalThis as any)._keymapCallbacks[id] = rhs;
-        consoleAPI.log('[Keymap] Registering callback for', mode, lhs, '-> id:', id);
         vimKeymap.set(mode, lhs, id, opts);
       } else {
-        consoleAPI.log('[Keymap] Registering keys for', mode, lhs, '->', rhs);
         vimKeymap.set(mode, lhs, rhs, opts);
       }
     },
@@ -1551,7 +1549,6 @@ Object.freeze(vim.diagnostic);
 (globalThis as any)._nextKeymapId = 1;
 
 (globalThis as any).__handleKeymapCallback = (id: number): void => {
-  consoleAPI.log('[Keymap] Callback triggered, id:', id);
   const callback = (globalThis as any)._keymapCallbacks[id];
   if (callback) {
     try {
@@ -3198,11 +3195,13 @@ const vimLsp = {
       const lines = text.split('\n');
       consoleAPI.log('[LSP] Hover lines count:', lines.length, 'first line:', lines[0]);
 
-      // Get current buffer's filetype for syntax highlighting
-      const filetype = vim.bo.filetype as string || undefined;
+      // CORRECT: LSP hover content is markdown, so use markdown syntax highlighting
+      // Don't pass source buffer's filetype - that causes tree-sitter to parse
+      // markdown content with wrong grammar (e.g., TypeScript), which is slow (190ms+)
+      // and produces incorrect highlighting.
 
       // Use the utility function for smart positioning and auto-close
-      vimLsp.util.openFloatingPreview(lines, filetype, {
+      vimLsp.util.openFloatingPreview(lines, 'markdown', {
         maxWidth: 80,
         maxHeight: 24,
         border: 'rounded',
@@ -3280,7 +3279,8 @@ const vimLsp = {
       }
 
       // Use the utility function for smart positioning and auto-close
-      vimLsp.util.openFloatingPreview(lines, undefined, {
+      // Signature help content is also markdown/plaintext
+      vimLsp.util.openFloatingPreview(lines, 'markdown', {
         maxWidth: 80,
         maxHeight: 10,
         border: 'rounded',

@@ -1,6 +1,7 @@
 const std = @import("std");
 const Rope = @import("rope.zig").Rope;
 const Syntax = @import("../treesitter/syntax.zig").Syntax;
+const HighlightCache = @import("../highlight_cache.zig").HighlightCache;
 
 /// Cursor position in the buffer
 pub const Cursor = struct {
@@ -77,6 +78,10 @@ pub const Buffer = struct {
     // Each buffer owns its own Syntax instance for proper floating window highlighting
     syntax: ?*Syntax = null,
 
+    // Highlight cache for efficient rendering (avoids re-computing syntax on every render)
+    // Cache is invalidated on buffer edits, filetype change, or explicit request
+    highlight_cache: ?*HighlightCache = null,
+
     pub fn init(allocator: std.mem.Allocator) Buffer {
         return .{
             .allocator = allocator,
@@ -101,6 +106,9 @@ pub const Buffer = struct {
 
         // Clean up syntax highlighting
         self.deinitSyntax();
+
+        // Clean up highlight cache
+        self.deinitHighlightCache();
 
         // Clean up active transaction if any
         if (self.active_transaction) |*trans| {
@@ -256,11 +264,17 @@ pub const Buffer = struct {
 
     // ===== Text Modification Functions =====
 
-    /// Increment buffer version (invalidates external ArrayBuffers)
+    /// Increment buffer version (invalidates external ArrayBuffers and highlight cache)
     /// Call this BEFORE any modification to buffer content
     /// Public so edit/paste/visual_ops modules can call it
     pub fn incrementVersion(self: *Buffer) void {
         self.version +%= 1; // Wrapping add (u64 overflow is fine)
+
+        // Invalidate highlight cache on any edit
+        // TODO: Optimize to line-level invalidation for better performance
+        if (self.highlight_cache) |cache| {
+            cache.invalidateAll();
+        }
     }
 
     /// Start a transaction for grouping multiple changes
@@ -695,6 +709,52 @@ pub const Buffer = struct {
             syntax_ptr.deinit();
             self.allocator.destroy(syntax_ptr);
             self.syntax = null;
+        }
+    }
+
+    /// Clean up highlight cache
+    /// Called on deinit or when filetype changes
+    pub fn deinitHighlightCache(self: *Buffer) void {
+        if (self.highlight_cache) |cache_ptr| {
+            cache_ptr.deinit();
+            self.allocator.destroy(cache_ptr);
+            self.highlight_cache = null;
+        }
+    }
+
+    /// Get or create highlight cache for this buffer
+    /// Lazily initialized on first access
+    pub fn getOrCreateHighlightCache(self: *Buffer) !*HighlightCache {
+        if (self.highlight_cache) |cache| {
+            return cache;
+        }
+
+        // Create new cache
+        const cache_ptr = try self.allocator.create(HighlightCache);
+        cache_ptr.* = HighlightCache.init(self.allocator);
+
+        // Set filetype if available
+        if (self.filetype) |ft| {
+            try cache_ptr.setFiletype(ft);
+        }
+
+        self.highlight_cache = cache_ptr;
+        return cache_ptr;
+    }
+
+    /// Invalidate highlight cache for a range of lines
+    /// Called after buffer modifications
+    pub fn invalidateHighlightCacheRange(self: *Buffer, start_line: usize, end_line: usize) void {
+        if (self.highlight_cache) |cache| {
+            cache.invalidateRange(start_line, end_line);
+        }
+    }
+
+    /// Invalidate highlight cache from a line to end of buffer
+    /// Called after insertions/deletions that shift lines
+    pub fn invalidateHighlightCacheFromLine(self: *Buffer, start_line: usize) void {
+        if (self.highlight_cache) |cache| {
+            cache.invalidateFromLine(start_line);
         }
     }
 

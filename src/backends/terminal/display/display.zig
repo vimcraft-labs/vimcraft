@@ -994,6 +994,10 @@ pub const Display = struct {
         const show_per_window_statusline = !has_floating_windows and
             ((laststatus >= 2) or (laststatus == 1 and non_floating_count > 1));
 
+        // TIMING DEBUG
+        const RENDER_PHASE_TIMING = true;
+        const phase1_start = if (RENDER_PHASE_TIMING) std.time.nanoTimestamp() else 0;
+
         // PASS 1: Render all NON-floating windows
         var window_iter = editor.windows.valueIterator();
         while (window_iter.next()) |win| {
@@ -1059,6 +1063,9 @@ pub const Display = struct {
             // so no need to fill with spaces
         }
 
+        const phase1_end = if (RENDER_PHASE_TIMING) std.time.nanoTimestamp() else 0;
+        const phase2_start = phase1_end;
+
         // PASS 2: Render all FLOATING windows (on top of regular windows)
         // Floating windows are sorted by zindex for proper stacking
         var floating_iter = editor.windows.valueIterator();
@@ -1098,13 +1105,32 @@ pub const Display = struct {
             };
 
             // Render window to compositor layers
+            const before_render = if (RENDER_PHASE_TIMING) std.time.nanoTimestamp() else 0;
             try window_renderer.renderWindow(self, &context);
+            const after_render = if (RENDER_PHASE_TIMING) std.time.nanoTimestamp() else 0;
 
             // Render floating window border AROUND the content area
+            const before_border = if (RENDER_PHASE_TIMING) std.time.nanoTimestamp() else 0;
             window_renderer.renderFloatingWindowBorder(self, win.*, &editor.highlight_registry);
+            const after_border = if (RENDER_PHASE_TIMING) std.time.nanoTimestamp() else 0;
+
+            // Log detailed Phase 2 breakdown
+            if (RENDER_PHASE_TIMING) {
+                const render_time = after_render - before_render;
+                const border_time = after_border - before_border;
+                const filetype = buffer.filetype orelse "<none>";
+                editor.logger.info("  └─ renderWindow: {d:.2}ms | renderBorder: {d:.2}ms | HasSyntax: {} | Filetype: {s}", .{
+                    @as(f64, @floatFromInt(render_time)) / 1_000_000.0,
+                    @as(f64, @floatFromInt(border_time)) / 1_000_000.0,
+                    buffer.syntax != null,
+                    filetype,
+                }) catch {};
+            }
 
             // Floating windows don't have statuslines (Neovim behavior)
         }
+
+        const phase2_end = if (RENDER_PHASE_TIMING) std.time.nanoTimestamp() else 0;
 
         // Render separators between windows
         // IMPORTANT: This must be AFTER statusline rendering so separators appear
@@ -1116,13 +1142,19 @@ pub const Display = struct {
         // Apply virtual text overlay
         self.virtual_text.applyToGrid(&self.virtual_text_layer.grid);
 
+        const compositor_start = if (RENDER_PHASE_TIMING) std.time.nanoTimestamp() else 0;
+
         // Composite all layers
         try self.compositor.composite(self.layer_manager.layers.items);
+
+        const diff_start = if (RENDER_PHASE_TIMING) std.time.nanoTimestamp() else 0;
 
         // Get composited output and compute diff
         const output = self.compositor.getOutput();
         const updates = try output.diff(self.allocator);
         defer self.allocator.free(updates);
+
+        const output_start = if (RENDER_PHASE_TIMING) std.time.nanoTimestamp() else 0;
 
         // CURSOR FLICKER FIX: Only hide cursor when there are cells to render
         // renderUpdates() moves cursor to each cell position as it renders, which would
@@ -1139,6 +1171,27 @@ pub const Display = struct {
 
         // Render changed cells
         try output_renderer.renderUpdates(self, updates);
+
+        // Output timing results when floating windows are present
+        if (RENDER_PHASE_TIMING and has_floating_windows) {
+            const render_end = std.time.nanoTimestamp();
+            const total = render_end - phase1_start;
+            const phase1_time = phase1_end - phase1_start;
+            const phase2_time = phase2_end - phase2_start;
+            const compositor_time = diff_start - compositor_start;
+            const diff_time = output_start - diff_start;
+            const output_time = render_end - output_start;
+
+            // Output to Chrome DevTools console
+            editor.logger.info("🔥 PHASE 2 (floating): {d:.2}ms | Total={d:.2}ms Phase1={d:.2}ms Compositor={d:.2}ms Diff={d:.2}ms Output={d:.2}ms", .{
+                @as(f64, @floatFromInt(phase2_time)) / 1_000_000.0,
+                @as(f64, @floatFromInt(total)) / 1_000_000.0,
+                @as(f64, @floatFromInt(phase1_time)) / 1_000_000.0,
+                @as(f64, @floatFromInt(compositor_time)) / 1_000_000.0,
+                @as(f64, @floatFromInt(diff_time)) / 1_000_000.0,
+                @as(f64, @floatFromInt(output_time)) / 1_000_000.0,
+            }) catch {};
+        }
 
         // NOTE: Statuslines are now rendered BEFORE compositor (above), not after.
         // This fixes the separator gap bug where statuslines were bypassing the

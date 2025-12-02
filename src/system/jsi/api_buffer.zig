@@ -1153,8 +1153,9 @@ pub export fn apiBufSetOption(
                 const filetype = ptr[0..value_len];
                 buffer.setFiletype(filetype) catch {};
 
-                // Trigger tree-sitter syntax parsing for this buffer (Neovim architecture)
-                // This enables syntax highlighting in floating windows (LSP hover, etc.)
+                // Trigger tree-sitter syntax parsing
+                // NOTE: Scratch buffers CAN have syntax highlighting (e.g., markdown for hover popups)
+                // The key is using the CORRECT filetype, not the source buffer's filetype
                 if (ctx.editor) |editor| {
                     editor.parseBufferSyntax(buffer, filetype) catch {};
                 } else if (ctx.editor_ctx) |editor_ctx| {
