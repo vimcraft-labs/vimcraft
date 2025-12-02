@@ -21,6 +21,21 @@ Guidance for Claude Code when working with the Vimcraft editor codebase.
 | **Performance** | 3-5x faster | Zero-copy JSI HostObjects vs traditional FFI |
 | **Testing** | 2-level | Unit tests (Zig) + E2E tests (TypeScript) |
 
+## Development Philosophy
+
+**Correctness over speed. Root causes over shortcuts. Proper engineering over quick fixes.**
+
+This is a personal project with no commercial deadlines. We have the luxury of time to do things right:
+
+| Principle | In Practice |
+|-----------|-------------|
+| **Find the root cause** | Never mask symptoms with workarounds. If rendering flickers, understand WHY before fixing. |
+| **No band-aid fixes** | A fix that "works" but bypasses proper handling is not acceptable. |
+| **Take the time needed** | Spend a week understanding a system rather than an hour patching around it. |
+| **Correct > Working** | Code that works incorrectly will cause harder bugs later. Get it right the first time. |
+
+When facing a problem: investigate fully, understand the underlying system, then implement the proper solution. If you find yourself thinking "this is a hack but it works" - stop and reconsider.
+
 ## Quick Navigation
 
 | Domain | CLAUDE.md Location | Primary Purpose |

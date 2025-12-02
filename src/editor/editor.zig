@@ -554,6 +554,15 @@ pub const Editor = struct {
         if (filetype) |ft| {
             buf.setFiletype(ft) catch {};
             self.logger.debug("Detected filetype: {s} for {s}", .{ ft, path }) catch {};
+
+            // Initialize tree-sitter LanguageTree for syntax highlighting
+            // NOTE: We must call initLanguageTree directly on `buf`, not via parseBufferWithTreeSitter()
+            // because parseBufferWithTreeSitter() uses getCurrentBuffer() which would return the
+            // wrong buffer since we haven't switched to the new buffer yet
+            const lang_name = normalizeLangName(ft);
+            buf.initLanguageTree(lang_name) catch |err| {
+                self.logger.debug("Tree-sitter init failed for {s}: {}", .{ lang_name, err }) catch {};
+            };
         } else {
             buf.setFiletype(null) catch {};
         }
@@ -939,7 +948,6 @@ pub const Editor = struct {
                 self.allocator.destroy(win_ptr);
             }
             self.js_state_dirty = true;
-            self.logger.info("Closed floating window {}", .{win_id.id}) catch {};
             return;
         }
 
@@ -1112,14 +1120,6 @@ pub const Editor = struct {
 
         new_window.needs_redraw = true;
         self.js_state_dirty = true;
-
-        self.logger.info("Created floating window {} ({}x{}) at ({},{})", .{
-            new_win_id.id,
-            config.width,
-            config.height,
-            config.row,
-            config.col,
-        }) catch {};
 
         return new_win_id;
     }
@@ -2893,44 +2893,32 @@ pub const Editor = struct {
 
     /// Parse buffer content with tree-sitter after filetype detection
     /// This is public so it can be called from config_api when vim.bo.filetype is set
+    /// Uses LanguageTree for injection support (e.g., JS in Markdown code blocks)
     pub fn parseBufferWithTreeSitter(self: *Editor, filetype: []const u8) !void {
         // Normalize language name
         const lang_name = normalizeLangName(filetype);
         self.logger.info("🔍 Normalizing filetype '{s}' → '{s}'", .{ filetype, lang_name }) catch {};
 
-        // Get language from registry
-        const lang = languages.getLanguage(lang_name) orelse {
-            self.logger.info("❌ No tree-sitter parser for language: {s}", .{lang_name}) catch {};
-            return; // No tree-sitter support, syntax stays null
-        };
-
-        // Set parser language
-        try self.parser.setLanguage(lang);
-
-        // Initialize syntax on the buffer (per-buffer tree-sitter following Neovim architecture)
+        // Initialize LanguageTree on the buffer (supports injections)
         const buf = self.getCurrentBuffer() orelse return;
-        try buf.initSyntax(&self.parser, lang, lang_name);
+        try buf.initLanguageTree(lang_name);
 
-        self.logger.info("✅ Parsed buffer with tree-sitter for {s} (buffer.syntax created)", .{lang_name}) catch {};
+        if (buf.hasLanguageTree()) {
+            self.logger.info("✅ Parsed buffer with LanguageTree for {s} (injection support enabled)", .{lang_name}) catch {};
+        } else {
+            self.logger.info("❌ No tree-sitter parser for language: {s}", .{lang_name}) catch {};
+        }
     }
 
     /// Parse syntax for a specific buffer (used for floating windows and scratch buffers)
-    /// This allows any buffer to have its own syntax highlighting
+    /// This allows any buffer to have its own syntax highlighting with injection support
     pub fn parseBufferSyntax(self: *Editor, buf: *Buffer, filetype: []const u8) !void {
+        _ = self;
         // Normalize language name
         const lang_name = normalizeLangName(filetype);
 
-        // Get language from registry
-        const lang = languages.getLanguage(lang_name) orelse {
-            self.logger.info("❌ No tree-sitter parser for language: {s}", .{lang_name}) catch {};
-            return;
-        };
-
-        // Set parser language
-        try self.parser.setLanguage(lang);
-
-        // Initialize syntax on the buffer
-        try buf.initSyntax(&self.parser, lang, lang_name);
+        // Initialize LanguageTree on the buffer (supports injections)
+        try buf.initLanguageTree(lang_name);
     }
 
     /// Trigger an autocommand event

@@ -42,6 +42,7 @@ pub const api_buffer = @import("api_buffer.zig");
 pub const api_window = @import("api_window.zig");
 pub const namespace_api = @import("namespace_api.zig");
 pub const diagnostic_api = @import("diagnostic_api.zig");
+pub const treesitter_api = @import("treesitter_api.zig");
 
 // Import new transpiler system
 const transpiler = @import("../transpiler/loader.zig");
@@ -166,6 +167,15 @@ pub fn initJSI(
     // Register filetype API (vim.filetype.match)
     // Both Editor and EditorContext have ts_loader, so register for both
     filetype_api.register(runtime, editor_or_context, allocator);
+
+    // Register treesitter API (vim.treesitter.*)
+    // Provides LanguageTree for injection support and tree-sitter queries
+    // Uses Editor pointer for dynamic buffer access (buffer may change between calls)
+    if (T == *Editor) {
+        treesitter_api.register(runtime, editor_or_context, allocator);
+    } else if (T == *EditorContext) {
+        treesitter_api.register(runtime, &editor_or_context.editor, allocator);
+    }
 
     // Register buffer API (vim.buffer.getContent, vim.buffer.getLineContent, etc.)
     // Only register for Editor (not EditorContext) - needs multi-buffer support
@@ -515,6 +525,8 @@ pub fn deinitJSI() void {
     }
     // Clean up filetype context (no deinit needed, just free the struct)
     filetype_api.deinit();
+    // Clean up treesitter context
+    treesitter_api.deinit();
     // Clean up fs context
     if (global_fs_ctx) |ctx| {
         if (global_allocator) |alloc| {

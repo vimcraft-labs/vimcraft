@@ -995,7 +995,7 @@ pub const Display = struct {
             ((laststatus >= 2) or (laststatus == 1 and non_floating_count > 1));
 
         // TIMING DEBUG
-        const RENDER_PHASE_TIMING = true;
+        const RENDER_PHASE_TIMING = false;
         const phase1_start = if (RENDER_PHASE_TIMING) std.time.nanoTimestamp() else 0;
 
         // PASS 1: Render all NON-floating windows
@@ -1035,7 +1035,7 @@ pub const Display = struct {
                 .cursorline_enabled = cursorline_enabled and is_active,
                 .list_enabled = list_enabled,
                 .listchars = listchars,
-                .syntax = buffer.syntax,
+                .language_tree = buffer.getLanguageTree(),
             };
 
             // Render window to compositor layers
@@ -1101,7 +1101,7 @@ pub const Display = struct {
                 .cursorline_enabled = cursorline_enabled and is_active,
                 .list_enabled = list_enabled,
                 .listchars = listchars,
-                .syntax = buffer.syntax,
+                .language_tree = buffer.getLanguageTree(),
             };
 
             // Render window to compositor layers

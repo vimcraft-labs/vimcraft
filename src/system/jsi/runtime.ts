@@ -59,6 +59,7 @@ declare const vimKeymap: {
   del(mode: string, lhs: string): void;
 };
 declare const vimFiletype: object;
+declare const vimTreesitter: object;
 declare const vimBuffer: object | undefined;
 declare const vimE2E: object | undefined;
 declare const vimEventEmitter: {
@@ -146,6 +147,8 @@ declare function vimApiOpenWin(buf: number, enter: boolean, config: object): num
 declare function vimApiWinSetConfig(window: number, config: object): void;
 declare function vimApiWinGetConfig(window: number): object | null;
 declare function vimApiWinHide(window: number): void;
+declare function vimApiWinSetOption(window: number, name: string, value: unknown): void;
+declare function vimApiWinGetOption(window: number, name: string): unknown;
 
 // Highlight API native functions
 declare function vimApiCreateNamespace(name: string): number;
@@ -754,6 +757,14 @@ const vimApi: VimAPI = {
 
   winHide(window: number) {
     if (typeof vimApiWinHide !== 'undefined') vimApiWinHide(window);
+  },
+
+  winSetOption(window: number, name: string, value: unknown) {
+    if (typeof vimApiWinSetOption !== 'undefined') vimApiWinSetOption(window, name, value);
+  },
+
+  winGetOption(window: number, name: string) {
+    return typeof vimApiWinGetOption !== 'undefined' ? vimApiWinGetOption(window, name) : null;
   },
 
   // Highlight functions
@@ -1477,6 +1488,7 @@ const vim: VimObject = {
   },
 
   filetype: vimFiletype,
+  treesitter: vimTreesitter,
   api: vimApi,
   autocmd: vimAutocmd,
   diagnostic: vimDiagnostic,
@@ -2921,7 +2933,7 @@ const vimLsp = {
       const offsetX = opts.offsetX || 0;
       const offsetY = opts.offsetY || 0;
 
-      // Get terminal/window dimensions
+      // Get terminal dimensions (winGetHeight/Width(0) now returns terminal size directly)
       const winHeight = vim.api.winGetHeight(0);
       const winWidth = vim.api.winGetWidth(0);
 
@@ -3033,6 +3045,30 @@ const vimLsp = {
       // Close existing preview window if any
       vimLsp.util.closePreviewWindow();
 
+      // Strip markdown code fences if present (handles plugins that pass raw markdown)
+      // Check if first line is a code fence like ```typescript or ```
+      if (contents.length > 0 && /^\s*```\w*\s*$/.test(contents[0])) {
+        // Extract language from fence for syntax highlighting
+        // Always use the fence language since we're stripping the markdown wrapper
+        const langMatch = contents[0].match(/```(\w+)/);
+        if (langMatch) {
+          syntax = langMatch[1];
+        }
+        // Remove opening fence
+        contents = contents.slice(1);
+        // Remove closing fence if present
+        if (contents.length > 0 && /^\s*```\s*$/.test(contents[contents.length - 1])) {
+          contents = contents.slice(0, -1);
+        }
+        // Remove any leading/trailing empty lines
+        while (contents.length > 0 && contents[0].trim() === '') {
+          contents = contents.slice(1);
+        }
+        while (contents.length > 0 && contents[contents.length - 1].trim() === '') {
+          contents = contents.slice(0, -1);
+        }
+      }
+
       // Compute dimensions
       const maxWidth = opts.maxWidth || 80;
       const maxHeight = opts.maxHeight || 24;
@@ -3081,12 +3117,13 @@ const vimLsp = {
       });
 
       // Open the window
-      const beforeOpenWin = Date.now();
-      consoleAPI.log('[HOVER TIMING] Before openWin at', beforeOpenWin);
       const winid = vim.api.openWin(bufnr, false, floatOpts);
-      const afterOpenWin = Date.now();
-      consoleAPI.log('[HOVER TIMING] After openWin at', afterOpenWin, '(openWin took', afterOpenWin - beforeOpenWin, 'ms)');
-      consoleAPI.log('[LSP] Preview window opened: winid=', winid, 'bufnr=', bufnr);
+
+      // Set conceal options for markdown (hide ``` code fence markers like Neovim)
+      if (syntax === 'markdown') {
+        vim.api.winSetOption(winid, 'conceallevel', 2);
+        vim.api.winSetOption(winid, 'concealcursor', 'n');
+      }
 
       // Track for auto-close
       vimLsp.util._previewWinId = winid;
@@ -3160,14 +3197,12 @@ const vimLsp = {
      */
     'textDocument/hover': function(result: any, ctx: { bufnr: number; client: LspClientInstance }) {
       if (!result || !result.contents) {
-        consoleAPI.log('[LSP] Hover: No result or contents', result);
         return;
       }
 
       // Extract text from hover contents
       let text = '';
       const contents = result.contents;
-      consoleAPI.log('[LSP] Hover contents type:', typeof contents, 'value:', contents);
 
       if (typeof contents === 'string') {
         text = contents;
@@ -3182,26 +3217,42 @@ const vimLsp = {
       }
 
       if (!text) {
-        consoleAPI.log('[LSP] Hover: Extracted text is empty');
         return;
       }
 
-      consoleAPI.log('[LSP] Hover extracted text:', text);
+      // Extract language from code fence if present (e.g., ```typescript)
+      const langMatch = text.match(/```(\w+)/);
+      const codeLang = langMatch ? langMatch[1] : null;
 
-      // Strip markdown code fences for cleaner display
-      text = text.replace(/```\w*\n?/g, '').replace(/```$/g, '').trim();
+      // Strip markdown code fences completely
+      // Remove all code fences (```lang and ```) along with surrounding newlines
+      text = text
+        .replace(/^\s*```\w*\s*\n?/gm, '')  // Opening fences: ```typescript, ```ts, ```
+        .replace(/\n?\s*```\s*$/gm, '')      // Closing fences
+        .trim();
 
       // Split into lines
-      const lines = text.split('\n');
-      consoleAPI.log('[LSP] Hover lines count:', lines.length, 'first line:', lines[0]);
+      let lines = text.split('\n');
 
-      // CORRECT: LSP hover content is markdown, so use markdown syntax highlighting
-      // Don't pass source buffer's filetype - that causes tree-sitter to parse
-      // markdown content with wrong grammar (e.g., TypeScript), which is slow (190ms+)
-      // and produces incorrect highlighting.
+      // Filter out empty/whitespace-only lines at start and end
+      while (lines.length > 0 && lines[0].trim() === '') {
+        lines.shift();
+      }
+      while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
+        lines.pop();
+      }
+
+      // Check if we have any content left
+      if (lines.length === 0) {
+        return;
+      }
+
+      // Use detected language for syntax highlighting if available
+      // Since we stripped the code fences, content is no longer markdown
+      const syntax = codeLang || 'text';
 
       // Use the utility function for smart positioning and auto-close
-      vimLsp.util.openFloatingPreview(lines, 'markdown', {
+      vimLsp.util.openFloatingPreview(lines, syntax, {
         maxWidth: 80,
         maxHeight: 24,
         border: 'rounded',
@@ -3303,19 +3354,14 @@ const vimLsp = {
      * Result is passed to vim.lsp.handlers['textDocument/hover'] for display
      */
     hover(): Promise<any> {
-      const hoverStartTime = Date.now();
-      consoleAPI.log('[HOVER TIMING] hover() called at', hoverStartTime);
-
       const bufnr = vim.api.getCurrentBuf();
       const client = vimLsp._findClientWithCapability(bufnr, 'hoverProvider');
 
       if (!client) {
-        consoleAPI.log('[LSP] No client attached to buffer', bufnr);
         return Promise.resolve(null);
       }
 
       if (!client.initialized) {
-        consoleAPI.log('[LSP] Client', client.name, 'is still initializing...');
         return Promise.resolve(null);
       }
 
@@ -3324,24 +3370,15 @@ const vimLsp = {
       const line = cursor[0] - 1; // 0-indexed
       const col = cursor[1];
 
-      const requestSendTime = Date.now();
-      consoleAPI.log('[HOVER TIMING] Sending request at', requestSendTime, '(+' + (requestSendTime - hoverStartTime) + 'ms)');
-
       return client.request('textDocument/hover', {
         textDocument: { uri: bufferToFileUri(bufnr) },
         position: { line: line, character: col }
       }).then(function(result: any) {
-        const responseTime = Date.now();
-        consoleAPI.log('[HOVER TIMING] Response received at', responseTime, '(+' + (responseTime - hoverStartTime) + 'ms from start)');
-
         // Call handler to display result
         const handler = vimLsp.handlers['textDocument/hover'];
         if (handler) {
-          handler(result, { bufnr: bufnr, client: client, _hoverStartTime: hoverStartTime });
+          handler(result, { bufnr: bufnr, client: client });
         }
-
-        const handlerDoneTime = Date.now();
-        consoleAPI.log('[HOVER TIMING] Handler done at', handlerDoneTime, '(+' + (handlerDoneTime - hoverStartTime) + 'ms total)');
         return result;
       });
     },

@@ -313,18 +313,19 @@ pub export fn apiWinGetHeight(
     const win_handle_val = args[0] orelse return c.hermes_value_create_null(rt);
     const win_handle = @as(i32, @intFromFloat(c.hermes_value_get_number(win_handle_val)));
 
-    // Try to get actual window dimensions
-    if (getWindowFromHandle(ctx, win_handle)) |window| {
-        // FIX: If window dimensions are 0 (layout not yet calculated), fall through to terminal fallback
-        if (window.height > 0) {
-            return c.hermes_value_create_number(rt, @floatFromInt(window.height));
-        }
-    }
-
-    // Fallback: return terminal rows for window 0 (or when window.height is 0)
+    // For window 0, ALWAYS use terminal dimensions
+    // This ensures consistent behavior for popup positioning, since floating windows
+    // can affect the stored window height but terminal size remains constant
     if (win_handle == 0) {
         const dims = ctx.get_dimensions_fn(ctx.context_ptr);
         return c.hermes_value_create_number(rt, @floatFromInt(dims.rows));
+    }
+
+    // Try to get actual window dimensions for specific windows
+    if (getWindowFromHandle(ctx, win_handle)) |window| {
+        if (window.height > 0) {
+            return c.hermes_value_create_number(rt, @floatFromInt(window.height));
+        }
     }
 
     return c.hermes_value_create_null(rt);
@@ -349,18 +350,18 @@ pub export fn apiWinGetWidth(
     const win_handle_val = args[0] orelse return c.hermes_value_create_null(rt);
     const win_handle = @as(i32, @intFromFloat(c.hermes_value_get_number(win_handle_val)));
 
-    // Try to get actual window dimensions
-    if (getWindowFromHandle(ctx, win_handle)) |window| {
-        // FIX: If window dimensions are 0 (layout not yet calculated), fall through to terminal fallback
-        if (window.width > 0) {
-            return c.hermes_value_create_number(rt, @floatFromInt(window.width));
-        }
-    }
-
-    // Fallback: return terminal cols for window 0 (or when window.width is 0)
+    // For window 0, ALWAYS use terminal dimensions
+    // This ensures consistent behavior for popup positioning
     if (win_handle == 0) {
         const dims = ctx.get_dimensions_fn(ctx.context_ptr);
         return c.hermes_value_create_number(rt, @floatFromInt(dims.cols));
+    }
+
+    // Try to get actual window dimensions for specific windows
+    if (getWindowFromHandle(ctx, win_handle)) |window| {
+        if (window.width > 0) {
+            return c.hermes_value_create_number(rt, @floatFromInt(window.width));
+        }
     }
 
     return c.hermes_value_create_null(rt);
@@ -1043,6 +1044,10 @@ fn registerFunctions(runtime: *c.OVHermesRuntime) void {
     c.hermes_register_host_function(runtime, "vimApiWinSetConfig", apiWinSetConfig, null);
     c.hermes_register_host_function(runtime, "vimApiWinGetConfig", apiWinGetConfig, null);
     c.hermes_register_host_function(runtime, "vimApiWinHide", apiWinHide, null);
+
+    // Window option functions
+    c.hermes_register_host_function(runtime, "vimApiWinSetOption", apiWinSetOption, null);
+    c.hermes_register_host_function(runtime, "vimApiWinGetOption", apiWinGetOption, null);
 }
 
 /// Cleanup
@@ -1248,11 +1253,165 @@ pub export fn apiWinHide(
     return c.hermes_value_create_undefined(rt);
 }
 
+/// vim.api.winSetOption(win, name, value) -> void
+/// Sets a window-local option
+pub export fn apiWinSetOption(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const rt = runtime orelse return null;
+    const ctx = global_ctx orelse return c.hermes_value_create_undefined(rt);
+
+    // Validate arguments (win, name, value)
+    if (count < 3) return c.hermes_value_create_undefined(rt);
+
+    const win_handle_val = args[0] orelse return c.hermes_value_create_undefined(rt);
+    const name_val = args[1] orelse return c.hermes_value_create_undefined(rt);
+    const value_val = args[2] orelse return c.hermes_value_create_undefined(rt);
+
+    const win_handle = @as(i32, @intFromFloat(c.hermes_value_get_number(win_handle_val)));
+
+    // Get option name
+    var name_len: usize = 0;
+    const name_ptr = c.hermes_value_get_string(rt, name_val, &name_len);
+    if (name_ptr == null or name_len == 0) return c.hermes_value_create_undefined(rt);
+    const name = name_ptr[0..name_len];
+
+    // Get window
+    const window = getWindowFromHandle(ctx, win_handle) orelse return c.hermes_value_create_undefined(rt);
+
+    // Set option based on name
+    if (std.mem.eql(u8, name, "conceallevel") or std.mem.eql(u8, name, "concealLevel")) {
+        const level = @as(u8, @intFromFloat(c.hermes_value_get_number(value_val)));
+        window.options.conceallevel = @min(level, 3); // Valid range: 0-3
+    } else if (std.mem.eql(u8, name, "concealcursor") or std.mem.eql(u8, name, "concealCursor")) {
+        var str_len: usize = 0;
+        const str_ptr = c.hermes_value_get_string(rt, value_val, &str_len);
+        if (str_ptr != null) {
+            window.options.concealcursor = WindowOptions.ConcealCursor.fromString(str_ptr[0..str_len]);
+        }
+    } else if (std.mem.eql(u8, name, "number")) {
+        window.options.number = c.hermes_value_get_boolean(value_val);
+    } else if (std.mem.eql(u8, name, "relativenumber") or std.mem.eql(u8, name, "relativeNumber")) {
+        window.options.relativenumber = c.hermes_value_get_boolean(value_val);
+    } else if (std.mem.eql(u8, name, "numberwidth") or std.mem.eql(u8, name, "numberWidth")) {
+        const width = @as(u8, @intFromFloat(c.hermes_value_get_number(value_val)));
+        window.options.numberwidth = @min(@max(width, 1), 20); // Valid range: 1-20
+    } else if (std.mem.eql(u8, name, "wrap")) {
+        window.options.wrap = c.hermes_value_get_boolean(value_val);
+    } else if (std.mem.eql(u8, name, "cursorline") or std.mem.eql(u8, name, "cursorLine")) {
+        window.options.cursorline = c.hermes_value_get_boolean(value_val);
+    } else if (std.mem.eql(u8, name, "cursorcolumn") or std.mem.eql(u8, name, "cursorColumn")) {
+        window.options.cursorcolumn = c.hermes_value_get_boolean(value_val);
+    } else if (std.mem.eql(u8, name, "scrolloff") or std.mem.eql(u8, name, "scrollOff")) {
+        window.options.scrolloff = @as(u8, @intFromFloat(c.hermes_value_get_number(value_val)));
+    } else if (std.mem.eql(u8, name, "sidescrolloff") or std.mem.eql(u8, name, "sideScrollOff")) {
+        window.options.sidescrolloff = @as(u8, @intFromFloat(c.hermes_value_get_number(value_val)));
+    } else if (std.mem.eql(u8, name, "signcolumn") or std.mem.eql(u8, name, "signColumn")) {
+        var str_len: usize = 0;
+        const str_ptr = c.hermes_value_get_string(rt, value_val, &str_len);
+        if (str_ptr != null and str_len > 0) {
+            const str = str_ptr[0..str_len];
+            if (std.mem.eql(u8, str, "auto")) {
+                window.options.signcolumn = .auto;
+            } else if (std.mem.eql(u8, str, "yes")) {
+                window.options.signcolumn = .yes;
+            } else if (std.mem.eql(u8, str, "no")) {
+                window.options.signcolumn = .no;
+            }
+        }
+    } else if (std.mem.eql(u8, name, "foldcolumn") or std.mem.eql(u8, name, "foldColumn")) {
+        window.options.foldcolumn = @as(u8, @intFromFloat(c.hermes_value_get_number(value_val)));
+    }
+
+    // Mark window dirty for re-render
+    window.markDirty();
+
+    // Mark state dirty for global re-render
+    if (getEditorFromContext(ctx)) |editor| {
+        editor.js_state_dirty = true;
+    }
+
+    return c.hermes_value_create_undefined(rt);
+}
+
+/// vim.api.winGetOption(win, name) -> any
+/// Gets a window-local option value
+pub export fn apiWinGetOption(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    _ = context;
+
+    const rt = runtime orelse return null;
+    const ctx = global_ctx orelse return c.hermes_value_create_null(rt);
+
+    // Validate arguments (win, name)
+    if (count < 2) return c.hermes_value_create_null(rt);
+
+    const win_handle_val = args[0] orelse return c.hermes_value_create_null(rt);
+    const name_val = args[1] orelse return c.hermes_value_create_null(rt);
+
+    const win_handle = @as(i32, @intFromFloat(c.hermes_value_get_number(win_handle_val)));
+
+    // Get option name
+    var name_len: usize = 0;
+    const name_ptr = c.hermes_value_get_string(rt, name_val, &name_len);
+    if (name_ptr == null or name_len == 0) return c.hermes_value_create_null(rt);
+    const name = name_ptr[0..name_len];
+
+    // Get window
+    const window = getWindowFromHandle(ctx, win_handle) orelse return c.hermes_value_create_null(rt);
+
+    // Get option value based on name
+    if (std.mem.eql(u8, name, "conceallevel") or std.mem.eql(u8, name, "concealLevel")) {
+        return c.hermes_value_create_number(rt, @floatFromInt(window.options.conceallevel));
+    } else if (std.mem.eql(u8, name, "concealcursor") or std.mem.eql(u8, name, "concealCursor")) {
+        var buf: [4]u8 = undefined;
+        const str = window.options.concealcursor.toString(&buf);
+        return c.hermes_value_create_string(rt, str.ptr, str.len);
+    } else if (std.mem.eql(u8, name, "number")) {
+        return c.hermes_value_create_boolean(rt, window.options.number);
+    } else if (std.mem.eql(u8, name, "relativenumber") or std.mem.eql(u8, name, "relativeNumber")) {
+        return c.hermes_value_create_boolean(rt, window.options.relativenumber);
+    } else if (std.mem.eql(u8, name, "numberwidth") or std.mem.eql(u8, name, "numberWidth")) {
+        return c.hermes_value_create_number(rt, @floatFromInt(window.options.numberwidth));
+    } else if (std.mem.eql(u8, name, "wrap")) {
+        return c.hermes_value_create_boolean(rt, window.options.wrap);
+    } else if (std.mem.eql(u8, name, "cursorline") or std.mem.eql(u8, name, "cursorLine")) {
+        return c.hermes_value_create_boolean(rt, window.options.cursorline);
+    } else if (std.mem.eql(u8, name, "cursorcolumn") or std.mem.eql(u8, name, "cursorColumn")) {
+        return c.hermes_value_create_boolean(rt, window.options.cursorcolumn);
+    } else if (std.mem.eql(u8, name, "scrolloff") or std.mem.eql(u8, name, "scrollOff")) {
+        return c.hermes_value_create_number(rt, @floatFromInt(window.options.scrolloff));
+    } else if (std.mem.eql(u8, name, "sidescrolloff") or std.mem.eql(u8, name, "sideScrollOff")) {
+        return c.hermes_value_create_number(rt, @floatFromInt(window.options.sidescrolloff));
+    } else if (std.mem.eql(u8, name, "signcolumn") or std.mem.eql(u8, name, "signColumn")) {
+        const str: []const u8 = switch (window.options.signcolumn) {
+            .auto => "auto",
+            .yes => "yes",
+            .no => "no",
+        };
+        return c.hermes_value_create_string(rt, str.ptr, str.len);
+    } else if (std.mem.eql(u8, name, "foldcolumn") or std.mem.eql(u8, name, "foldColumn")) {
+        return c.hermes_value_create_number(rt, @floatFromInt(window.options.foldcolumn));
+    }
+
+    return c.hermes_value_create_null(rt);
+}
+
 // ============================================================================
 // Multi-window support helper functions (Phase 5)
 // ============================================================================
 const Window = @import("../../editor/window.zig").Window;
 const WindowId = @import("../../editor/window.zig").WindowId;
+const WindowOptions = @import("../../editor/window.zig").WindowOptions;
 const FloatingConfig = @import("../../editor/window.zig").FloatingConfig;
 const FloatRelative = @import("../../editor/window.zig").FloatRelative;
 const FloatAnchor = @import("../../editor/window.zig").FloatAnchor;

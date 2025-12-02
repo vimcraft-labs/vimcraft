@@ -658,6 +658,111 @@ export enum LastStatus {
 }
 
 /**
+ * Controls how concealed text is displayed.
+ *
+ * Used with `vim.opt.concealLevel` to control visibility of concealed text
+ * (e.g., markdown code fence markers in LSP hover popups).
+ *
+ * @example
+ * // Show concealed text normally (default for editing)
+ * vim.opt.concealLevel = ConcealLevel.Normal;
+ *
+ * @example
+ * // Hide concealed text completely (for popups)
+ * vim.opt.concealLevel = ConcealLevel.Hidden;
+ */
+export enum ConcealLevel {
+  /**
+   * Show concealed text normally (no concealment).
+   * Equivalent to Vim's `set conceallevel=0`.
+   */
+  Normal = 0,
+
+  /**
+   * Replace concealed text with a single character.
+   * Uses the character from syntax or a default.
+   * Equivalent to Vim's `set conceallevel=1`.
+   */
+  ReplaceWithChar = 1,
+
+  /**
+   * Hide concealed text completely (unless it has a replacement char).
+   * Equivalent to Vim's `set conceallevel=2`.
+   */
+  Hidden = 2,
+
+  /**
+   * Hide concealed text completely (always).
+   * Equivalent to Vim's `set conceallevel=3`.
+   */
+  HiddenAlways = 3,
+}
+
+/**
+ * Controls whether concealed text is hidden on the cursor line.
+ *
+ * Used with `vim.opt.concealCursor` to control when concealment
+ * applies to the line where the cursor is positioned.
+ *
+ * @example
+ * // Keep text concealed in normal mode (for popups)
+ * vim.opt.concealCursor = ConcealCursor.Normal;
+ *
+ * @example
+ * // Never conceal on cursor line (default for editing)
+ * vim.opt.concealCursor = ConcealCursor.None;
+ */
+export enum ConcealCursor {
+  /**
+   * Never conceal text on cursor line.
+   * Equivalent to Vim's `set concealcursor=`.
+   */
+  None = "",
+
+  /**
+   * Conceal in normal mode.
+   * Equivalent to Vim's `set concealcursor=n`.
+   */
+  Normal = "n",
+
+  /**
+   * Conceal in visual mode.
+   * Equivalent to Vim's `set concealcursor=v`.
+   */
+  Visual = "v",
+
+  /**
+   * Conceal in insert mode.
+   * Equivalent to Vim's `set concealcursor=i`.
+   */
+  Insert = "i",
+
+  /**
+   * Conceal in command mode.
+   * Equivalent to Vim's `set concealcursor=c`.
+   */
+  Command = "c",
+
+  /**
+   * Conceal in normal and visual modes.
+   * Equivalent to Vim's `set concealcursor=nv`.
+   */
+  NormalVisual = "nv",
+
+  /**
+   * Conceal in normal, visual, and insert modes.
+   * Equivalent to Vim's `set concealcursor=nvi`.
+   */
+  NormalVisualInsert = "nvi",
+
+  /**
+   * Conceal in all modes.
+   * Equivalent to Vim's `set concealcursor=nvic`.
+   */
+  All = "nvic",
+}
+
+/**
  * Editor options accessible via `vim.opt`.
  *
  * All option names use camelCase for JavaScript/TypeScript convention,
@@ -765,6 +870,30 @@ export interface VimOptions {
    * @default LastStatus.Always (2)
    */
   lastStatus?: LastStatus | 0 | 1 | 2 | 3;
+
+  /**
+   * How to display concealed text (e.g., markdown code fence markers).
+   * See `ConcealLevel` enum for available values.
+   *
+   * - `Normal` (0): Show text normally
+   * - `ReplaceWithChar` (1): Replace with single character
+   * - `Hidden` (2): Hide completely (used for popups)
+   * - `HiddenAlways` (3): Always hide
+   *
+   * @default ConcealLevel.Normal (0)
+   */
+  concealLevel?: ConcealLevel | 0 | 1 | 2 | 3;
+
+  /**
+   * Whether to conceal text on the cursor line.
+   * See `ConcealCursor` enum for available values.
+   *
+   * Controls which modes keep text concealed even when cursor is on the line.
+   * Commonly set to `"n"` for floating windows so content stays clean.
+   *
+   * @default ConcealCursor.None ("")
+   */
+  concealCursor?: ConcealCursor | "" | "n" | "v" | "i" | "c" | "nv" | "nvi" | "nvic";
 
   /**
    * Show (partial) command in the last line of the screen.
@@ -5550,6 +5679,128 @@ export interface FiletypeAPI {
 }
 
 // ============================================================================
+// Tree-sitter API
+// ============================================================================
+
+/**
+ * Tree-sitter integration API.
+ *
+ * Provides access to tree-sitter parsing and language injection support.
+ * Uses LanguageTree for recursive parsing of embedded languages.
+ *
+ * Key features:
+ * - Language detection and parser availability
+ * - LanguageTree for injection support (e.g., Markdown with code blocks)
+ * - Language-at-position queries for injected regions
+ *
+ * @example
+ * // Check if language is supported
+ * if (vim.treesitter.hasParser('javascript')) {
+ *   console.log('JavaScript parsing available');
+ * }
+ *
+ * @example
+ * // Enable injection support for markdown
+ * vim.treesitter.getLanguageTree(0, 'markdown');
+ *
+ * @example
+ * // Get language at a specific position (for injected code)
+ * const lang = vim.treesitter.languageForRange(100, 200);
+ * console.log(lang); // 'javascript' if in a JS code block
+ */
+export interface TreesitterAPI {
+  /**
+   * Check if a tree-sitter parser is available for the language.
+   *
+   * @param lang - Language name (e.g., 'javascript', 'python', 'markdown')
+   * @returns true if parser is available, false otherwise
+   *
+   * @example
+   * vim.treesitter.hasParser('javascript'); // true
+   * vim.treesitter.hasParser('unknown');    // false
+   */
+  hasParser(lang: string): boolean;
+
+  /**
+   * Initialize LanguageTree for a buffer with injection support.
+   *
+   * LanguageTree enables recursive parsing of embedded languages.
+   * For example, Markdown files with JavaScript code blocks will have
+   * separate parsers for Markdown and JavaScript.
+   *
+   * @param bufnr - Buffer number (0 for current buffer)
+   * @param lang - Language name (optional, uses buffer filetype if not specified)
+   * @returns true if initialization succeeded, false otherwise
+   *
+   * @example
+   * // Enable injections for current buffer
+   * vim.treesitter.getLanguageTree(0, 'markdown');
+   */
+  getLanguageTree(bufnr?: number, lang?: string): boolean;
+
+  /**
+   * Check if current buffer has LanguageTree (injection support enabled).
+   *
+   * @param bufnr - Buffer number (0 for current buffer)
+   * @returns true if LanguageTree is initialized
+   */
+  hasLanguageTree(bufnr?: number): boolean;
+
+  /**
+   * Get list of all supported tree-sitter languages.
+   *
+   * @returns Array of language names
+   *
+   * @example
+   * const langs = vim.treesitter.getLanguages();
+   * // ['c', 'zig', 'javascript', 'typescript', 'markdown', ...]
+   */
+  getLanguages(): string[];
+
+  /**
+   * Get the language name for a byte range (useful for injected languages).
+   *
+   * Returns the most specific language for the given position. For example,
+   * in a Markdown file with a JavaScript code block, this returns 'javascript'
+   * when the range is inside the code block.
+   *
+   * @param startByte - Start byte position
+   * @param endByte - End byte position
+   * @returns Language name or null if no LanguageTree is active
+   *
+   * @example
+   * const lang = vim.treesitter.languageForRange(100, 200);
+   * // 'javascript' if position is in a JS code block
+   */
+  languageForRange(startByte: number, endByte: number): string | null;
+
+  /**
+   * Update LanguageTree after buffer modifications.
+   *
+   * Re-parses the buffer content and processes injections.
+   * Call this after making changes to ensure highlighting is up-to-date.
+   *
+   * @returns true if update succeeded, false if no LanguageTree is active
+   */
+  updateTree(): boolean;
+
+  /**
+   * Get list of injected languages in the current buffer.
+   *
+   * Returns the languages detected in injection regions.
+   * For example, a Markdown file with JS and CSS code blocks
+   * returns ['javascript', 'css'].
+   *
+   * @returns Array of injected language names
+   *
+   * @example
+   * const injected = vim.treesitter.getInjectedLanguages();
+   * // ['javascript', 'css'] for a markdown file with code blocks
+   */
+  getInjectedLanguages(): string[];
+}
+
+// ============================================================================
 // Main Vim Interface
 // ============================================================================
 
@@ -5955,6 +6206,25 @@ export interface Vim {
    * console.log(lang); // 'Rust'
    */
   filetype: FiletypeAPI;
+
+  /**
+   * Tree-sitter API for syntax parsing and language injections.
+   *
+   * Provides Neovim-compatible tree-sitter functionality including:
+   * - Parser management per buffer
+   * - Language injection support (e.g., JS in Markdown code blocks)
+   * - Query-based syntax highlighting
+   *
+   * @example
+   * // Check if a language parser is available
+   * if (vim.treesitter.hasParser('javascript')) {
+   *   vim.treesitter.getLanguageTree(0, 'javascript');
+   * }
+   *
+   * // Get the language at a specific byte position (useful for injections)
+   * const lang = vim.treesitter.languageForRange(100, 200);
+   */
+  treesitter: TreesitterAPI;
 
   // Note: vim.loop is not needed - use global fs, fetch, process instead
 

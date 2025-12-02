@@ -40,8 +40,28 @@ pub const IteratorError = @import("treesitter/highlight.zig").IteratorError;
 pub const Syntax = @import("treesitter/syntax.zig").Syntax;
 pub const SyntaxError = @import("treesitter/syntax.zig").SyntaxError;
 
+// Re-export predicates module (for injection processing)
+pub const predicates = @import("treesitter/predicates.zig");
+pub const Metadata = predicates.Metadata;
+pub const processMatchPredicates = predicates.processMatchPredicates;
+pub const getOffsetAdjustment = predicates.getOffsetAdjustment;
+
+// Re-export LanguageTree (recursive parser management)
+pub const language_tree = @import("treesitter/language_tree.zig");
+pub const LanguageTree = language_tree.LanguageTree;
+pub const LanguageTreeError = language_tree.LanguageTreeError;
+pub const Range6 = language_tree.Range6;
+
 // Re-export filetype loader
 pub const Loader = @import("treesitter/loader.zig").Loader;
+
+// Re-export syntax highlighter (adapts tree-sitter to rendering)
+pub const syntax_highlighter = @import("treesitter/syntax_highlighter.zig");
+pub const SyntaxHighlighter = syntax_highlighter.SyntaxHighlighter;
+pub const StyledHighlight = syntax_highlighter.StyledHighlight;
+pub const StyledHighlightIterator = syntax_highlighter.StyledHighlightIterator;
+pub const LanguageTreeHighlighter = syntax_highlighter.LanguageTreeHighlighter;
+pub const MultiTreeStyledHighlightIterator = syntax_highlighter.MultiTreeStyledHighlightIterator;
 
 // Import test files to ensure they run
 test {
@@ -52,5 +72,8 @@ test {
     _ = @import("treesitter/query.zig");
     _ = @import("treesitter/highlight.zig");
     _ = @import("treesitter/syntax.zig");
+    _ = @import("treesitter/predicates.zig");
+    _ = @import("treesitter/language_tree.zig");
     _ = @import("treesitter/loader.zig");
+    _ = @import("treesitter/syntax_highlighter.zig");
 }

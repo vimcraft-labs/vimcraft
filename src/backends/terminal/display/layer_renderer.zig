@@ -9,7 +9,8 @@ const YankHighlight = @import("../../../editor/visual/yank_highlight.zig").YankH
 const Position = @import("../../../editor/visual/visual.zig").Position;
 const char_width = @import("char_width.zig");
 const ListChars = @import("../../../editor/config/listchars.zig").ListChars;
-const SyntaxHighlighter = @import("../../../editor/treesitter/syntax_highlighter.zig").SyntaxHighlighter;
+const LanguageTree = @import("../../../editor/treesitter/language_tree.zig").LanguageTree;
+const LanguageTreeHighlighter = @import("../../../editor/treesitter/syntax_highlighter.zig").LanguageTreeHighlighter;
 const Range = @import("../../../editor/treesitter/highlight.zig").Range;
 const Style = @import("../../../system/jsi/highlight_api.zig").Style;
 const Color = @import("../../../system/jsi/highlight_api.zig").Color;
@@ -120,24 +121,15 @@ fn updateBaseLayer(
     else
         undefined; // Won't be used if list_enabled = false
 
-    // Create syntax highlighter if tree-sitter syntax available (per-buffer)
-    // Following Neovim architecture: each buffer owns its own Syntax for proper
-    // floating window highlighting (e.g., LSP hover with markdown syntax)
-    var syntax_highlighter: ?SyntaxHighlighter = null;
-    if (buffer.syntax) |syntax| {
-        // Get registry based on editor type (Editor has .highlight_registry field, EditorContext has method)
-        const registry_ptr = if (T == *Editor)
-            &editor.highlight_registry
-        else if (T == *EditorContext)
-            editor.highlight_registry()
-        else
-            &editor.highlight_registry; // Duck-typed fallback
-
-        // SAFETY: Syntax and HighlightRegistry outlive this function
-        syntax_highlighter = SyntaxHighlighter.init(
-            self.allocator, // Use Display's allocator (not page_allocator)
-            syntax,
-            registry_ptr,
+    // Create syntax highlighter if tree-sitter LanguageTree available (per-buffer)
+    // Using LanguageTreeHighlighter which supports language injections
+    // (e.g., JS in Markdown code blocks, JSX in TypeScript)
+    var lang_tree_highlighter: ?LanguageTreeHighlighter = null;
+    if (buffer.getLanguageTree()) |lang_tree| {
+        lang_tree_highlighter = LanguageTreeHighlighter.init(
+            self.allocator,
+            lang_tree,
+            registry,
         );
     }
 
@@ -168,8 +160,8 @@ fn updateBaseLayer(
             // Render text to base layer
             // Priority: Syntax highlighting > listchars > plain text
             // Gracefully fall back to listchars/plain text if syntax highlighting fails
-            const end_col = if (syntax_highlighter) |*sh| blk: {
-                break :blk renderWithSyntaxHighlight(self, sh, row, gutter_width, remaining, text_byte_offset, list_enabled, listchars, lc_colors, fg_color, bg_color) catch {
+            const end_col = if (lang_tree_highlighter) |*lth| blk: {
+                break :blk renderWithSyntaxHighlight(self, lth, row, gutter_width, remaining, text_byte_offset, list_enabled, listchars, lc_colors, fg_color, bg_color) catch {
                     // Syntax highlighting failed (missing query file, etc.) - fall back to listchars or plain text
                     break :blk if (list_enabled)
                         try renderWithListChars(self, row, gutter_width, remaining, listchars, lc_colors, fg_color, bg_color)
@@ -469,7 +461,7 @@ fn convertColor(api_color: Color) highlights.Color {
 /// Returns: Final column position after rendering
 fn renderWithSyntaxHighlight(
     self: *Display,
-    highlighter: *SyntaxHighlighter,
+    highlighter: *LanguageTreeHighlighter,
     row: usize,
     start_col: usize,
     text: []const u8,
@@ -486,6 +478,7 @@ fn renderWithSyntaxHighlight(
         .end_byte = @intCast(text_byte_offset + text.len),
     };
 
+    // LanguageTreeHighlighter.highlights() returns !MultiTreeStyledHighlightIterator
     var iter = try highlighter.highlights(range);
     defer iter.deinit();
 
@@ -494,7 +487,8 @@ fn renderWithSyntaxHighlight(
     var highlight_map = std.AutoHashMap(usize, Style).init(self.allocator);
     defer highlight_map.deinit();
 
-    while (iter.next()) |styled| {
+    // MultiTreeStyledHighlightIterator.next() returns !?StyledHighlight
+    while (iter.next() catch null) |styled| {
         // Convert absolute byte offsets to text-relative offsets
         const range_start = if (styled.range.start_byte >= text_byte_offset)
             styled.range.start_byte - text_byte_offset

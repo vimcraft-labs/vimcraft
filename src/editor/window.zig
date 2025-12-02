@@ -67,8 +67,57 @@ pub const WindowOptions = struct {
     scrolloff: u8 = 0,
     /// Minimum columns left/right of cursor
     sidescrolloff: u8 = 0,
+    /// How to display concealed text (0=show, 1=replace, 2=hide, 3=completely hide)
+    conceallevel: u8 = 0,
+    /// Whether to conceal on cursor line (combination of "n", "v", "i", "c")
+    concealcursor: ConcealCursor = .{},
 
     pub const SignColumn = enum { auto, yes, no };
+
+    /// Flags for which modes keep text concealed on cursor line
+    pub const ConcealCursor = packed struct {
+        n: bool = false, // Normal mode
+        v: bool = false, // Visual mode
+        i: bool = false, // Insert mode
+        c: bool = false, // Command mode
+
+        /// Parse from string like "n", "nv", "nvic"
+        pub fn fromString(str: []const u8) ConcealCursor {
+            var result = ConcealCursor{};
+            for (str) |char| {
+                switch (char) {
+                    'n' => result.n = true,
+                    'v' => result.v = true,
+                    'i' => result.i = true,
+                    'c' => result.c = true,
+                    else => {},
+                }
+            }
+            return result;
+        }
+
+        /// Convert to string representation
+        pub fn toString(self: ConcealCursor, buf: *[4]u8) []const u8 {
+            var i: usize = 0;
+            if (self.n) {
+                buf[i] = 'n';
+                i += 1;
+            }
+            if (self.v) {
+                buf[i] = 'v';
+                i += 1;
+            }
+            if (self.i) {
+                buf[i] = 'i';
+                i += 1;
+            }
+            if (self.c) {
+                buf[i] = 'c';
+                i += 1;
+            }
+            return buf[0..i];
+        }
+    };
 };
 
 /// Cursor position within a buffer

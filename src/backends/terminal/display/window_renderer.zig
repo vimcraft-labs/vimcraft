@@ -17,9 +17,9 @@ const HighlightRegistry = @import("../../../system/jsi/highlight_api.zig").Highl
 const Style = @import("../../../system/jsi/highlight_api.zig").Style;
 const Color = @import("../../../system/jsi/highlight_api.zig").Color;
 
-// Syntax highlighting support
-const Syntax = @import("../../../editor/treesitter/syntax.zig").Syntax;
-const SyntaxHighlighter = @import("../../../editor/treesitter/syntax_highlighter.zig").SyntaxHighlighter;
+// Syntax highlighting support (with language injection support via LanguageTree)
+const LanguageTree = @import("../../../editor/treesitter/language_tree.zig").LanguageTree;
+const LanguageTreeHighlighter = @import("../../../editor/treesitter/syntax_highlighter.zig").LanguageTreeHighlighter;
 const Range = @import("../../../editor/treesitter/highlight.zig").Range;
 
 // Highlight cache for efficient repeated rendering
@@ -77,8 +77,8 @@ pub const WindowRenderContext = struct {
     list_enabled: bool,
     /// Listchars configuration
     listchars: *const ListChars,
-    /// Tree-sitter syntax for highlighting (null if unavailable)
-    syntax: ?*Syntax = null,
+    /// LanguageTree for highlighting with injection support (null if unavailable)
+    language_tree: ?*LanguageTree = null,
 };
 
 /// Render a window to the display's layers
@@ -174,7 +174,7 @@ pub fn calculateWindowGutterWidth(window: *const Window, buffer: *const Buffer) 
 
 /// Render window text content to base layer
 // Debug timing flag - set to true to enable performance logging
-const RENDER_TIMING_DEBUG = true;
+const RENDER_TIMING_DEBUG = false;
 
 fn renderWindowBaseLayer(
     display: *Display,
@@ -201,15 +201,17 @@ fn renderWindowBaseLayer(
     // Pre-compute listchars colors using shared module (DRY)
     const lc_colors = listchars_renderer.ListCharsColors.fromRegistry(ctx.registry, convertColor);
 
-    // Create syntax highlighter if syntax is available
-    // Now enabled for ALL windows including floating (hover/diagnostics) with caching
-    var syntax_highlighter: ?SyntaxHighlighter = null;
-    if (ctx.syntax) |syntax| {
-        syntax_highlighter = SyntaxHighlighter.init(
+    // Create LanguageTree highlighter if available
+    // Supports language injections (e.g., JS in Markdown code blocks)
+    var lang_tree_highlighter: ?LanguageTreeHighlighter = null;
+    var has_lang_tree_debug = false;
+    if (ctx.language_tree) |lang_tree| {
+        lang_tree_highlighter = LanguageTreeHighlighter.init(
             display.allocator,
-            syntax,
+            lang_tree,
             ctx.registry,
         );
+        has_lang_tree_debug = true;
     }
 
     // Get or create highlight cache for this buffer
@@ -256,6 +258,13 @@ fn renderWindowBaseLayer(
             var highlight_map = std.AutoHashMap(usize, Style).init(display.allocator);
             defer highlight_map.deinit();
 
+            // Track concealed byte offsets (for conceallevel >= 2)
+            var conceal_set = std.AutoHashMap(usize, void).init(display.allocator);
+            defer conceal_set.deinit();
+
+            // Check window's conceal level (0=show, 1=replace, 2=hide, 3=completely hide)
+            const conceal_level = window.options.conceallevel;
+
             var cache_hit = false;
 
             // Try to get cached highlights first
@@ -286,7 +295,7 @@ fn renderWindowBaseLayer(
 
             // Cache miss - compute via tree-sitter and cache the result
             if (!cache_hit) {
-                if (syntax_highlighter) |*sh| {
+                if (lang_tree_highlighter) |*lth| {
                     const range = Range{
                         .start_byte = @intCast(text_byte_offset),
                         .end_byte = @intCast(text_byte_offset + remaining.len),
@@ -296,10 +305,11 @@ fn renderWindowBaseLayer(
                     var spans_to_cache: std.ArrayList(StyleSpan) = .empty;
                     defer spans_to_cache.deinit(display.allocator);
 
-                    var iter = sh.highlights(range) catch null;
+                    var iter = lth.highlights(range) catch null;
                     if (iter) |*it| {
                         defer it.deinit();
-                        while (it.next()) |styled| {
+                        // MultiTreeStyledHighlightIterator.next() returns !?StyledHighlight
+                        while (it.next() catch null) |styled| {
                             const range_start = if (styled.range.start_byte >= text_byte_offset)
                                 styled.range.start_byte - text_byte_offset
                             else
@@ -313,6 +323,10 @@ fn renderWindowBaseLayer(
                             var byte_offset = range_start;
                             while (byte_offset < range_end) : (byte_offset += 1) {
                                 highlight_map.put(byte_offset, styled.style) catch {};
+                                // Track concealed bytes (for conceallevel >= 2)
+                                if (styled.conceal != null and conceal_level >= 2) {
+                                    conceal_set.put(byte_offset, {}) catch {};
+                                }
                             }
 
                             // Collect span for caching (relative to line start, not scroll)
@@ -391,6 +405,13 @@ fn renderWindowBaseLayer(
             while (byte_idx < remaining.len and screen_col < region.col + region.width) {
                 const char_len = std.unicode.utf8ByteSequenceLength(remaining[byte_idx]) catch 1;
                 if (byte_idx + char_len > remaining.len) break;
+
+                // Skip concealed characters (conceallevel >= 2)
+                // This hides markdown code fence delimiters (```typescript) in popups
+                if (conceal_set.contains(byte_idx)) {
+                    byte_idx += char_len;
+                    continue;
+                }
 
                 const codepoint = std.unicode.utf8Decode(remaining[byte_idx..][0..char_len]) catch ' ';
 
@@ -554,12 +575,12 @@ fn renderWindowBaseLayer(
     // Note: We can't access editor.logger here, so this goes to stderr
     // The high-level Phase 2 timing goes to Chrome console from display.zig
     if (RENDER_TIMING_DEBUG and is_floating) {
-        std.debug.print("\n🔍 Phase2 Breakdown: Setup={d:.2}ms Syntax={d:.2}ms Namespace={d:.2}ms CharLoop={d:.2}ms HasSyntax={} Rows={d}\n", .{
+        std.debug.print("\n🔍 Phase2 Breakdown: Setup={d:.2}ms Syntax={d:.2}ms Namespace={d:.2}ms CharLoop={d:.2}ms HasLangTree={} Rows={d}\n", .{
             @as(f64, @floatFromInt(setup_time)) / 1_000_000.0,
             @as(f64, @floatFromInt(syntax_time)) / 1_000_000.0,
             @as(f64, @floatFromInt(namespace_time)) / 1_000_000.0,
             @as(f64, @floatFromInt(char_loop_time)) / 1_000_000.0,
-            ctx.syntax != null,
+            ctx.language_tree != null,
             region.height,
         });
     }

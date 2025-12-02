@@ -135,6 +135,15 @@ pub const OPTIONS = [_]OptionMeta{
     },
 
     .{
+        .name = "concealcursor",
+        .short_name = "cocu",
+        .js_name = "concealCursor",
+        .type = .string,
+        .default = .{ .string = "" }, // "n", "v", "i", "c" or combinations like "nv"
+        .scope = .window,
+    },
+
+    .{
         .name = "spell",
         .short_name = null,
         .js_name = "spell",

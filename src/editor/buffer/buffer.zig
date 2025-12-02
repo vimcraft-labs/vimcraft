@@ -2,6 +2,7 @@ const std = @import("std");
 const Rope = @import("rope.zig").Rope;
 const Syntax = @import("../treesitter/syntax.zig").Syntax;
 const HighlightCache = @import("../highlight_cache.zig").HighlightCache;
+const LanguageTree = @import("../treesitter/language_tree.zig").LanguageTree;
 
 /// Cursor position in the buffer
 pub const Cursor = struct {
@@ -78,6 +79,10 @@ pub const Buffer = struct {
     // Each buffer owns its own Syntax instance for proper floating window highlighting
     syntax: ?*Syntax = null,
 
+    // LanguageTree for language injections (replaces Syntax when injections are needed)
+    // Supports recursive injection parsing (e.g., Markdown with code blocks)
+    language_tree: ?*LanguageTree = null,
+
     // Highlight cache for efficient rendering (avoids re-computing syntax on every render)
     // Cache is invalidated on buffer edits, filetype change, or explicit request
     highlight_cache: ?*HighlightCache = null,
@@ -106,6 +111,9 @@ pub const Buffer = struct {
 
         // Clean up syntax highlighting
         self.deinitSyntax();
+
+        // Clean up language tree (for injections)
+        self.deinitLanguageTree();
 
         // Clean up highlight cache
         self.deinitHighlightCache();
@@ -710,6 +718,76 @@ pub const Buffer = struct {
             self.allocator.destroy(syntax_ptr);
             self.syntax = null;
         }
+    }
+
+    /// Initialize language tree for this buffer (supports injections)
+    /// Use this instead of initSyntax when you need language injection support
+    /// (e.g., Markdown with code blocks, HTML with embedded JS)
+    pub fn initLanguageTree(self: *Buffer, lang_name: []const u8) !void {
+        // Clean up existing language tree if any
+        self.deinitLanguageTree();
+
+        // Also clean up syntax (they're mutually exclusive)
+        self.deinitSyntax();
+
+        // Create LanguageTree (handles its own parsing)
+        const tree_ptr = LanguageTree.init(self.allocator, lang_name) catch |err| {
+            switch (err) {
+                error.LanguageNotFound => return, // Language not supported, silently ignore
+                else => return,
+            }
+        };
+
+        // Get buffer content for parsing
+        const source = self.content.toString() catch {
+            tree_ptr.deinit();
+            self.allocator.destroy(tree_ptr);
+            return;
+        };
+        defer self.allocator.free(source);
+
+        // Parse and process injections
+        tree_ptr.parse(source) catch {
+            tree_ptr.deinit();
+            self.allocator.destroy(tree_ptr);
+            return;
+        };
+
+        self.language_tree = tree_ptr;
+    }
+
+    /// Clean up language tree
+    /// Called on deinit or when filetype changes
+    pub fn deinitLanguageTree(self: *Buffer) void {
+        if (self.language_tree) |tree_ptr| {
+            tree_ptr.deinit();
+            self.allocator.destroy(tree_ptr);
+            self.language_tree = null;
+        }
+    }
+
+    /// Update language tree after buffer modifications
+    /// Re-parses the content and processes injections
+    pub fn updateLanguageTree(self: *Buffer) void {
+        const tree_ptr = self.language_tree orelse return;
+
+        // Get buffer content
+        const source = self.content.toString() catch return;
+        defer self.allocator.free(source);
+
+        // Invalidate and re-parse
+        tree_ptr.invalidate();
+        tree_ptr.parse(source) catch return;
+    }
+
+    /// Check if this buffer has language injection support
+    pub fn hasLanguageTree(self: *const Buffer) bool {
+        return self.language_tree != null;
+    }
+
+    /// Get the language tree (for highlighting with injections)
+    pub fn getLanguageTree(self: *Buffer) ?*LanguageTree {
+        return self.language_tree;
     }
 
     /// Clean up highlight cache

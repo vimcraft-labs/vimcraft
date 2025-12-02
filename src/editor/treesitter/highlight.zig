@@ -21,6 +21,7 @@ const std = @import("std");
 const c_api = @import("c_api.zig");
 const c = c_api.c;
 const Query = @import("query.zig").Query;
+const predicates = @import("predicates.zig");
 
 /// Byte range in source file
 pub const Range = struct {
@@ -34,6 +35,9 @@ pub const Highlight = struct {
     range: Range,
     capture_name: []const u8, // Borrowed from query (e.g., "function.name", "keyword")
     capture_index: u32, // Index in query captures
+    /// Conceal replacement text (empty string = hide completely, null = no conceal)
+    /// Set from #set! conceal "..." directive in query
+    conceal: ?[]const u8 = null,
 };
 
 /// Iterator errors
@@ -118,6 +122,12 @@ pub const HighlightIterator = struct {
                 const start_byte = c.ts_node_start_byte(node);
                 const end_byte = c.ts_node_end_byte(node);
 
+                // Get conceal metadata from pattern predicates
+                const conceal = predicates.getConcealForPattern(
+                    self.query,
+                    self.current_match.pattern_index,
+                );
+
                 return Highlight{
                     .range = Range{
                         .start_byte = start_byte,
@@ -125,6 +135,7 @@ pub const HighlightIterator = struct {
                     },
                     .capture_name = capture_name,
                     .capture_index = capture.index,
+                    .conceal = conceal,
                 };
             }
 
