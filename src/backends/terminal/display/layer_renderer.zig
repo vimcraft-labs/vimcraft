@@ -2,6 +2,7 @@ const std = @import("std");
 const Display = @import("display.zig").Display;
 const Buffer = @import("../../../editor/buffer/buffer.zig").Buffer;
 const Editor = @import("../../../editor/editor.zig").Editor;
+const SearchMatch = @import("../../../editor/editor.zig").SearchMatch;
 const EditorContext = @import("../../headless/editor_context.zig").EditorContext;
 const highlights = @import("../../../editor/config/highlights.zig");
 const VisualState = @import("../../../editor/visual/visual.zig").VisualState;
@@ -56,6 +57,7 @@ pub fn updateLayers(
     self.gutter_layer.clear();
     self.cursor_layer.clear();
     self.yank_layer.clear();
+    self.search_layer.clear();
 
     // CRITICAL FIX: Don't clear selection layer on every render!
     // Selection layer should only be cleared when:
@@ -69,12 +71,23 @@ pub fn updateLayers(
     }
     // Note: virtual_text_layer is managed by plugins via JSI
 
+    // Get search matches from editor (only for Editor type, not EditorContext)
+    const search_matches = if (T == *Editor)
+        editor.getSearchMatches()
+    else
+        &[_]SearchMatch{};
+    const search_match_index = if (T == *Editor)
+        editor.search_match_index
+    else
+        null;
+
     // Update each layer in logical order (not z-order)
     // All layers now use unified registry (Neovim/Helix pattern)
     try updateBaseLayer(self, editor, registry, text_rows, list_enabled, listchars);
     try updateGutterLayer(self, buffer, registry, text_rows);
     try updateSelectionLayer(self, buffer, visual_state, registry, text_rows);
     try updateYankLayer(self, buffer, yank_highlight, registry, text_rows);
+    try updateSearchLayer(self, buffer, search_matches, search_match_index, registry, text_rows);
     try updateCursorLayer(self, buffer, registry, cursorline_enabled, text_rows);
 
     // Virtual text layer is updated by plugins, so skip it here
@@ -426,6 +439,102 @@ fn updateYankLayer(
     }
 
     self.yank_layer.markDirty();
+}
+
+/// Update search layer: Render search match highlights (z=500)
+fn updateSearchLayer(
+    self: *Display,
+    buffer: *const Buffer,
+    search_matches: []const SearchMatch,
+    current_match_index: ?usize,
+    registry: *const HighlightRegistry,
+    text_rows: usize,
+) !void {
+    if (search_matches.len == 0) return;
+
+    // Get Search highlight from unified registry (Neovim: Search = all matches)
+    // IncSearch highlight is for current match (during search)
+    const search_style = registry.get("Search");
+    const search_bg = if (search_style.bg) |c|
+        convertColor(c)
+    else
+        highlights.Color{ .r = 255, .g = 255, .b = 0 }; // Default: yellow
+    const search_fg: ?highlights.Color = if (search_style.fg) |c|
+        convertColor(c)
+    else
+        null; // No default fg, use underlying text color
+
+    // CurSearch highlight for current match (Neovim 0.8+)
+    const cursearch_style = registry.get("CurSearch");
+    const cursearch_bg = if (cursearch_style.bg) |c|
+        convertColor(c)
+    else
+        highlights.Color{ .r = 255, .g = 128, .b = 0 }; // Default: orange
+    const cursearch_fg: ?highlights.Color = if (cursearch_style.fg) |c|
+        convertColor(c)
+    else
+        null;
+
+    const gutter_width = self.gutter_manager.getTotalWidth();
+    const text_cols = if (self.terminal_cols > gutter_width)
+        self.terminal_cols - gutter_width
+    else
+        self.terminal_cols;
+
+    // Iterate through all search matches
+    for (search_matches, 0..) |match, match_idx| {
+        // Check if match is in visible viewport
+        if (match.line < self.viewport_top or match.line >= self.viewport_top + text_rows) {
+            continue;
+        }
+
+        const screen_row = match.line - self.viewport_top;
+
+        // Get line content to calculate display column
+        if (match.line >= buffer.lineCount()) continue;
+
+        const line = buffer.getLine(match.line).?;
+        defer buffer.allocator.free(line);
+        const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
+            line[0 .. line.len - 1]
+        else
+            line;
+
+        // Apply horizontal scroll
+        const h_offset = self.viewport_left;
+        const start_col = if (h_offset > 0)
+            char_width.displayColumnToByte(line_without_newline, h_offset)
+        else
+            0;
+
+        // Check if match is visible after horizontal scroll
+        if (match.col + match.len <= start_col) continue;
+        if (match.col >= start_col + text_cols) continue;
+
+        // Calculate visible portion of match
+        const visible_start = if (match.col > start_col)
+            match.col - start_col
+        else
+            0;
+        const visible_end = @min(match.col + match.len - start_col, text_cols);
+
+        // Use CurSearch for current match, Search for others
+        const is_current = current_match_index != null and match_idx == current_match_index.?;
+        const bg = if (is_current) cursearch_bg else search_bg;
+        const fg = if (is_current) cursearch_fg else search_fg;
+
+        // Render highlight for each column in the match
+        var col = visible_start;
+        while (col < visible_end) : (col += 1) {
+            self.search_layer.grid.setCell(screen_row, gutter_width + col, .{
+                .char = 0, // Null char = transparent, shows underlying text
+                .bg = bg,
+                .fg = fg,
+            });
+        }
+    }
+
+    self.search_layer.markDirty();
 }
 
 /// Convert tree-sitter Style.Color to terminal highlights.Color

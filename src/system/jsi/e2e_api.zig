@@ -1246,6 +1246,27 @@ fn ptyRender(
     // the animation callbacks never execute during E2E tests
     _ = animation_api.processFrames(ctx.allocator);
 
+    // Compute the proper status text based on editor mode (same logic as terminal backend)
+    var status_buf: [256]u8 = undefined;
+    const status: []const u8 = blk: {
+        if (editor.mode_manager.isCommand()) {
+            const cmd_str = editor.getCommandString();
+            const len = std.fmt.bufPrint(&status_buf, ":{s}", .{cmd_str}) catch break :blk "";
+            break :blk status_buf[0..len.len];
+        } else if (editor.mode_manager.isSearch()) {
+            const search_char = editor.search_direction.getChar();
+            const search_buf = editor.getSearchBuffer();
+            const len = std.fmt.bufPrint(&status_buf, "{c}{s}", .{ search_char, search_buf }) catch break :blk "";
+            break :blk status_buf[0..len.len];
+        } else if (editor.mode_manager.isInsert()) {
+            break :blk "-- INSERT --";
+        } else if (editor.mode_manager.isVisual()) {
+            break :blk "-- VISUAL --";
+        } else {
+            break :blk "-- NORMAL --";
+        }
+    };
+
     // Trigger a render cycle
     // When capture mode is active (for PTY testing), always use full render
     // to generate ANSI escape codes. Otherwise, use headless for clean output.
@@ -1262,7 +1283,7 @@ fn ptyRender(
             // Floating windows don't require window_layout (they store their own screen position)
             display.renderAllWindows(
                 editor,
-                "-- NORMAL --",
+                status,
                 ctx.visual_state,
                 &editor.yank_highlight,
                 false, // cursorline disabled
@@ -1282,7 +1303,7 @@ fn ptyRender(
             // Single-window path: Original render for backwards compatibility
             display.render(
                 editor,
-                "-- NORMAL --", // Default status line
+                status,
                 false, // cursorline disabled
                 ctx.visual_state,
                 &editor.yank_highlight,
@@ -1313,7 +1334,7 @@ fn ptyRender(
         // This keeps stdout clean for JSON test results
         display.renderHeadless(
             editor,
-            "-- NORMAL --",
+            status,
             false,
             ctx.visual_state,
             &editor.yank_highlight,

@@ -11,6 +11,7 @@ pub const ZIndex = struct {
     pub const CURSOR: i32 = 200; // Text cursor
     pub const VIRTUAL_TEXT: i32 = 300; // Inline diagnostics, hints
     pub const SELECTION: i32 = 400; // Visual mode selection
+    pub const YANK: i32 = 450; // Yank flash highlights
     pub const SEARCH: i32 = 500; // Search highlights
     pub const FLOAT: i32 = 600; // Floating windows (LSP popups)
     pub const CMDLINE: i32 = 700; // Command line
@@ -418,7 +419,8 @@ pub const LayerManager = struct {
             std.mem.eql(u8, name, "cursor") or
             std.mem.eql(u8, name, "virtual_text") or
             std.mem.eql(u8, name, "selection") or
-            std.mem.eql(u8, name, "yank");
+            std.mem.eql(u8, name, "yank") or
+            std.mem.eql(u8, name, "search");
     }
 };
 

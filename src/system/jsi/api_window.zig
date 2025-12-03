@@ -953,6 +953,7 @@ pub export fn apiGetMode(
             .insert => "i",
             .visual => "v",
             .command => "c",
+            .search => "c", // Search mode uses same indicator as command mode
         };
     } else "n"; // Default to normal
 

@@ -2376,6 +2376,52 @@ export interface VimFunctions {
   /** Split string */
   split(string: string, pattern: string): string[];
 
+  // === Search Register Functions ===
+
+  /**
+   * Get the contents of a register
+   * @param regname - Register name (e.g., '/', '"', 'a')
+   * @returns Register contents as string, empty string if not found
+   *
+   * Currently supported registers:
+   * - `/` - Last search pattern
+   *
+   * @example
+   * // Get current search pattern
+   * const pattern = vim.fn.getReg('/');
+   * console.log('Searching for:', pattern);
+   */
+  getReg(regname: string): string;
+
+  /**
+   * Set the contents of a register
+   * @param regname - Register name (e.g., '/', '"', 'a')
+   * @param value - Value to set
+   *
+   * Currently supported registers:
+   * - `/` - Set search pattern (triggers search highlighting)
+   *
+   * @example
+   * // Set search pattern programmatically
+   * vim.fn.setReg('/', 'TODO');
+   * // Now 'n' and 'N' will navigate to TODO matches
+   */
+  setReg(regname: string, value: string): void;
+
+  /**
+   * Search for a pattern in the buffer
+   * @param pattern - Search pattern
+   * @param flags - Optional search flags (not yet implemented)
+   * @returns Line number if found, 0 if not found
+   *
+   * @example
+   * const found = vim.fn.search('function');
+   * if (found > 0) {
+   *   console.log('Found on line:', found);
+   * }
+   */
+  search(pattern: string, flags?: string): number;
+
   // Allow calling any function by name
   [key: string]: (...args: any[]) => any;
 }
@@ -5922,6 +5968,36 @@ export interface VimCmd {
    * Close the current window.
    */
   close(): void;
+
+  // === Search Commands ===
+
+  /**
+   * Clear search highlighting.
+   * The search pattern is preserved for n/N navigation.
+   *
+   * @example
+   * vim.fn.setReg('/', 'TODO');
+   * // Matches are highlighted...
+   * vim.cmd.nohlsearch();
+   * // Highlighting cleared, but 'n' still works
+   */
+  nohlsearch(): void;
+
+  /**
+   * Clear search highlighting (short form).
+   * Alias for nohlsearch().
+   */
+  noh(): void;
+
+  /**
+   * Execute a Vim command string.
+   * @param cmd - Command to execute (e.g., "normal! dd", "set number")
+   *
+   * @example
+   * vim.cmd.execute("normal! gg");
+   * vim.cmd.execute("set cursorline");
+   */
+  execute(cmd: string): void;
 }
 
 export interface Vim {

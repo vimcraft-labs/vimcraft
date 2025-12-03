@@ -233,11 +233,9 @@ export fn consoleLog(
         editor.logger.info("{s}", .{log_message}) catch {};
     } else if (global_editor_context) |ctx| {
         ctx.logger().info("{s}", .{log_message}) catch {};
-    } else {
-        // Fallback: write to stderr if no logger is set
-        // This helps debug issues where setEditor wasn't called correctly
-        std.debug.print("[console.log] {s}\n", .{log_message});
     }
+    // Note: If no logger is set, logs are still captured by e2e_api.captureLog() above
+    // We silently drop them rather than printing to stderr which causes TUI flashing
 
     return c.hermes_value_create_undefined(runtime_nullable);
 }

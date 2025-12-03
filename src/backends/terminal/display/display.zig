@@ -134,7 +134,8 @@ pub const Display = struct {
     cursor_layer: *Layer, // Cursor highlight (z=200)
     virtual_text_layer: *Layer, // Plugin overlays (z=300)
     selection_layer: *Layer, // Visual mode (z=400)
-    yank_layer: *Layer, // Yank highlight (z=500)
+    yank_layer: *Layer, // Yank highlight (z=450)
+    search_layer: *Layer, // Search highlights (z=500)
 
     // Gutter system (line numbers, signs, etc.)
     gutter_manager: gutter.GutterManager,
@@ -267,7 +268,8 @@ pub const Display = struct {
         const cursor = try layer_manager.createLayer(ZIndex.CURSOR, 24, 80, "cursor");
         const virtual_text = try layer_manager.createLayer(ZIndex.VIRTUAL_TEXT, 24, 80, "virtual_text");
         const selection = try layer_manager.createLayer(ZIndex.SELECTION, 24, 80, "selection");
-        const yank = try layer_manager.createLayer(ZIndex.SEARCH, 24, 80, "yank"); // Reuse SEARCH z-index
+        const yank = try layer_manager.createLayer(ZIndex.YANK, 24, 80, "yank");
+        const search_layer = try layer_manager.createLayer(ZIndex.SEARCH, 24, 80, "search");
 
         // PHASE 6: Enable caching for static layers (huge performance win)
         // TEMPORARY FIX: Disable gutter caching due to override bug
@@ -299,6 +301,7 @@ pub const Display = struct {
             .virtual_text_layer = virtual_text,
             .selection_layer = selection,
             .yank_layer = yank,
+            .search_layer = search_layer,
             .gutter_manager = gutter_mgr,
             .line_number_config = .{}, // Default: no line numbers
             .sign_column_config = .{}, // Default: no sign column

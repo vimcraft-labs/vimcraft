@@ -44,6 +44,7 @@ pub const TerminalBackend = struct {
     last_mode_is_insert: bool = false,
     last_mode_is_visual: bool = false,
     last_mode_is_command: bool = false,
+    last_mode_is_search: bool = false,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -845,12 +846,15 @@ pub const TerminalBackend = struct {
         const current_mode_is_insert = self.editor.mode_manager.isInsert();
         const current_mode_is_visual = self.editor.mode_manager.isVisual();
         const current_mode_is_command = self.editor.mode_manager.isCommand();
+        const current_mode_is_search = self.editor.mode_manager.isSearch();
         const mode_changed = (current_mode_is_insert != self.last_mode_is_insert) or
             (current_mode_is_visual != self.last_mode_is_visual) or
-            (current_mode_is_command != self.last_mode_is_command);
+            (current_mode_is_command != self.last_mode_is_command) or
+            (current_mode_is_search != self.last_mode_is_search);
         self.last_mode_is_insert = current_mode_is_insert;
         self.last_mode_is_visual = current_mode_is_visual;
         self.last_mode_is_command = current_mode_is_command;
+        self.last_mode_is_search = current_mode_is_search;
 
         // CRITICAL FIX: Detect if viewport scroll is needed
         // If cursor moved beyond viewport boundaries, we MUST do a full render to update screen content
@@ -912,8 +916,9 @@ pub const TerminalBackend = struct {
         // CRITICAL FIX: Also check mode_changed for status line updates (i/ESC changes mode display)
         // CRITICAL FIX: Also check js_state_changed for hot reload (highlight changes require full render)
         // CRITICAL FIX: Also check current_mode_is_command - command mode needs full render to show command buffer
+        // CRITICAL FIX: Also check current_mode_is_search - search mode needs full render to show search buffer
         // CRITICAL FIX: Also check has_multiple_windows - renderCursorOnly doesn't handle window offsets!
-        if (!has_multiple_windows and !buffer_changed and !yank_active and !visual_active and !viewport_scroll_needed and !viewport_top_changed and !needs_layer_update and !mode_changed and !js_state_changed and !current_mode_is_command) {
+        if (!has_multiple_windows and !buffer_changed and !yank_active and !visual_active and !viewport_scroll_needed and !viewport_top_changed and !needs_layer_update and !mode_changed and !js_state_changed and !current_mode_is_command and !current_mode_is_search) {
             // Only cursor moved (Normal mode) - use lightweight path
             try self.display.renderCursorOnly(self.editor);
 
@@ -972,6 +977,8 @@ pub const TerminalBackend = struct {
 
         const status = if (self.editor.mode_manager.isCommand())
             try std.fmt.allocPrint(self.allocator, ":{s}", .{self.editor.getCommandString()})
+        else if (self.editor.mode_manager.isSearch())
+            try std.fmt.allocPrint(self.allocator, "{c}{s}", .{ self.editor.search_direction.getChar(), self.editor.getSearchBuffer() })
         else if (showmode_enabled and self.editor.mode_manager.isInsert())
             try self.allocator.dupe(u8, "-- INSERT --")
         else if (showmode_enabled and self.editor.mode_manager.isVisual())

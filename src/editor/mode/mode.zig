@@ -6,6 +6,7 @@ pub const Mode = enum {
     insert,
     visual,
     command,
+    search,
 
     pub fn toString(self: Mode) []const u8 {
         return switch (self) {
@@ -13,6 +14,7 @@ pub const Mode = enum {
             .insert => "INSERT",
             .visual => "VISUAL",
             .command => "COMMAND",
+            .search => "SEARCH",
         };
     }
 };
@@ -47,6 +49,11 @@ pub const ModeManager = struct {
         self.current_mode = .command;
     }
 
+    /// Enter Search mode
+    pub fn enterSearch(self: *ModeManager) void {
+        self.current_mode = .search;
+    }
+
     /// Check if in Normal mode
     pub fn isNormal(self: *const ModeManager) bool {
         return self.current_mode == .normal;
@@ -65,6 +72,11 @@ pub const ModeManager = struct {
     /// Check if in Command mode
     pub fn isCommand(self: *const ModeManager) bool {
         return self.current_mode == .command;
+    }
+
+    /// Check if in Search mode
+    pub fn isSearch(self: *const ModeManager) bool {
+        return self.current_mode == .search;
     }
 
     /// Get current mode as string

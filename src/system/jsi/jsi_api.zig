@@ -43,6 +43,7 @@ pub const api_window = @import("api_window.zig");
 pub const namespace_api = @import("namespace_api.zig");
 pub const diagnostic_api = @import("diagnostic_api.zig");
 pub const treesitter_api = @import("treesitter_api.zig");
+pub const search_api = @import("search_api.zig");
 
 // Import new transpiler system
 const transpiler = @import("../transpiler/loader.zig");
@@ -433,6 +434,14 @@ pub fn initJSI(
     } else if (T == *EditorContext) {
         diagnostic_api.registerForEditorContext(runtime, editor_or_context, allocator);
     }
+
+    // Register search API (vim.fn.setReg('/', ...), vim.cmd.nohlsearch(), etc.)
+    if (T == *Editor) {
+        search_api.setEditorContext(editor_or_context);
+    } else if (T == *EditorContext) {
+        search_api.setEditorContext(&editor_or_context.editor);
+    }
+    search_api.registerSearchApi(runtime);
 
     // JSI functions registered (silent mode)
 }

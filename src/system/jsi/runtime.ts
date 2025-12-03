@@ -210,6 +210,13 @@ declare function __ptyKill(id: number, signal: string | number): boolean;
 declare function __nativeFetch(id: number, url: string, options: object): void;
 declare function __abortFetch(id: number): void;
 
+// Search API native functions
+declare function vimSearchGetPattern(): string;
+declare function vimSearchSetPattern(pattern: string): void;
+declare function vimSearchClearHighlight(): void;
+declare function vimSearchClearPattern(): void;
+declare function vimGetWordUnderCursor(): string;
+
 // ============================================================================
 // Console API
 // ============================================================================
@@ -971,6 +978,8 @@ const vimFn = {
     } else if (expr === '%:t') {
       const name = vimApi.bufGetName(0);
       return name.split('/').pop() || '';
+    } else if (expr === '<cword>') {
+      return vimGetWordUnderCursor();
     }
     return expr;
   },
@@ -1204,6 +1213,43 @@ const vimFn = {
   screenBg(row: number, col: number): number | null {
     return vimLayer.screenBg(row, col);
   },
+
+  // ========== Search Functions ==========
+
+  /**
+   * Get the current search pattern (like vim.fn.getReg('/'))
+   */
+  getReg(regname: string): string {
+    if (regname === '/') {
+      return vimSearchGetPattern();
+    }
+    return '';
+  },
+
+  /**
+   * Set a register value (like vim.fn.setReg('/', 'pattern'))
+   * Currently only '/' (search) register is supported
+   */
+  setReg(regname: string, value: string): void {
+    if (regname === '/') {
+      if (value === '') {
+        vimSearchClearPattern();
+      } else {
+        vimSearchSetPattern(value);
+      }
+    }
+  },
+
+  /**
+   * Search for pattern (like vim.fn.search())
+   * Returns line number of match, 0 if not found
+   */
+  search(pattern: string, flags?: string): number {
+    if (pattern) {
+      vimSearchSetPattern(pattern);
+    }
+    return 0; // TODO: Return actual line number
+  },
 };
 
 Object.freeze(vimFn);
@@ -1387,6 +1433,21 @@ const vimCmd = {
 
   close(): void {
     if (typeof vimCmdClose !== 'undefined') vimCmdClose();
+  },
+
+  /**
+   * Clear search highlighting (like :nohlsearch)
+   * Keeps the search pattern for n/N navigation
+   */
+  nohlsearch(): void {
+    vimSearchClearHighlight();
+  },
+
+  /**
+   * Alias for nohlsearch (common abbreviation)
+   */
+  noh(): void {
+    vimSearchClearHighlight();
   },
 };
 

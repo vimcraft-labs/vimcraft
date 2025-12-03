@@ -113,6 +113,26 @@ const PendingTextObject = struct {
     }
 };
 
+/// Search direction (/ = forward, ? = backward)
+pub const SearchDirection = enum {
+    forward,
+    backward,
+
+    pub fn getChar(self: SearchDirection) u8 {
+        return switch (self) {
+            .forward => '/',
+            .backward => '?',
+        };
+    }
+};
+
+/// Search match position (line and column)
+pub const SearchMatch = struct {
+    line: usize,
+    col: usize,
+    len: usize, // Length of match for highlighting
+};
+
 /// Command buffer for command mode
 const CommandBuffer = struct {
     buffer: std.ArrayList(u8),
@@ -214,6 +234,14 @@ pub const Editor = struct {
     pending_text_object: PendingTextObject,
     cmd_buffer: CommandBuffer,
 
+    // Search state
+    search_buffer: CommandBuffer, // Input buffer for search pattern
+    search_pattern: std.ArrayList(u8), // Last successful search pattern (for n/N)
+    search_pattern_saved: std.ArrayList(u8), // Pattern saved when entering search mode (for ESC restore)
+    search_direction: SearchDirection, // Forward (/) or backward (?)
+    search_matches: std.ArrayList(SearchMatch), // All matches in current buffer
+    search_match_index: ?usize, // Current match index (null = no matches)
+
     // Viewport commands - set when ready for backend execution
     // Separate from pending_cmd to allow immediate execution during keymap strings
     viewport_movement: ?u8 = null, // H/M/L - move cursor to viewport top/middle/bottom
@@ -310,6 +338,13 @@ pub const Editor = struct {
             .pending_register = PendingRegister{},
             .pending_text_object = PendingTextObject{},
             .cmd_buffer = CommandBuffer.init(allocator),
+            // Search state
+            .search_buffer = CommandBuffer.init(allocator),
+            .search_pattern = .empty,
+            .search_pattern_saved = .empty,
+            .search_direction = .forward,
+            .search_matches = .empty,
+            .search_match_index = null,
             // Window management
             .windows = windows,
             .current_window_id = initial_win_id,
@@ -481,6 +516,11 @@ pub const Editor = struct {
         self.parser.deinit();
         self.highlight_registry.deinit();
         self.cmd_buffer.deinit();
+        // Search state cleanup
+        self.search_buffer.deinit();
+        self.search_pattern.deinit(self.allocator);
+        self.search_pattern_saved.deinit(self.allocator);
+        self.search_matches.deinit(self.allocator);
         self.logger.deinit();
     }
 
@@ -1404,6 +1444,8 @@ pub const Editor = struct {
             return try self.handleVisualMode(input);
         } else if (self.mode_manager.isCommand()) {
             return try self.handleCommandMode(input);
+        } else if (self.mode_manager.isSearch()) {
+            return try self.handleSearchMode(input);
         }
         return false; // Unknown mode, no state change
     }
@@ -1691,6 +1733,14 @@ pub const Editor = struct {
                         movement.moveToFileStart(buf);
                         self.pending_cmd.clear();
                         return true; // Moved to file start
+                    } else if (char == '*') { // g* - search word under cursor (no word boundaries)
+                        try self.searchWordUnderCursor(true, false); // forward, no word boundary
+                        self.pending_cmd.clear();
+                        return true; // Cursor moved
+                    } else if (char == '#') { // g# - search word under cursor backward (no word boundaries)
+                        try self.searchWordUnderCursor(false, false); // backward, no word boundary
+                        self.pending_cmd.clear();
+                        return true; // Cursor moved
                     } else {
                         // Not a valid g-command (e.g., user pressed g then G)
                         // Clear pending and fall through to process char as standalone command
@@ -2015,6 +2065,52 @@ pub const Editor = struct {
                     self.cmd_buffer.clear();
                     self.mode_manager.enterCommand();
                     return true; // Mode changed
+                },
+
+                // Enter search mode (forward)
+                '/' => {
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
+                    self.search_buffer.clear();
+                    self.search_direction = .forward;
+                    // Save current pattern for ESC restore (Neovim behavior)
+                    self.search_pattern_saved.clearRetainingCapacity();
+                    try self.search_pattern_saved.appendSlice(self.allocator, self.search_pattern.items);
+                    self.mode_manager.enterSearch();
+                    return true; // Mode changed
+                },
+
+                // Enter search mode (backward)
+                '?' => {
+                    self.pending_cmd.clear();
+                    self.pending_register.clear();
+                    self.search_buffer.clear();
+                    self.search_direction = .backward;
+                    // Save current pattern for ESC restore (Neovim behavior)
+                    self.search_pattern_saved.clearRetainingCapacity();
+                    try self.search_pattern_saved.appendSlice(self.allocator, self.search_pattern.items);
+                    self.mode_manager.enterSearch();
+                    return true; // Mode changed
+                },
+
+                // Search navigation
+                'n' => {
+                    try self.searchNext();
+                    return true; // Cursor moved
+                },
+                'N' => {
+                    try self.searchPrevious();
+                    return true; // Cursor moved
+                },
+
+                // Search word under cursor (* and #)
+                '*' => {
+                    try self.searchWordUnderCursor(true, true); // forward, whole word
+                    return true; // Cursor moved
+                },
+                '#' => {
+                    try self.searchWordUnderCursor(false, true); // backward, whole word
+                    return true; // Cursor moved
                 },
 
                 // Enter visual mode
@@ -2702,6 +2798,445 @@ pub const Editor = struct {
         }
     }
 
+    /// Handle input in Search mode (/ or ?)
+    /// Returns true if state changed (needs re-render), false if no-op
+    fn handleSearchMode(self: *Editor, input: []const u8) !bool {
+        if (input.len != 1) {
+            return false;
+        }
+
+        const char = input[0];
+
+        switch (char) {
+            27 => { // ESC - cancel search, restore previous pattern (Neovim behavior)
+                self.search_buffer.clear();
+                // Restore the saved pattern
+                self.search_pattern.clearRetainingCapacity();
+                try self.search_pattern.appendSlice(self.allocator, self.search_pattern_saved.items);
+                // Re-execute search with restored pattern to update highlights
+                try self.executeSearchInternal(false);
+                self.mode_manager.enterNormal();
+                return true; // Mode changed
+            },
+            13 => { // Enter - commit search pattern
+                const pattern = self.search_buffer.getString();
+
+                if (pattern.len > 0) {
+                    // Save the pattern for n/N (already in search_pattern from incsearch)
+                    self.search_pattern.clearRetainingCapacity();
+                    try self.search_pattern.appendSlice(self.allocator, pattern);
+
+                    // Execute the search and move to first match
+                    try self.executeSearch();
+                }
+
+                self.search_buffer.clear();
+                self.mode_manager.enterNormal();
+                return true; // Mode changed
+            },
+            127, 8 => { // Backspace
+                self.search_buffer.backspace();
+                // Update incremental search highlights
+                try self.updateIncSearch();
+                return true; // Search buffer changed
+            },
+            else => {
+                if (char >= 32 and char < 127) {
+                    try self.search_buffer.append(char);
+                    // Update incremental search highlights
+                    try self.updateIncSearch();
+                    return true; // Search buffer changed
+                }
+                return false; // Non-printable character, ignored
+            },
+        }
+    }
+
+    /// Update incremental search highlights as user types
+    /// Only highlights matches, does not move cursor
+    fn updateIncSearch(self: *Editor) !void {
+        // Check if incsearch is enabled
+        const incsearch_enabled = if (self.options_manager) |opts_mgr|
+            opts_mgr.getBoolean("incsearch") orelse true
+        else
+            true; // Default to enabled
+
+        if (!incsearch_enabled) return;
+
+        const pattern = self.search_buffer.getString();
+        if (pattern.len == 0) {
+            // Clear highlights when pattern is empty
+            self.search_matches.clearRetainingCapacity();
+            self.search_match_index = null;
+            return;
+        }
+
+        // Temporarily set the pattern and find matches (no cursor movement)
+        self.search_pattern.clearRetainingCapacity();
+        try self.search_pattern.appendSlice(self.allocator, pattern);
+        try self.executeSearchInternal(false);
+    }
+
+    /// Execute search with current pattern and direction
+    /// Finds all matches and optionally moves cursor to the first match
+    fn executeSearch(self: *Editor) !void {
+        return self.executeSearchInternal(true);
+    }
+
+    /// Execute search - internal version with move_cursor control
+    fn executeSearchInternal(self: *Editor, move_cursor: bool) !void {
+        const buf = self.getCurrentBuffer() orelse {
+            return;
+        };
+        const pattern = self.search_pattern.items;
+
+        // Clear previous matches first
+        self.search_matches.clearRetainingCapacity();
+        self.search_match_index = null;
+
+        if (pattern.len == 0) {
+            return; // No pattern = no matches (already cleared above)
+        }
+
+        // Parse Vim word boundary syntax: \<word\>
+        var actual_pattern = pattern;
+        var require_word_start = false;
+        var require_word_end = false;
+
+        // Check for \< at start (word start boundary)
+        if (actual_pattern.len >= 2 and std.mem.startsWith(u8, actual_pattern, "\\<")) {
+            require_word_start = true;
+            actual_pattern = actual_pattern[2..];
+        }
+        // Check for \> at end (word end boundary)
+        if (actual_pattern.len >= 2 and std.mem.endsWith(u8, actual_pattern, "\\>")) {
+            require_word_end = true;
+            actual_pattern = actual_pattern[0 .. actual_pattern.len - 2];
+        }
+
+        if (actual_pattern.len == 0) {
+            return;
+        }
+
+        // Find all matches in the buffer
+        const line_count = buf.lineCount();
+
+        for (0..line_count) |line_idx| {
+            const line = buf.getLine(line_idx) orelse continue;
+            defer self.allocator.free(line); // getLine returns owned memory
+
+            var col: usize = 0;
+            while (col + actual_pattern.len <= line.len) {
+                if (std.mem.eql(u8, line[col .. col + actual_pattern.len], actual_pattern)) {
+                    // Check word boundaries if required
+                    var is_valid_match = true;
+
+                    if (require_word_start) {
+                        // Character before match must be non-word or at start of line
+                        if (col > 0 and isWordChar(line[col - 1])) {
+                            is_valid_match = false;
+                        }
+                    }
+
+                    if (require_word_end and is_valid_match) {
+                        // Character after match must be non-word or at end of line
+                        const end_col = col + actual_pattern.len;
+                        if (end_col < line.len and isWordChar(line[end_col])) {
+                            is_valid_match = false;
+                        }
+                    }
+
+                    if (is_valid_match) {
+                        try self.search_matches.append(self.allocator, SearchMatch{
+                            .line = line_idx,
+                            .col = col,
+                            .len = actual_pattern.len,
+                        });
+                    }
+                    col += actual_pattern.len; // Skip past this match
+                } else {
+                    col += 1;
+                }
+            }
+        }
+
+        if (self.search_matches.items.len == 0) {
+            self.logger.warn("Pattern not found: {s}", .{pattern}) catch {};
+            return;
+        }
+
+        // Only move cursor if requested (e.g., interactive search with / or ?)
+        // vim.fn.setReg('/', pattern) should NOT move cursor (Neovim behavior)
+        if (!move_cursor) return;
+
+        // Find the first match after cursor position (for forward search)
+        // or before cursor (for backward search)
+        const cursor_line = buf.cursor.row;
+        const cursor_col = buf.cursor.col;
+
+        var target_idx: ?usize = null;
+
+        if (self.search_direction == .forward) {
+            // Find first match after cursor
+            for (self.search_matches.items, 0..) |match, idx| {
+                if (match.line > cursor_line or
+                    (match.line == cursor_line and match.col > cursor_col))
+                {
+                    target_idx = idx;
+                    break;
+                }
+            }
+            // Wrap around to beginning
+            if (target_idx == null and self.search_matches.items.len > 0) {
+                target_idx = 0;
+            }
+        } else {
+            // Find last match before cursor (backward search)
+            var i: usize = self.search_matches.items.len;
+            while (i > 0) {
+                i -= 1;
+                const match = self.search_matches.items[i];
+                if (match.line < cursor_line or
+                    (match.line == cursor_line and match.col < cursor_col))
+                {
+                    target_idx = i;
+                    break;
+                }
+            }
+            // Wrap around to end
+            if (target_idx == null and self.search_matches.items.len > 0) {
+                target_idx = self.search_matches.items.len - 1;
+            }
+        }
+
+        // Move cursor to target match
+        if (target_idx) |idx| {
+            self.search_match_index = idx;
+            const match = self.search_matches.items[idx];
+            buf.cursor.row = match.line;
+            buf.cursor.col = match.col;
+
+            self.logger.info("/{s} [{d}/{d}]", .{
+                pattern,
+                idx + 1,
+                self.search_matches.items.len,
+            }) catch {};
+        }
+    }
+
+    /// Search for next match (n command)
+    /// O(1) navigation through cached matches
+    pub fn searchNext(self: *Editor) !void {
+        if (self.search_pattern.items.len == 0) {
+            self.logger.warn("No previous search pattern", .{}) catch {};
+            return;
+        }
+
+        // If matches are empty but pattern exists (e.g., after nohlsearch), re-execute search
+        if (self.search_matches.items.len == 0) {
+            try self.executeSearch();
+        }
+
+        const matches = self.search_matches.items;
+        if (matches.len == 0) {
+            self.logger.warn("Pattern not found: {s}", .{self.search_pattern.items}) catch {};
+            return;
+        }
+
+        const buf = self.getCurrentBuffer() orelse return;
+
+        // Navigate based on search direction
+        if (self.search_direction == .forward) {
+            // Forward: go to next match (with wrap)
+            if (self.search_match_index) |idx| {
+                self.search_match_index = (idx + 1) % matches.len;
+            } else {
+                self.search_match_index = 0;
+            }
+        } else {
+            // Backward: go to previous match (with wrap)
+            if (self.search_match_index) |idx| {
+                self.search_match_index = if (idx == 0) matches.len - 1 else idx - 1;
+            } else {
+                self.search_match_index = matches.len - 1;
+            }
+        }
+
+        // Move cursor to match
+        const match = matches[self.search_match_index.?];
+        buf.cursor.row = match.line;
+        buf.cursor.col = match.col;
+
+        self.logger.info("/{s} [{d}/{d}]", .{
+            self.search_pattern.items,
+            self.search_match_index.? + 1,
+            matches.len,
+        }) catch {};
+    }
+
+    /// Search for previous match (N command)
+    /// O(1) navigation through cached matches (opposite direction)
+    pub fn searchPrevious(self: *Editor) !void {
+        if (self.search_pattern.items.len == 0) {
+            self.logger.warn("No previous search pattern", .{}) catch {};
+            return;
+        }
+
+        // If matches are empty but pattern exists (e.g., after nohlsearch), re-execute search
+        if (self.search_matches.items.len == 0) {
+            try self.executeSearch();
+        }
+
+        const matches = self.search_matches.items;
+        if (matches.len == 0) {
+            self.logger.warn("Pattern not found: {s}", .{self.search_pattern.items}) catch {};
+            return;
+        }
+
+        const buf = self.getCurrentBuffer() orelse return;
+
+        // Navigate opposite to search direction
+        if (self.search_direction == .forward) {
+            // Forward search, N goes backward
+            if (self.search_match_index) |idx| {
+                self.search_match_index = if (idx == 0) matches.len - 1 else idx - 1;
+            } else {
+                self.search_match_index = matches.len - 1;
+            }
+        } else {
+            // Backward search, N goes forward
+            if (self.search_match_index) |idx| {
+                self.search_match_index = (idx + 1) % matches.len;
+            } else {
+                self.search_match_index = 0;
+            }
+        }
+
+        // Move cursor to match
+        const match = matches[self.search_match_index.?];
+        buf.cursor.row = match.line;
+        buf.cursor.col = match.col;
+
+        self.logger.info("/{s} [{d}/{d}]", .{
+            self.search_pattern.items,
+            self.search_match_index.? + 1,
+            matches.len,
+        }) catch {};
+    }
+
+    /// Get search buffer content (for display in status line)
+    pub fn getSearchBuffer(self: *const Editor) []const u8 {
+        return self.search_buffer.getString();
+    }
+
+    /// Get current search pattern (for highlighting)
+    pub fn getSearchPattern(self: *const Editor) []const u8 {
+        return self.search_pattern.items;
+    }
+
+    /// Get search matches (for highlighting)
+    /// Returns empty slice if hlsearch option is disabled
+    pub fn getSearchMatches(self: *const Editor) []const SearchMatch {
+        // Check hlsearch option - if disabled, don't show highlights
+        if (self.options_manager) |opts_mgr| {
+            const hl_enabled = opts_mgr.getBoolean("hlsearch") orelse true;
+            if (!hl_enabled) {
+                return &[_]SearchMatch{};
+            }
+        }
+        return self.search_matches.items;
+    }
+
+    /// Clear search highlighting (Neovim :nohlsearch equivalent)
+    /// Clears matches but preserves pattern for n/N navigation
+    pub fn clearSearchHighlight(self: *Editor) void {
+        self.search_matches.clearRetainingCapacity();
+        self.search_match_index = null;
+    }
+
+    /// Clear search pattern completely (like vim.fn.setreg('/', ''))
+    /// Clears both pattern and matches
+    pub fn clearSearchPattern(self: *Editor) void {
+        self.search_pattern.clearRetainingCapacity();
+        self.search_matches.clearRetainingCapacity();
+        self.search_match_index = null;
+    }
+
+    /// Set search pattern programmatically (like vim.fn.setreg('/', pattern))
+    /// Sets pattern and finds matches but does NOT move cursor (Neovim behavior)
+    pub fn setSearchPattern(self: *Editor, pattern: []const u8) !void {
+        self.search_pattern.clearRetainingCapacity();
+        try self.search_pattern.appendSlice(self.allocator, pattern);
+        // Execute search to find matches, but don't move cursor
+        // User must press n/N or use * to move to a match
+        try self.executeSearchInternal(false);
+    }
+
+    /// Get word under cursor (for * and # commands)
+    /// Returns null if cursor is not on a word character
+    pub fn getWordUnderCursor(self: *Editor) ?[]const u8 {
+        const buf = self.getCurrentBuffer() orelse return null;
+        const line = buf.getLine(buf.cursor.row) orelse return null;
+        defer buf.allocator.free(line);
+
+        const cursor_col = buf.cursor.col;
+        if (cursor_col >= line.len) return null;
+
+        // Check if we're on a word character
+        if (!isWordChar(line[cursor_col])) return null;
+
+        // Find word boundaries
+        var start = cursor_col;
+        var end = cursor_col;
+
+        // Move start backward to beginning of word
+        while (start > 0 and isWordChar(line[start - 1])) {
+            start -= 1;
+        }
+
+        // Move end forward to end of word
+        while (end < line.len and isWordChar(line[end])) {
+            end += 1;
+        }
+
+        if (start >= end) return null;
+
+        // Return a copy that outlives the line
+        return self.allocator.dupe(u8, line[start..end]) catch null;
+    }
+
+    /// Search for word under cursor (* and # commands)
+    /// whole_word: true for * and #, false for g* and g#
+    /// forward: true for * and g*, false for # and g#
+    pub fn searchWordUnderCursor(self: *Editor, forward: bool, whole_word: bool) !void {
+        _ = whole_word; // TODO: Implement word boundaries when regex engine is added
+
+        const word = self.getWordUnderCursor() orelse {
+            self.logger.warn("No word under cursor", .{}) catch {};
+            return;
+        };
+        defer self.allocator.free(word);
+
+        // Set search direction
+        self.search_direction = if (forward) .forward else .backward;
+
+        // Set pattern and find matches
+        self.search_pattern.clearRetainingCapacity();
+        try self.search_pattern.appendSlice(self.allocator, word);
+
+        // Execute search WITH cursor movement (unlike setReg)
+        // This finds the first match AFTER current cursor position
+        try self.executeSearchInternal(true);
+    }
+
+    /// Helper: Check if character is a word constituent (for * and # commands)
+    fn isWordChar(c: u8) bool {
+        return (c >= 'a' and c <= 'z') or
+            (c >= 'A' and c <= 'Z') or
+            (c >= '0' and c <= '9') or
+            c == '_';
+    }
+
     /// Execute a user-defined command (vim.api.createUserCmd)
     /// Calls the JavaScript callback with args object
     fn executeUserCommand(self: *Editor, user_cmd: *const UserCommand, name: []const u8, args: []const u8, bang: bool) void {
@@ -3078,7 +3613,7 @@ test "Editor: offsetToPosition converts byte offsets correctly" {
     // Create buffer: "line 1\nline 2\nline 3\n"
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "line 1\nline 2\nline 3\n");
 
     // Test offset 0 (start of line 0)
     {
@@ -3117,7 +3652,7 @@ test "Editor: yi( yank highlight shows correct range" {
     // Create buffer with text: "(line 293: src/core/editor.zig:293)\n"
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"(line 293: src/core/editor.zig:293)\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "(line 293: src/core/editor.zig:293)\n");
 
     // Position cursor at colon (col 10) - NOT at the start of the range
     buf.cursor = .{ .row = 0, .col = 10 };
@@ -3142,7 +3677,7 @@ test "Editor: yi[ yank highlight at different cursor position" {
     // Create buffer: "foo[bar]baz\n"
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"foo[bar]baz\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "foo[bar]baz\n");
 
     // Cursor at 'a' in "bar" (col 5)
     buf.cursor = .{ .row = 0, .col = 5 };
@@ -3165,7 +3700,7 @@ test "Editor: yank highlight does NOT include delimiter" {
     // Buffer: "word)\n" - positions: w=0, o=1, r=2, d=3, )=4
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"word)\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "word)\n");
 
     // Manually create a range for "word" (not including ')')
     const Range = @import("buffer/edit.zig").Range;
@@ -3188,7 +3723,7 @@ test "Editor: 'o' command opens new line AFTER current line" {
     // Buffer: "abc\n"
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"abc\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "abc\n");
 
     // Position cursor at 'b' (col 1) - shouldn't matter where
     buf.cursor = .{ .row = 0, .col = 1 };
@@ -3217,7 +3752,7 @@ test "Editor: 'A' followed by 'ii' inserts both characters on same line" {
     // Setup: README.md first line
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"# Vimcraft\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "# Vimcraft\n");
 
     // Execute: A (append at end) then ii (type two i's)
     _ = try editor.executeKeys("Aii");
@@ -3248,7 +3783,7 @@ test "Keymap: simple string mapping executes correctly" {
     // Setup buffer
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "line 1\nline 2\nline 3\n");
 
     // Map K → gg (move to file start) - global mapping
     const keys = try allocator.dupe(u8, "gg");
@@ -3271,7 +3806,7 @@ test "Keymap: noremap prevents recursive expansion" {
     // Setup buffer
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"abc\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "abc\n");
 
     // Map j → k (move up) - global mapping
     const keys1 = try allocator.dupe(u8, "k");
@@ -3309,7 +3844,7 @@ test "Keymap: recursion protection exists and depth tracking works" {
     // Setup buffer
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "line 1\nline 2\n");
     buf.cursor = .{ .row = 1, .col = 0 };
 
     // Execute the mapping
@@ -3339,7 +3874,7 @@ test "Keymap: mapping overrides built-in command" {
     // Setup buffer with 3 lines
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "line 1\nline 2\nline 3\n");
     buf.cursor = .{ .row = 1, .col = 0 }; // Start on line 2
 
     // Map j → k (override j to move up instead of down) - global mapping
@@ -3380,7 +3915,7 @@ test "Keymap: mode-specific mappings don't leak" {
     // Setup buffer
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "line 1\nline 2\n");
 
     // Map j → gg in normal mode only - global mapping
     const keys = try allocator.dupe(u8, "gg");
@@ -3412,7 +3947,7 @@ test "Keymap: complex mapping sequence (K → Hzz concept)" {
     // Setup buffer with multiple lines
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\nline 4\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "line 1\nline 2\nline 3\nline 4\n");
     buf.cursor = .{ .row = 2, .col = 0 }; // Start on line 3
 
     // Map K → gg (simpler than Hzz since z commands not implemented) - global mapping
@@ -3451,7 +3986,7 @@ test "Keymap: depth stays zero after callback mapping (no nesting)" {
 
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "line 1\nline 2\n");
     buf.cursor = .{ .row = 1, .col = 0 };
 
     // This should work (depth not corrupted)
@@ -3468,7 +4003,7 @@ test "Keymap: pending key loss bug - j then x (when jk is mapped)" {
     // Setup buffer with 3 lines
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "line 1\nline 2\nline 3\n");
     buf.cursor = .{ .row = 0, .col = 0 }; // Start at line 1
 
     // Map jk → gg (move to file start) - global mapping
@@ -3504,7 +4039,7 @@ test "Keymap: pending key loss bug - j then jkl (multiple keys)" {
     // Setup buffer with 5 lines
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\nline 4\nline 5\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "line 1\nline 2\nline 3\nline 4\nline 5\n");
     buf.cursor = .{ .row = 0, .col = 0 };
 
     // Map jk → gg (move to file start) - global mapping
@@ -3538,7 +4073,7 @@ test "Keymap: pending sequence completed successfully (jk → gg)" {
     // Setup buffer
     const buf = editor.getCurrentBuffer() orelse return error.NoCurrentBuffer;
     buf.content.deinit();
-    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator,"line 1\nline 2\nline 3\n");
+    buf.content = try @import("buffer/rope.zig").Rope.fromString(allocator, "line 1\nline 2\nline 3\n");
     buf.cursor = .{ .row = 2, .col = 0 }; // Start at line 3
 
     // Map jk → gg - global mapping
