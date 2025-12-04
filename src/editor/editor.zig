@@ -2853,9 +2853,9 @@ pub const Editor = struct {
     }
 
     /// Update incremental search highlights as user types
-    /// Only highlights matches, does not move cursor
+    /// When incSearch is enabled: highlights matches AND moves cursor to first match
     fn updateIncSearch(self: *Editor) !void {
-        // Check if incsearch is enabled
+        // Check if incsearch is enabled (vim.opt.incSearch)
         const incsearch_enabled = if (self.options_manager) |opts_mgr|
             opts_mgr.getBoolean("incsearch") orelse true
         else
@@ -2871,10 +2871,11 @@ pub const Editor = struct {
             return;
         }
 
-        // Temporarily set the pattern and find matches (no cursor movement)
+        // Temporarily set the pattern and find matches
         self.search_pattern.clearRetainingCapacity();
         try self.search_pattern.appendSlice(self.allocator, pattern);
-        try self.executeSearchInternal(false);
+        // Execute search WITH cursor movement to show first match while typing
+        try self.executeSearchInternal(true);
     }
 
     /// Execute search with current pattern and direction
@@ -2918,6 +2919,28 @@ pub const Editor = struct {
             return;
         }
 
+        // Check ignoreCase and smartCase options (vim.opt.ignoreCase, vim.opt.smartCase)
+        const ignore_case_opt = if (self.options_manager) |opts_mgr|
+            opts_mgr.getBoolean("ignorecase") orelse false
+        else
+            false;
+
+        const smart_case_opt = if (self.options_manager) |opts_mgr|
+            opts_mgr.getBoolean("smartcase") orelse false
+        else
+            false;
+
+        // Determine if we should use case-insensitive matching
+        // smartCase: if pattern contains uppercase, use case-sensitive even if ignoreCase is on
+        const pattern_has_upper = blk: {
+            for (actual_pattern) |c| {
+                if (c >= 'A' and c <= 'Z') break :blk true;
+            }
+            break :blk false;
+        };
+
+        const case_insensitive = ignore_case_opt and !(smart_case_opt and pattern_has_upper);
+
         // Find all matches in the buffer
         const line_count = buf.lineCount();
 
@@ -2927,7 +2950,12 @@ pub const Editor = struct {
 
             var col: usize = 0;
             while (col + actual_pattern.len <= line.len) {
-                if (std.mem.eql(u8, line[col .. col + actual_pattern.len], actual_pattern)) {
+                const matches = if (case_insensitive)
+                    eqlIgnoreCase(line[col .. col + actual_pattern.len], actual_pattern)
+                else
+                    std.mem.eql(u8, line[col .. col + actual_pattern.len], actual_pattern);
+
+                if (matches) {
                     // Check word boundaries if required
                     var is_valid_match = true;
 
@@ -3026,6 +3054,7 @@ pub const Editor = struct {
 
     /// Search for next match (n command)
     /// O(1) navigation through cached matches
+    /// Respects wrapScan option (vim.opt.wrapScan)
     pub fn searchNext(self: *Editor) !void {
         if (self.search_pattern.items.len == 0) {
             self.logger.warn("No previous search pattern", .{}) catch {};
@@ -3045,18 +3074,46 @@ pub const Editor = struct {
 
         const buf = self.getCurrentBuffer() orelse return;
 
+        // Check wrapScan option (vim.opt.wrapScan, default true)
+        const wrap_enabled = if (self.options_manager) |opts_mgr|
+            opts_mgr.getBoolean("wrapscan") orelse true
+        else
+            true;
+
         // Navigate based on search direction
         if (self.search_direction == .forward) {
-            // Forward: go to next match (with wrap)
+            // Forward: go to next match
             if (self.search_match_index) |idx| {
-                self.search_match_index = (idx + 1) % matches.len;
+                if (idx + 1 >= matches.len) {
+                    // At last match
+                    if (wrap_enabled) {
+                        self.search_match_index = 0;
+                        self.logger.info("search hit BOTTOM, continuing at TOP", .{}) catch {};
+                    } else {
+                        self.logger.warn("search hit BOTTOM", .{}) catch {};
+                        return; // Don't wrap
+                    }
+                } else {
+                    self.search_match_index = idx + 1;
+                }
             } else {
                 self.search_match_index = 0;
             }
         } else {
-            // Backward: go to previous match (with wrap)
+            // Backward: go to previous match
             if (self.search_match_index) |idx| {
-                self.search_match_index = if (idx == 0) matches.len - 1 else idx - 1;
+                if (idx == 0) {
+                    // At first match
+                    if (wrap_enabled) {
+                        self.search_match_index = matches.len - 1;
+                        self.logger.info("search hit TOP, continuing at BOTTOM", .{}) catch {};
+                    } else {
+                        self.logger.warn("search hit TOP", .{}) catch {};
+                        return; // Don't wrap
+                    }
+                } else {
+                    self.search_match_index = idx - 1;
+                }
             } else {
                 self.search_match_index = matches.len - 1;
             }
@@ -3076,6 +3133,7 @@ pub const Editor = struct {
 
     /// Search for previous match (N command)
     /// O(1) navigation through cached matches (opposite direction)
+    /// Respects wrapScan option (vim.opt.wrapScan)
     pub fn searchPrevious(self: *Editor) !void {
         if (self.search_pattern.items.len == 0) {
             self.logger.warn("No previous search pattern", .{}) catch {};
@@ -3095,18 +3153,46 @@ pub const Editor = struct {
 
         const buf = self.getCurrentBuffer() orelse return;
 
+        // Check wrapScan option (vim.opt.wrapScan, default true)
+        const wrap_enabled = if (self.options_manager) |opts_mgr|
+            opts_mgr.getBoolean("wrapscan") orelse true
+        else
+            true;
+
         // Navigate opposite to search direction
         if (self.search_direction == .forward) {
             // Forward search, N goes backward
             if (self.search_match_index) |idx| {
-                self.search_match_index = if (idx == 0) matches.len - 1 else idx - 1;
+                if (idx == 0) {
+                    // At first match
+                    if (wrap_enabled) {
+                        self.search_match_index = matches.len - 1;
+                        self.logger.info("search hit TOP, continuing at BOTTOM", .{}) catch {};
+                    } else {
+                        self.logger.warn("search hit TOP", .{}) catch {};
+                        return; // Don't wrap
+                    }
+                } else {
+                    self.search_match_index = idx - 1;
+                }
             } else {
                 self.search_match_index = matches.len - 1;
             }
         } else {
             // Backward search, N goes forward
             if (self.search_match_index) |idx| {
-                self.search_match_index = (idx + 1) % matches.len;
+                if (idx + 1 >= matches.len) {
+                    // At last match
+                    if (wrap_enabled) {
+                        self.search_match_index = 0;
+                        self.logger.info("search hit BOTTOM, continuing at TOP", .{}) catch {};
+                    } else {
+                        self.logger.warn("search hit BOTTOM", .{}) catch {};
+                        return; // Don't wrap
+                    }
+                } else {
+                    self.search_match_index = idx + 1;
+                }
             } else {
                 self.search_match_index = 0;
             }
@@ -3235,6 +3321,17 @@ pub const Editor = struct {
             (c >= 'A' and c <= 'Z') or
             (c >= '0' and c <= '9') or
             c == '_';
+    }
+
+    /// Helper: Case-insensitive string comparison for search (vim.opt.ignoreCase)
+    fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
+        if (a.len != b.len) return false;
+        for (a, b) |ac, bc| {
+            const a_lower = if (ac >= 'A' and ac <= 'Z') ac + 32 else ac;
+            const b_lower = if (bc >= 'A' and bc <= 'Z') bc + 32 else bc;
+            if (a_lower != b_lower) return false;
+        }
+        return true;
     }
 
     /// Execute a user-defined command (vim.api.createUserCmd)
