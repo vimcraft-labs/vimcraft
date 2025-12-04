@@ -2750,6 +2750,10 @@ pub const Editor = struct {
                         };
                     }
                 }
+                // Substitute command (:s/pattern/replacement/flags)
+                else if (cmd.len >= 2 and cmd[0] == 's' and (cmd[1] == '/' or cmd[1] == '|' or cmd[1] == '#')) {
+                    try self.handleSubstituteCommand(cmd);
+                }
                 // Check for user-defined commands (vim.api.createUserCmd)
                 // User commands start with uppercase letter
                 else if (cmd.len > 0 and std.ascii.isUpper(cmd[0])) {
@@ -3332,6 +3336,325 @@ pub const Editor = struct {
             if (a_lower != b_lower) return false;
         }
         return true;
+    }
+
+    // =========================================================================
+    // Substitute Command (:s/pattern/replacement/flags)
+    // =========================================================================
+
+    /// Result of parsing a substitute command
+    const SubstituteCommand = struct {
+        pattern: []const u8,
+        replacement: []const u8,
+        flags: SubstituteFlags,
+    };
+
+    /// Flags for substitute command
+    const SubstituteFlags = struct {
+        global: bool = false, // g - replace all matches on line
+        ignore_case: bool = false, // i - case insensitive
+        no_error: bool = false, // e - no error if pattern not found
+        count_only: bool = false, // n - report count, don't replace
+    };
+
+    /// A match position on a line
+    pub const LineMatch = struct {
+        start: usize,
+        end: usize,
+    };
+
+    /// Parse a substitute command string like "s/pattern/replacement/flags"
+    /// Supports any delimiter character (first char after 's')
+    /// Returns null if parsing fails
+    pub fn parseSubstituteCommand(self: *Editor, cmd: []const u8) ?SubstituteCommand {
+        _ = self;
+
+        // Must start with 's' followed by a delimiter
+        if (cmd.len < 2 or cmd[0] != 's') return null;
+
+        const delimiter = cmd[1];
+
+        // Find pattern end (handle escaped delimiters)
+        const pattern_start: usize = 2;
+        var pattern_end: usize = pattern_start;
+        while (pattern_end < cmd.len) {
+            if (cmd[pattern_end] == '\\' and pattern_end + 1 < cmd.len) {
+                pattern_end += 2; // Skip escaped character
+            } else if (cmd[pattern_end] == delimiter) {
+                break;
+            } else {
+                pattern_end += 1;
+            }
+        }
+
+        if (pattern_end >= cmd.len) {
+            // No closing delimiter for pattern - minimal form ":s/pat"
+            // Treat as pattern only, empty replacement
+            return SubstituteCommand{
+                .pattern = cmd[pattern_start..],
+                .replacement = "",
+                .flags = SubstituteFlags{},
+            };
+        }
+
+        const pattern = cmd[pattern_start..pattern_end];
+
+        // Find replacement end
+        const replacement_start: usize = pattern_end + 1;
+        var replacement_end: usize = replacement_start;
+        while (replacement_end < cmd.len) {
+            if (cmd[replacement_end] == '\\' and replacement_end + 1 < cmd.len) {
+                replacement_end += 2; // Skip escaped character
+            } else if (cmd[replacement_end] == delimiter) {
+                break;
+            } else {
+                replacement_end += 1;
+            }
+        }
+
+        const replacement = cmd[replacement_start..replacement_end];
+
+        // Parse flags
+        var flags = SubstituteFlags{};
+        if (replacement_end < cmd.len) {
+            const flags_str = cmd[replacement_end + 1 ..];
+            for (flags_str) |c| {
+                switch (c) {
+                    'g' => flags.global = true,
+                    'i' => flags.ignore_case = true,
+                    'e' => flags.no_error = true,
+                    'n' => flags.count_only = true,
+                    else => {}, // Ignore unknown flags
+                }
+            }
+        }
+
+        return SubstituteCommand{
+            .pattern = pattern,
+            .replacement = replacement,
+            .flags = flags,
+        };
+    }
+
+    /// Find all non-overlapping matches of pattern on a line
+    /// Returns a list of match positions (caller must free)
+    pub fn findMatchesOnLine(self: *Editor, line: []const u8, pattern: []const u8, ignore_case: bool) !std.ArrayList(LineMatch) {
+        var matches: std.ArrayList(LineMatch) = .empty;
+        errdefer matches.deinit(self.allocator);
+
+        if (pattern.len == 0 or pattern.len > line.len) {
+            return matches;
+        }
+
+        var col: usize = 0;
+        while (col + pattern.len <= line.len) {
+            const candidate = line[col .. col + pattern.len];
+            const is_match = if (ignore_case)
+                eqlIgnoreCase(candidate, pattern)
+            else
+                std.mem.eql(u8, candidate, pattern);
+
+            if (is_match) {
+                try matches.append(self.allocator, LineMatch{
+                    .start = col,
+                    .end = col + pattern.len,
+                });
+                col += pattern.len; // Move past match (non-overlapping)
+            } else {
+                col += 1;
+            }
+        }
+
+        return matches;
+    }
+
+    /// Unescape a substitute pattern/replacement string
+    /// Handles \/ -> /, \\ -> \, \n -> newline, etc.
+    pub fn unescapeSubstitute(self: *Editor, input: []const u8, delimiter: u8) ![]u8 {
+        var result: std.ArrayList(u8) = .empty;
+        errdefer result.deinit(self.allocator);
+
+        var i: usize = 0;
+        while (i < input.len) {
+            if (input[i] == '\\' and i + 1 < input.len) {
+                const next = input[i + 1];
+                if (next == delimiter) {
+                    try result.append(self.allocator, delimiter);
+                    i += 2;
+                } else if (next == '\\') {
+                    try result.append(self.allocator, '\\');
+                    i += 2;
+                } else if (next == 'n') {
+                    try result.append(self.allocator, '\n');
+                    i += 2;
+                } else if (next == 't') {
+                    try result.append(self.allocator, '\t');
+                    i += 2;
+                } else {
+                    // Keep the backslash and next char as-is
+                    try result.append(self.allocator, input[i]);
+                    i += 1;
+                }
+            } else {
+                try result.append(self.allocator, input[i]);
+                i += 1;
+            }
+        }
+
+        return result.toOwnedSlice(self.allocator);
+    }
+
+    /// Handle the substitute command (:s/pattern/replacement/flags)
+    fn handleSubstituteCommand(self: *Editor, cmd: []const u8) !void {
+        const parsed = self.parseSubstituteCommand(cmd) orelse {
+            self.logger.err("Invalid substitute command syntax", .{}) catch {};
+            return;
+        };
+
+        // Get current buffer
+        const buf = self.getCurrentBuffer() orelse {
+            self.logger.err("No active buffer", .{}) catch {};
+            return;
+        };
+
+        // Determine delimiter for unescaping
+        const delimiter: u8 = if (cmd.len > 1) cmd[1] else '/';
+
+        // Resolve pattern (empty pattern uses last search pattern)
+        var pattern: []const u8 = undefined;
+        var pattern_owned = false;
+
+        if (parsed.pattern.len == 0) {
+            if (self.search_pattern.items.len == 0) {
+                if (!parsed.flags.no_error) {
+                    self.logger.err("No previous search pattern", .{}) catch {};
+                }
+                return;
+            }
+            pattern = self.search_pattern.items;
+        } else {
+            // Unescape the pattern
+            pattern = try self.unescapeSubstitute(parsed.pattern, delimiter);
+            pattern_owned = true;
+        }
+        defer if (pattern_owned) self.allocator.free(pattern);
+
+        // Unescape replacement
+        const replacement = try self.unescapeSubstitute(parsed.replacement, delimiter);
+        defer self.allocator.free(replacement);
+
+        // Determine case sensitivity (matching search behavior)
+        // Priority: 'i' flag > smartCase > ignorecase option
+        const ignore_case_opt = if (self.options_manager) |opts_mgr|
+            opts_mgr.getBoolean("ignorecase") orelse false
+        else
+            false;
+
+        const smart_case_opt = if (self.options_manager) |opts_mgr|
+            opts_mgr.getBoolean("smartcase") orelse false
+        else
+            false;
+
+        // smartCase: if pattern contains uppercase, use case-sensitive matching
+        const pattern_has_upper = for (pattern) |c| {
+            if (c >= 'A' and c <= 'Z') break true;
+        } else false;
+
+        const ignore_case = if (parsed.flags.ignore_case)
+            true // Explicit 'i' flag always forces case-insensitive
+        else if (smart_case_opt and pattern_has_upper)
+            false // smartCase + uppercase pattern = case-sensitive
+        else
+            ignore_case_opt;
+
+        // Get current line
+        const line_idx = buf.cursor.row;
+        const line = buf.getLine(line_idx) orelse {
+            if (!parsed.flags.no_error) {
+                self.logger.err("Pattern not found: {s}", .{pattern}) catch {};
+            }
+            return;
+        };
+        defer self.allocator.free(line);
+
+        // Find matches
+        var matches = try self.findMatchesOnLine(line, pattern, ignore_case);
+        defer matches.deinit(self.allocator);
+
+        if (matches.items.len == 0) {
+            if (!parsed.flags.no_error) {
+                self.logger.err("Pattern not found: {s}", .{pattern}) catch {};
+            }
+            return;
+        }
+
+        // Count-only mode (n flag)
+        if (parsed.flags.count_only) {
+            const count = if (parsed.flags.global) matches.items.len else 1;
+            self.logger.info("{d} match(es) on line", .{count}) catch {};
+            return;
+        }
+
+        // Limit to first match if not global
+        const replace_count: usize = if (parsed.flags.global) matches.items.len else 1;
+
+        // Build new line content by applying substitutions in-memory
+        // This allows us to create a single undo operation for all changes
+        var new_line: std.ArrayList(u8) = .empty;
+        defer new_line.deinit(self.allocator);
+
+        var last_end: usize = 0;
+        for (0..replace_count) |idx| {
+            const match = matches.items[idx];
+
+            // Copy text before this match
+            if (match.start > last_end) {
+                try new_line.appendSlice(self.allocator, line[last_end..match.start]);
+            }
+
+            // Insert replacement
+            try new_line.appendSlice(self.allocator, replacement);
+
+            last_end = match.end;
+        }
+
+        // Copy remaining text after last match
+        if (last_end < line.len) {
+            try new_line.appendSlice(self.allocator, line[last_end..]);
+        }
+
+        // Get line start offset for position calculations
+        const line_start = buf.content.byteOfLine(line_idx);
+        const cursor_before = buf.cursor;
+
+        // Save original line for undo (dupe it since we'll free `line` later)
+        const deleted_text = try self.allocator.dupe(u8, line);
+        errdefer self.allocator.free(deleted_text);
+
+        // Delete original line content, insert new content
+        try buf.content.delete(line_start, line_start + line.len);
+        try buf.content.insert(line_start, new_line.items);
+
+        // Record change for undo
+        const Change = @import("buffer/buffer.zig").Change;
+        const change = Change{
+            .offset = line_start,
+            .deleted_text = deleted_text,
+            .inserted_text = try self.allocator.dupe(u8, new_line.items),
+            .cursor_before = cursor_before,
+            .cursor_after = buf.cursor,
+        };
+        try buf.recordChange(change);
+        buf.modified = true;
+
+        // Update the last search pattern (Vim behavior)
+        if (parsed.pattern.len > 0) {
+            self.search_pattern.clearRetainingCapacity();
+            try self.search_pattern.appendSlice(self.allocator, pattern);
+        }
+
+        // Show feedback
+        self.logger.info("{d} substitution(s)", .{replace_count}) catch {};
     }
 
     /// Execute a user-defined command (vim.api.createUserCmd)

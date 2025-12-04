@@ -503,3 +503,301 @@ test "Editor: cwd is initialized on init" {
     // Should have valid cwd
     try testing.expect(editor.cwd.len > 0);
 }
+
+// ============================================================================
+// Substitute Command Parser Tests
+// ============================================================================
+
+test "parseSubstituteCommand: basic pattern and replacement" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = editor.parseSubstituteCommand("s/foo/bar/");
+    try testing.expect(result != null);
+    try testing.expectEqualStrings("foo", result.?.pattern);
+    try testing.expectEqualStrings("bar", result.?.replacement);
+    try testing.expect(!result.?.flags.global);
+    try testing.expect(!result.?.flags.ignore_case);
+}
+
+test "parseSubstituteCommand: with g flag" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = editor.parseSubstituteCommand("s/foo/bar/g");
+    try testing.expect(result != null);
+    try testing.expect(result.?.flags.global);
+}
+
+test "parseSubstituteCommand: with multiple flags" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = editor.parseSubstituteCommand("s/foo/bar/gi");
+    try testing.expect(result != null);
+    try testing.expect(result.?.flags.global);
+    try testing.expect(result.?.flags.ignore_case);
+}
+
+test "parseSubstituteCommand: empty replacement" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = editor.parseSubstituteCommand("s/foo//");
+    try testing.expect(result != null);
+    try testing.expectEqualStrings("foo", result.?.pattern);
+    try testing.expectEqualStrings("", result.?.replacement);
+}
+
+test "parseSubstituteCommand: empty pattern" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = editor.parseSubstituteCommand("s//bar/");
+    try testing.expect(result != null);
+    try testing.expectEqualStrings("", result.?.pattern);
+    try testing.expectEqualStrings("bar", result.?.replacement);
+}
+
+test "parseSubstituteCommand: alternate delimiter pipe" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = editor.parseSubstituteCommand("s|foo|bar|g");
+    try testing.expect(result != null);
+    try testing.expectEqualStrings("foo", result.?.pattern);
+    try testing.expectEqualStrings("bar", result.?.replacement);
+    try testing.expect(result.?.flags.global);
+}
+
+test "parseSubstituteCommand: alternate delimiter hash" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = editor.parseSubstituteCommand("s#path#replacement#");
+    try testing.expect(result != null);
+    try testing.expectEqualStrings("path", result.?.pattern);
+    try testing.expectEqualStrings("replacement", result.?.replacement);
+}
+
+test "parseSubstituteCommand: escaped delimiter in pattern" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = editor.parseSubstituteCommand("s/foo\\/bar/baz/");
+    try testing.expect(result != null);
+    try testing.expectEqualStrings("foo\\/bar", result.?.pattern);
+}
+
+test "parseSubstituteCommand: invalid - not starting with s" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = editor.parseSubstituteCommand("x/foo/bar/");
+    try testing.expect(result == null);
+}
+
+test "parseSubstituteCommand: all flags" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = editor.parseSubstituteCommand("s/foo/bar/gien");
+    try testing.expect(result != null);
+    try testing.expect(result.?.flags.global);
+    try testing.expect(result.?.flags.ignore_case);
+    try testing.expect(result.?.flags.no_error);
+    try testing.expect(result.?.flags.count_only);
+}
+
+// ============================================================================
+// findMatchesOnLine Tests
+// ============================================================================
+
+test "findMatchesOnLine: single match" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    var matches = try editor.findMatchesOnLine("hello world", "world", false);
+    defer matches.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), matches.items.len);
+    try testing.expectEqual(@as(usize, 6), matches.items[0].start);
+    try testing.expectEqual(@as(usize, 11), matches.items[0].end);
+}
+
+test "findMatchesOnLine: multiple matches" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    var matches = try editor.findMatchesOnLine("foo bar foo baz foo", "foo", false);
+    defer matches.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 3), matches.items.len);
+    try testing.expectEqual(@as(usize, 0), matches.items[0].start);
+    try testing.expectEqual(@as(usize, 8), matches.items[1].start);
+    try testing.expectEqual(@as(usize, 16), matches.items[2].start);
+}
+
+test "findMatchesOnLine: no match" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    var matches = try editor.findMatchesOnLine("hello world", "xyz", false);
+    defer matches.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 0), matches.items.len);
+}
+
+test "findMatchesOnLine: case sensitive" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    var matches = try editor.findMatchesOnLine("Hello HELLO hello", "Hello", false);
+    defer matches.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), matches.items.len);
+    try testing.expectEqual(@as(usize, 0), matches.items[0].start);
+}
+
+test "findMatchesOnLine: case insensitive" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    var matches = try editor.findMatchesOnLine("Hello HELLO hello", "hello", true);
+    defer matches.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 3), matches.items.len);
+}
+
+test "findMatchesOnLine: overlapping patterns (non-overlapping result)" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    // "aaa" contains "aa" at positions 0 and 1, but non-overlapping gives only 1
+    var matches = try editor.findMatchesOnLine("aaa", "aa", false);
+    defer matches.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), matches.items.len);
+    try testing.expectEqual(@as(usize, 0), matches.items[0].start);
+}
+
+test "findMatchesOnLine: pattern at end of line" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    var matches = try editor.findMatchesOnLine("hello world", "world", false);
+    defer matches.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), matches.items.len);
+    try testing.expectEqual(@as(usize, 6), matches.items[0].start);
+    try testing.expectEqual(@as(usize, 11), matches.items[0].end);
+}
+
+test "findMatchesOnLine: empty line" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    var matches = try editor.findMatchesOnLine("", "foo", false);
+    defer matches.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 0), matches.items.len);
+}
+
+// ============================================================================
+// unescapeSubstitute Tests
+// ============================================================================
+
+test "unescapeSubstitute: no escapes" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = try editor.unescapeSubstitute("hello", '/');
+    defer allocator.free(result);
+
+    try testing.expectEqualStrings("hello", result);
+}
+
+test "unescapeSubstitute: escaped delimiter" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = try editor.unescapeSubstitute("foo\\/bar", '/');
+    defer allocator.free(result);
+
+    try testing.expectEqualStrings("foo/bar", result);
+}
+
+test "unescapeSubstitute: escaped backslash" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = try editor.unescapeSubstitute("foo\\\\bar", '/');
+    defer allocator.free(result);
+
+    try testing.expectEqualStrings("foo\\bar", result);
+}
+
+test "unescapeSubstitute: newline escape" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = try editor.unescapeSubstitute("foo\\nbar", '/');
+    defer allocator.free(result);
+
+    try testing.expectEqualStrings("foo\nbar", result);
+}
+
+test "unescapeSubstitute: tab escape" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = try editor.unescapeSubstitute("foo\\tbar", '/');
+    defer allocator.free(result);
+
+    try testing.expectEqualStrings("foo\tbar", result);
+}
+
+test "unescapeSubstitute: multiple escapes" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = try editor.unescapeSubstitute("a\\/b\\nc\\\\d", '/');
+    defer allocator.free(result);
+
+    try testing.expectEqualStrings("a/b\nc\\d", result);
+}
+
+test "unescapeSubstitute: alternate delimiter" {
+    const allocator = testing.allocator;
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+
+    const result = try editor.unescapeSubstitute("foo\\|bar", '|');
+    defer allocator.free(result);
+
+    try testing.expectEqualStrings("foo|bar", result);
+}
