@@ -26,6 +26,10 @@ pub fn configureVimcraftStep(
     deps.addGoEnry(b, step, config);
     deps.addOpenSSL(step, config);
 
+    // AI Storage dependencies
+    deps.addLmdb(b, step, config);
+    deps.addUsearch(b, step);
+
     // Add tree-sitter
     tree_sitter.addAll(b, step);
 }

@@ -44,6 +44,7 @@ pub const namespace_api = @import("namespace_api.zig");
 pub const diagnostic_api = @import("diagnostic_api.zig");
 pub const treesitter_api = @import("treesitter_api.zig");
 pub const search_api = @import("search_api.zig");
+pub const git_api = @import("git_api.zig");
 
 // Import new transpiler system
 const transpiler = @import("../transpiler/loader.zig");
@@ -168,6 +169,14 @@ pub fn initJSI(
     // Register filetype API (vim.filetype.match)
     // Both Editor and EditorContext have ts_loader, so register for both
     filetype_api.register(runtime, editor_or_context, allocator);
+
+    // Register git API (vim.git.*)
+    // Provides git operations: getWorkTreeDiff, getFileStatus, getBranch
+    if (T == *Editor) {
+        git_api.register(runtime, editor_or_context, allocator);
+    } else if (T == *EditorContext) {
+        git_api.register(runtime, &editor_or_context.editor, allocator);
+    }
 
     // Register treesitter API (vim.treesitter.*)
     // Provides LanguageTree for injection support and tree-sitter queries
@@ -534,6 +543,8 @@ pub fn deinitJSI() void {
     }
     // Clean up filetype context (no deinit needed, just free the struct)
     filetype_api.deinit();
+    // Clean up git context
+    git_api.deinit();
     // Clean up treesitter context
     treesitter_api.deinit();
     // Clean up fs context

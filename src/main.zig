@@ -451,9 +451,9 @@ pub fn main() !void {
             }
         }
     } else {
-        // No command provided - show help
-        cli.printHelp();
-        return;
+        // No command provided - open empty buffer (like nvim)
+        // Uses cwd as working directory, starts with scratch buffer
+        return try runEditor(allocator, null);
     }
 }
 
@@ -540,7 +540,7 @@ fn loadConfigFromTs(allocator: std.mem.Allocator, config: *highlights.HighlightC
 }
 
 /// Run the interactive editor (normal mode)
-fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
+fn runEditor(allocator: std.mem.Allocator, filepath: ?[]const u8) !void {
     const Editor = @import("editor/editor.zig").Editor;
     const TerminalBackend = @import("backends/terminal/backend.zig").TerminalBackend;
 
@@ -552,11 +552,14 @@ fn runEditor(allocator: std.mem.Allocator, filepath: []const u8) !void {
     var editor = try Editor.init(allocator);
     defer editor.deinit();
 
-    // Load file into editor (this also initializes tree-sitter syntax if available)
-    editor.loadFile(filepath) catch |err| {
-        std.debug.print("Error loading file: {}\n", .{err});
-        return;
-    };
+    // Load file into editor if specified, otherwise start with empty scratch buffer
+    if (filepath) |fp| {
+        editor.loadFile(fp) catch |err| {
+            std.debug.print("Error loading file: {}\n", .{err});
+            return;
+        };
+    }
+    // Note: Editor.init already creates an empty scratch buffer
 
     // Initialize display (terminal-specific)
     var display = try Display.init(allocator);
@@ -1060,6 +1063,11 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
 
     // Apply sign column config BEFORE loading plugins
     // This ensures getGutterWidth() returns correct value during plugin initialization
+    {
+        const msg = try std.fmt.allocPrint(allocator, "[DEBUG] signcolumn_mode = \"{s}\"", .{highlight_config.signcolumn_mode});
+        defer allocator.free(msg);
+        debugger.log(msg, .info);
+    }
     try display.setSignColumn(highlight_config.signcolumn_mode);
 
     // Enter raw terminal mode

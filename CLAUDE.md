@@ -179,17 +179,18 @@ make -f Makefile.hermes test-jsi  # JS→Zig demo
 | **Build** | Hybrid Zig+clang++ | C++ exceptions require clang++ |
 | **Filetype** | go-enry (GitHub Linguist) | 697 languages, content-based |
 | **Testing** | Fresh process per test | No Hermes module unloading |
-| **Buffers** | ArrayList (now), Rope (future) | Simple→Complex migration |
+| **Buffers** | Rope (tree-based) | O(log n) insert/delete, ref-counted |
 
 ## Roadmap Status
 
 | Phase | Feature | Status | Timeline |
 |-------|---------|--------|----------|
 | **1-3** | Core editing | ✅ Complete | Released |
-| **4** | Plugin system | 🚧 Current | 6-8 weeks |
-| **5** | Tree-sitter, LSP | 📅 Planned | Q2 2025 |
-| **6** | Performance (Rope) | 📅 Planned | Q3 2025 |
-| **7** | Neovim compat | 📅 Planned | Q4 2025 |
+| **4** | Plugin system | ✅ Complete | Released |
+| **5** | Tree-sitter, LSP | ✅ Complete | Released |
+| **6** | Search | ✅ Complete | Dec 3, 2025 |
+| **7** | Substitute | ✅ Complete | Dec 4, 2025 |
+| **8** | Macros, Block Visual | 📅 Next | - |
 
 ## JavaScript API Pattern
 

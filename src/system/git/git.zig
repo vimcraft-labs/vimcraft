@@ -220,6 +220,137 @@ pub fn shutdown() void {
     c_api.shutdown() catch {};
 }
 
+// ============================================================================
+// Diff/Hunk API - Line-level change detection for gitsigns
+// ============================================================================
+
+/// Type of change in a diff hunk
+pub const HunkType = enum {
+    add, // Lines added (green +)
+    delete, // Lines deleted (red -)
+    change, // Lines modified (yellow ~)
+};
+
+/// A single diff hunk representing a contiguous region of changes
+pub const DiffHunk = struct {
+    /// Starting line in the NEW file (0-indexed for display)
+    start_line: usize,
+    /// Number of lines affected
+    line_count: usize,
+    /// Type of change
+    hunk_type: HunkType,
+};
+
+/// Result of diffing a file against HEAD
+pub const DiffResult = struct {
+    hunks: []DiffHunk,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *DiffResult) void {
+        self.allocator.free(self.hunks);
+    }
+};
+
+/// Get line-level diff hunks for a file compared to HEAD
+/// This is the core API for gitsigns - shows which lines were added/deleted/changed
+pub fn getWorkTreeDiff(repo: *Repository, filepath: []const u8, allocator: std.mem.Allocator) GitError!DiffResult {
+    // Get the HEAD tree
+    var head_ref: ?*c.git_reference = null;
+    var result = c.git_repository_head(&head_ref, repo.ptr);
+    if (result < 0 or head_ref == null) {
+        return GitError.HeadNotFound;
+    }
+    defer c.git_reference_free(head_ref);
+
+    const head_oid = c.git_reference_target(head_ref);
+    if (head_oid == null) {
+        return GitError.HeadNotFound;
+    }
+
+    var head_commit: ?*c.git_commit = null;
+    result = c.git_commit_lookup(&head_commit, repo.ptr, head_oid);
+    if (result < 0 or head_commit == null) {
+        return GitError.HeadNotFound;
+    }
+    defer c.git_commit_free(head_commit);
+
+    var head_tree: ?*c.git_tree = null;
+    result = c.git_commit_tree(&head_tree, head_commit);
+    if (result < 0 or head_tree == null) {
+        return GitError.HeadNotFound;
+    }
+    defer c.git_tree_free(head_tree);
+
+    // Set up diff options to only look at this file
+    var diff_opts: c.git_diff_options = undefined;
+    _ = c.git_diff_options_init(&diff_opts, c.GIT_DIFF_OPTIONS_VERSION);
+
+    // Convert filepath to null-terminated
+    const path_z = allocator.dupeZ(u8, filepath) catch return GitError.OutOfMemory;
+    defer allocator.free(path_z);
+
+    // Create pathspec with just this file (cast away const for C API)
+    var pathspec: [1][*c]u8 = .{@constCast(path_z.ptr)};
+    diff_opts.pathspec.strings = &pathspec;
+    diff_opts.pathspec.count = 1;
+
+    // Get diff between HEAD tree and workdir
+    var diff: ?*c.git_diff = null;
+    result = c.git_diff_tree_to_workdir_with_index(&diff, repo.ptr, head_tree, &diff_opts);
+    if (result < 0 or diff == null) {
+        return GitError.StatusFailed;
+    }
+    defer c.git_diff_free(diff);
+
+    // Collect hunks
+    var hunks: std.ArrayListUnmanaged(DiffHunk) = .empty;
+    errdefer hunks.deinit(allocator);
+
+    const num_deltas = c.git_diff_num_deltas(diff);
+    var delta_idx: usize = 0;
+    while (delta_idx < num_deltas) : (delta_idx += 1) {
+        var patch: ?*c.git_patch = null;
+        result = c.git_patch_from_diff(&patch, diff, delta_idx);
+        if (result < 0 or patch == null) continue;
+        defer c.git_patch_free(patch);
+
+        const num_hunks = c.git_patch_num_hunks(patch);
+        var hunk_idx: usize = 0;
+        while (hunk_idx < num_hunks) : (hunk_idx += 1) {
+            var hunk: ?*const c.git_diff_hunk = null;
+            var lines_in_hunk: usize = 0;
+            result = c.git_patch_get_hunk(&hunk, &lines_in_hunk, patch, hunk_idx);
+            if (result < 0 or hunk == null) continue;
+            const h = hunk.?; // Unwrap the optional
+
+            // Determine hunk type based on old/new line counts
+            const old_lines = h.old_lines;
+            const new_lines = h.new_lines;
+            const hunk_type: HunkType = if (old_lines == 0)
+                .add
+            else if (new_lines == 0)
+                .delete
+            else
+                .change;
+
+            // new_start is 1-indexed in git, convert to 0-indexed
+            const start_line: usize = if (h.new_start > 0) @intCast(h.new_start - 1) else 0;
+            const line_count: usize = if (new_lines > 0) @intCast(new_lines) else 1;
+
+            hunks.append(allocator, .{
+                .start_line = start_line,
+                .line_count = line_count,
+                .hunk_type = hunk_type,
+            }) catch return GitError.OutOfMemory;
+        }
+    }
+
+    return .{
+        .hunks = hunks.toOwnedSlice(allocator) catch return GitError.OutOfMemory,
+        .allocator = allocator,
+    };
+}
+
 /// Get libgit2 version string
 pub fn getVersionString(allocator: std.mem.Allocator) ![]const u8 {
     const v = c_api.getVersion();

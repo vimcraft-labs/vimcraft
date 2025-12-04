@@ -116,12 +116,12 @@ try layout.closeWindow(window_id);
 
 ## Performance Characteristics
 
-| Operation | ArrayList (Current) | Rope (Future) | Crossover Point |
-|-----------|-------------------|---------------|-----------------|
-| Insert/Delete | O(n) | O(log n) | ~10KB file |
-| Concat | O(n) | O(1) | Any size |
-| Index | O(1) | O(log n) | Direct access |
-| Memory | Contiguous | Fragmented | Cache locality |
+| Operation | Rope (Current) | Notes |
+|-----------|----------------|-------|
+| Insert/Delete | O(log n) | Tree-based, efficient for large files |
+| Concat | O(1) | Node linking, no copy |
+| Index | O(log n) | Tree traversal |
+| Memory | Reference-counted | Efficient undo via node sharing |
 
 ## Testing Guidelines
 

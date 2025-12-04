@@ -60,6 +60,7 @@ declare const vimKeymap: {
 };
 declare const vimFiletype: object;
 declare const vimTreesitter: object;
+declare const vimGit: object | undefined;
 declare const vimBuffer: object | undefined;
 declare const vimE2E: object | undefined;
 declare const vimEventEmitter: {
@@ -1550,6 +1551,7 @@ const vim: VimObject = {
 
   filetype: vimFiletype,
   treesitter: vimTreesitter,
+  git: vimGit || {},
   api: vimApi,
   autocmd: vimAutocmd,
   diagnostic: vimDiagnostic,

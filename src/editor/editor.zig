@@ -1669,28 +1669,36 @@ pub const Editor = struct {
 
                 // Handle pending 'd' commands
                 if (pending == 'd') {
+                    var text_changed = false;
                     switch (char) {
                         'd' => { // dd - delete line
                             const result = try self.edit_ops.deleteCurrentLine(buf);
                             defer self.allocator.free(result.deleted_text);
+                            text_changed = true;
                             // TODO: Store in register
                         },
                         'w' => { // dw - delete word
                             const result = try self.edit_ops.deleteWord(buf);
                             defer self.allocator.free(result.deleted_text);
+                            text_changed = true;
                             // TODO: Store in register
                         },
                         '$' => { // d$ - delete to end of line
                             const result = try self.edit_ops.deleteToEndOfLine(buf);
                             defer self.allocator.free(result.deleted_text);
+                            text_changed = true;
                             // TODO: Store in register
                         },
                         '0' => { // d0 - delete to start of line
                             const result = try self.edit_ops.deleteToStartOfLine(buf);
                             defer self.allocator.free(result.deleted_text);
+                            text_changed = true;
                             // TODO: Store in register
                         },
                         else => {},
+                    }
+                    if (text_changed) {
+                        self.triggerAutocommand("TextChanged");
                     }
                 }
 
@@ -1970,6 +1978,7 @@ pub const Editor = struct {
                 'x' => {
                     const result = try self.edit_ops.deleteCharAtCursor(buf);
                     defer self.allocator.free(result.deleted_text);
+                    self.triggerAutocommand("TextChanged");
                     return true; // Deleted character, state changed
                 },
                 'd' => {
@@ -2037,22 +2046,26 @@ pub const Editor = struct {
                     const reg = self.pending_register.getSelected() orelse '"';
                     _ = try paste.pasteAfter(buf, &self.register_mgr, reg);
                     self.pending_register.clear();
+                    self.triggerAutocommand("TextChanged");
                     return true; // Pasted text, state changed
                 },
                 'P' => {
                     const reg = self.pending_register.getSelected() orelse '"';
                     _ = try paste.pasteBefore(buf, &self.register_mgr, reg);
                     self.pending_register.clear();
+                    self.triggerAutocommand("TextChanged");
                     return true; // Pasted text, state changed
                 },
 
                 // Undo/redo
                 'u' => {
                     try buf.undo();
+                    self.triggerAutocommand("TextChanged");
                     return true; // Undo changes state
                 },
                 18 => { // Ctrl+R
                     try buf.redo();
+                    self.triggerAutocommand("TextChanged");
                     return true; // Redo changes state
                 },
 
@@ -2320,6 +2333,9 @@ pub const Editor = struct {
 
             // Trigger InsertLeave autocommand (Phase 4) BEFORE mode change
             self.triggerAutocommand("InsertLeave");
+
+            // TextChanged fires after leaving insert mode if buffer was modified
+            self.triggerAutocommand("TextChanged");
 
             // CRITICAL: Clamp cursor position for normal mode (Vim behavior)
             // In insert mode, cursor can be AFTER last char; in normal mode it must be ON a char
@@ -2594,6 +2610,7 @@ pub const Editor = struct {
                 if (std.mem.eql(u8, cmd, "w")) {
                     const buf = self.getCurrentBuffer() orelse return error.NoActiveBuffer;
                     try buf.saveFile();
+                    self.triggerAutocommand("BufWritePost");
                 } else if (std.mem.eql(u8, cmd, "q")) {
                     // Quit - close window if multiple windows, otherwise request quit
                     self.cmd_buffer.clear();
@@ -2617,6 +2634,7 @@ pub const Editor = struct {
                 } else if (std.mem.eql(u8, cmd, "wq")) {
                     const buf = self.getCurrentBuffer() orelse return error.NoActiveBuffer;
                     try buf.saveFile();
+                    self.triggerAutocommand("BufWritePost");
                     self.cmd_buffer.clear();
                     self.mode_manager.enterNormal();
                     return true; // Saved and mode changed

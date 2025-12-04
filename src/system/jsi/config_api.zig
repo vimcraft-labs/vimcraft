@@ -563,7 +563,14 @@ fn applySideEffects(ctx: *ConfigContext, name: []const u8, value: OptionValue) v
         }
     } else if (std.mem.eql(u8, name, "signcolumn")) {
         if (value == .string) {
-            ctx.highlight_config.signcolumn_mode = value.string;
+            // Use static strings to avoid lifetime issues with JSI temporaries
+            const mode: []const u8 = if (std.mem.eql(u8, value.string, "yes"))
+                "yes"
+            else if (std.mem.eql(u8, value.string, "auto"))
+                "auto"
+            else
+                "no";
+            ctx.highlight_config.signcolumn_mode = mode;
             if (current_window) |win| {
                 const WindowOptions = @import("../../editor/window.zig").WindowOptions;
                 win.options.signcolumn = if (std.mem.eql(u8, value.string, "yes"))

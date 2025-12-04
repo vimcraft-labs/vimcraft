@@ -198,3 +198,59 @@ pub fn addOpenSSL(step: *std.Build.Step.Compile, config: DepsConfig) void {
     step.linkSystemLibrary("pthread");
     step.linkSystemLibrary("dl");
 }
+
+// ============================================================================
+// LMDB (Lightning Memory-Mapped Database) - AI Storage NoSQL backend
+// ============================================================================
+
+/// Compile and link LMDB (pure C library)
+pub fn addLmdb(b: *std.Build, step: *std.Build.Step.Compile, config: DepsConfig) void {
+    // Include path
+    step.addIncludePath(b.path("vendor/lmdb/libraries/liblmdb"));
+
+    // Compile LMDB sources (pure C)
+    // Note: MDB_USE_ROBUST requires PTHREAD_MUTEX_ROBUST which is Linux-only
+    // Must explicitly disable on macOS (MDB_USE_ROBUST=0) to prevent auto-detection
+    const lmdb_flags = if (config.is_linux)
+        &[_][]const u8{ "-DMDB_USE_POSIX_MUTEX", "-DMDB_USE_ROBUST=1" }
+    else
+        &[_][]const u8{ "-DMDB_USE_POSIX_MUTEX", "-DMDB_USE_ROBUST=0" };
+
+    step.addCSourceFiles(.{
+        .root = b.path("vendor/lmdb/libraries/liblmdb"),
+        .files = &.{
+            "mdb.c",
+            "midl.c",
+        },
+        .flags = lmdb_flags,
+    });
+
+    // Link pthread for LMDB's locking
+    step.linkSystemLibrary("pthread");
+}
+
+// ============================================================================
+// usearch (Vector Similarity Search) - AI Storage vector backend
+// ============================================================================
+
+/// Compile and link usearch (C++ library with C API wrapper)
+pub fn addUsearch(b: *std.Build, step: *std.Build.Step.Compile) void {
+    // Include paths for C and C++ headers
+    step.addIncludePath(b.path("vendor/usearch/c"));
+    step.addIncludePath(b.path("vendor/usearch/include"));
+
+    // Compile usearch C++ wrapper (requires C++17)
+    step.addCSourceFile(.{
+        .file = b.path("vendor/usearch/c/lib.cpp"),
+        .flags = &.{
+            "-std=c++17",
+            "-fno-sanitize=all",
+            "-DUSEARCH_USE_OPENMP=0",
+            "-DUSEARCH_USE_FP16LIB=0",
+            "-DUSEARCH_USE_SIMSIMD=0",
+        },
+    });
+
+    // Link C++ standard library
+    step.linkLibCpp();
+}

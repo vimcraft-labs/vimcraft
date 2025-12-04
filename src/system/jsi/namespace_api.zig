@@ -637,6 +637,11 @@ pub const Extmark = struct {
     /// Virtual text chunks [[text, hlGroup], ...] - Neovim format
     /// When set, this extmark displays virtual text at virt_text_pos
     virt_text: ?[]VirtTextChunk = null,
+    /// Sign text to display in signcolumn (1-2 chars, e.g., "+", ">>")
+    /// Used by gitsigns, diagnostics, marks, etc.
+    sign_text: ?[]const u8 = null,
+    /// Highlight group for sign text (e.g., "GitSignsAdd", "DiagnosticSignError")
+    sign_hl_group: ?[]const u8 = null,
 };
 
 /// Buffer extmark storage
@@ -656,6 +661,8 @@ pub const BufferExtmarks = struct {
     pub fn deinit(self: *BufferExtmarks) void {
         for (self.extmarks.items) |ext| {
             if (ext.hl_group) |hg| self.allocator.free(hg);
+            if (ext.sign_text) |st| self.allocator.free(st);
+            if (ext.sign_hl_group) |shg| self.allocator.free(shg);
             // Free virt_text chunks
             if (ext.virt_text) |chunks| {
                 for (chunks) |chunk| {
@@ -692,6 +699,8 @@ pub const BufferExtmarks = struct {
         priority: u32,
         virt_text: ?[]const VirtTextChunk,
         virt_text_pos: VirtTextPos,
+        sign_text: ?[]const u8,
+        sign_hl_group: ?[]const u8,
     ) !u32 {
         const id = custom_id orelse blk: {
             const new_id = self.next_id;
@@ -702,9 +711,10 @@ pub const BufferExtmarks = struct {
         // Check if updating existing extmark
         for (self.extmarks.items) |*ext| {
             if (ext.id == id and ext.ns_id == ns_id) {
-                // Free old hl_group if exists
+                // Free old values if they exist
                 if (ext.hl_group) |hg| self.allocator.free(hg);
-                // Free old virt_text if exists
+                if (ext.sign_text) |st| self.allocator.free(st);
+                if (ext.sign_hl_group) |shg| self.allocator.free(shg);
                 self.freeVirtText(ext.virt_text);
 
                 // Update in place
@@ -716,6 +726,8 @@ pub const BufferExtmarks = struct {
                 ext.priority = priority;
                 ext.virt_text = try self.dupeVirtText(virt_text);
                 ext.virt_text_pos = virt_text_pos;
+                ext.sign_text = if (sign_text) |st| try self.allocator.dupe(u8, st) else null;
+                ext.sign_hl_group = if (sign_hl_group) |shg| try self.allocator.dupe(u8, shg) else null;
 
                 // Re-sort
                 self.sort();
@@ -730,6 +742,12 @@ pub const BufferExtmarks = struct {
         const virt_text_copy = try self.dupeVirtText(virt_text);
         errdefer self.freeVirtText(virt_text_copy);
 
+        const sign_text_copy = if (sign_text) |st| try self.allocator.dupe(u8, st) else null;
+        errdefer if (sign_text_copy) |st| self.allocator.free(st);
+
+        const sign_hl_group_copy = if (sign_hl_group) |shg| try self.allocator.dupe(u8, shg) else null;
+        errdefer if (sign_hl_group_copy) |shg| self.allocator.free(shg);
+
         try self.extmarks.append(self.allocator, .{
             .id = id,
             .ns_id = ns_id,
@@ -741,6 +759,8 @@ pub const BufferExtmarks = struct {
             .priority = priority,
             .virt_text = virt_text_copy,
             .virt_text_pos = virt_text_pos,
+            .sign_text = sign_text_copy,
+            .sign_hl_group = sign_hl_group_copy,
         });
 
         // Update next_id if custom_id was used
@@ -786,6 +806,8 @@ pub const BufferExtmarks = struct {
         for (self.extmarks.items, 0..) |ext, i| {
             if (ext.id == id and ext.ns_id == ns_id) {
                 if (ext.hl_group) |hg| self.allocator.free(hg);
+                if (ext.sign_text) |st| self.allocator.free(st);
+                if (ext.sign_hl_group) |shg| self.allocator.free(shg);
                 self.freeVirtText(ext.virt_text);
                 _ = self.extmarks.orderedRemove(i);
                 return true;
@@ -807,6 +829,39 @@ pub const BufferExtmarks = struct {
             }
         }
         return null;
+    }
+
+    /// Sign info for gutter rendering
+    pub const SignInfo = struct {
+        text: []const u8,
+        hl_group: ?[]const u8,
+        priority: u32,
+    };
+
+    /// Get the highest priority sign for a specific line
+    /// Used by gutter renderer to display signs in signcolumn
+    /// Returns null if no signs exist for this line
+    pub fn getSignForLine(self: *const BufferExtmarks, line: usize) ?SignInfo {
+        var best_sign: ?SignInfo = null;
+        var best_priority: u32 = 0;
+
+        for (self.extmarks.items) |ext| {
+            if (ext.line == line) {
+                if (ext.sign_text) |st| {
+                    // Higher priority wins, or first if equal
+                    if (best_sign == null or ext.priority > best_priority) {
+                        best_sign = .{
+                            .text = st,
+                            .hl_group = ext.sign_hl_group,
+                            .priority = ext.priority,
+                        };
+                        best_priority = ext.priority;
+                    }
+                }
+            }
+        }
+
+        return best_sign;
     }
 
     /// Sort extmarks by position (line, col)
@@ -1004,12 +1059,36 @@ pub export fn apiBufSetExtmark(
         }
     }
 
+    // Parse signText option: 1-2 character sign for signcolumn (e.g., "+", ">>", "✓")
+    var sign_text: ?[]const u8 = null;
+    if (c.hermes_value_get_property(rt, opts_val, "signText")) |st_val| {
+        if (c.hermes_value_is_string(st_val)) {
+            var st_len: usize = 0;
+            const st_ptr = c.hermes_value_get_string(rt, st_val, &st_len);
+            if (st_ptr != null and st_len > 0 and st_len <= 2) {
+                sign_text = st_ptr[0..st_len];
+            }
+        }
+    }
+
+    // Parse signHlGroup option: highlight group for sign text
+    var sign_hl_group: ?[]const u8 = null;
+    if (c.hermes_value_get_property(rt, opts_val, "signHlGroup")) |shg_val| {
+        if (c.hermes_value_is_string(shg_val)) {
+            var shg_len: usize = 0;
+            const shg_ptr = c.hermes_value_get_string(rt, shg_val, &shg_len);
+            if (shg_ptr != null and shg_len > 0) {
+                sign_hl_group = shg_ptr[0..shg_len];
+            }
+        }
+    }
+
     // Get or create buffer extmarks
     const buf_exts = ctx.getOrCreateBufferExtmarks(buf_handle) catch {
         return c.hermes_value_create_number(rt, 0);
     };
 
-    const id = buf_exts.set(ns_id, line, col, custom_id, end_line, end_col, hl_group, priority, virt_text_slice, virt_text_pos) catch {
+    const id = buf_exts.set(ns_id, line, col, custom_id, end_line, end_col, hl_group, priority, virt_text_slice, virt_text_pos, sign_text, sign_hl_group) catch {
         return c.hermes_value_create_number(rt, 0);
     };
 

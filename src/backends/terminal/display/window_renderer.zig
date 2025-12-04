@@ -632,16 +632,35 @@ fn renderWindowGutterLayer(
         // Render sign column first (if enabled)
         var gutter_offset: usize = 0;
         if (window.options.signcolumn == .yes) {
-            // Render empty sign column (2 spaces)
-            // TODO: Render actual signs (git, LSP diagnostics, etc.)
+            // Look up extmark signs for this line
+            var sign_char_0: u8 = ' ';
+            var sign_char_1: u8 = ' ';
+            var sign_fg = gutter_fg;
+
+            if (namespace_api.getBufferExtmarks(ctx.buffer_handle)) |buf_exts| {
+                if (buf_exts.getSignForLine(line_num)) |sign_info| {
+                    // Get sign characters (1-2 chars)
+                    if (sign_info.text.len >= 1) sign_char_0 = sign_info.text[0];
+                    if (sign_info.text.len >= 2) sign_char_1 = sign_info.text[1];
+
+                    // Apply sign highlight group if specified
+                    if (sign_info.hl_group) |hl_group| {
+                        const sign_style = ctx.registry.get(hl_group);
+                        if (sign_style.fg) |fg| {
+                            sign_fg = convertColor(fg);
+                        }
+                    }
+                }
+            }
+
             display.gutter_layer.grid.setCell(screen_row, region.col, .{
-                .char = ' ',
-                .fg = gutter_fg,
+                .char = sign_char_0,
+                .fg = sign_fg,
                 .bg = style_bg,
             });
             display.gutter_layer.grid.setCell(screen_row, region.col + 1, .{
-                .char = ' ',
-                .fg = gutter_fg,
+                .char = sign_char_1,
+                .fg = sign_fg,
                 .bg = style_bg,
             });
             gutter_offset = 2;

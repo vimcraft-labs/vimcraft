@@ -47,7 +47,8 @@ pub fn parse(allocator: std.mem.Allocator) !ParseResult {
     };
 
     if (args.len < 2) {
-        result.help = true;
+        // No arguments - open empty buffer (like nvim)
+        // Leave command and file_path as null to trigger editor mode
         return result;
     }
 
@@ -138,12 +139,14 @@ pub fn printHelp() void {
         \\      --metrics               Enable performance metrics tracking
         \\
         \\EDITOR MODES:
+        \\  vimc                        Open empty buffer (uses cwd as working dir)
         \\  vimc <file>                 Open file in interactive editor
         \\  vimc --debug <file>         Open file with Chrome DevTools debugging
         \\  vimc --test <test_file>     Run automated test script
         \\  vimc --repl                 Interactive debugging REPL
         \\
         \\EXAMPLES:
+        \\  vimc                        Start with empty buffer (like nvim)
         \\  vimc init                   Initialize TypeScript toolchain
         \\  vimc run plugin.ts          Execute TypeScript plugin
         \\  vimc test tests/e2e/basic   Run tests in sandbox

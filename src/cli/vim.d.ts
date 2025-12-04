@@ -137,6 +137,10 @@ export interface ExtmarkOpts {
   priority?: number;
   /** Update existing extmark by ID instead of creating new */
   id?: ExtmarkID;
+  /** Sign text to display in signcolumn (1-2 chars, e.g., "+", ">>", "✓") */
+  signText?: string;
+  /** Highlight group for sign text (e.g., "GitSignsAdd", "DiagnosticSignError") */
+  signHlGroup?: string;
 }
 
 /**
