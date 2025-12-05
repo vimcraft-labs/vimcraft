@@ -221,16 +221,16 @@ pub const AIStorage = struct {
             var iter = try self.db.iteratePrefix("idx:tag:");
             defer iter.deinit();
 
-            var keys_to_delete = std.ArrayList([]const u8).init(self.allocator);
+            var keys_to_delete: std.ArrayList([]const u8) = .empty;
             defer {
                 for (keys_to_delete.items) |k| self.allocator.free(k);
-                keys_to_delete.deinit();
+                keys_to_delete.deinit(self.allocator);
             }
 
             while (iter.next()) |entry| {
                 // Check if this index entry is for our pattern
                 if (std.mem.endsWith(u8, entry.key, escaped_id)) {
-                    try keys_to_delete.append(try self.allocator.dupe(u8, entry.key));
+                    try keys_to_delete.append(self.allocator, try self.allocator.dupe(u8, entry.key));
                 }
             }
 
@@ -282,10 +282,10 @@ pub const AIStorage = struct {
         const escaped_tag = try lmdb.escapeKeyComponent(self.allocator, tag);
         defer self.allocator.free(escaped_tag);
 
-        var results = std.ArrayList([]const u8).init(self.allocator);
+        var results: std.ArrayList([]const u8) = .empty;
         errdefer {
             for (results.items) |item| self.allocator.free(item);
-            results.deinit();
+            results.deinit(self.allocator);
         }
 
         const prefix = try std.fmt.allocPrint(self.allocator, "idx:tag:{s}:", .{escaped_tag});
@@ -302,7 +302,7 @@ pub const AIStorage = struct {
                 defer self.allocator.free(id);
 
                 const pattern = self.getPattern(id) catch continue;
-                try results.append(pattern);
+                try results.append(self.allocator, pattern);
             }
         }
 
@@ -420,10 +420,10 @@ pub const AIStorage = struct {
         const escaped_from = try lmdb.escapeKeyComponent(self.allocator, from);
         defer self.allocator.free(escaped_from);
 
-        var results = std.ArrayList(Edge).init(self.allocator);
+        var results: std.ArrayList(Edge) = .empty;
         errdefer {
             for (results.items) |*e| e.deinit(self.allocator);
-            results.deinit();
+            results.deinit(self.allocator);
         }
 
         const prefix = if (relationship) |rel| blk: {
@@ -444,7 +444,7 @@ pub const AIStorage = struct {
                     self.allocator.free(edge_parts.to);
                 }
 
-                try results.append(.{
+                try results.append(self.allocator, .{
                     .from = try self.allocator.dupe(u8, edge_parts.from),
                     .relationship = try self.allocator.dupe(u8, edge_parts.relationship),
                     .to = try self.allocator.dupe(u8, edge_parts.to),
@@ -461,10 +461,10 @@ pub const AIStorage = struct {
         const escaped_to = try lmdb.escapeKeyComponent(self.allocator, to);
         defer self.allocator.free(escaped_to);
 
-        var results = std.ArrayList(Edge).init(self.allocator);
+        var results: std.ArrayList(Edge) = .empty;
         errdefer {
             for (results.items) |*e| e.deinit(self.allocator);
-            results.deinit();
+            results.deinit(self.allocator);
         }
 
         const prefix = if (relationship) |rel| blk: {
@@ -496,7 +496,7 @@ pub const AIStorage = struct {
 
             const metadata = self.db.get(edge_key) catch try self.allocator.dupe(u8, "");
 
-            try results.append(.{
+            try results.append(self.allocator, .{
                 .from = try self.allocator.dupe(u8, from),
                 .relationship = try self.allocator.dupe(u8, rel),
                 .to = try self.allocator.dupe(u8, to),
@@ -560,10 +560,10 @@ pub const AIStorage = struct {
         const escaped_id = try lmdb.escapeKeyComponent(self.allocator, conv_id);
         defer self.allocator.free(escaped_id);
 
-        var results = std.ArrayList([]const u8).init(self.allocator);
+        var results: std.ArrayList([]const u8) = .empty;
         errdefer {
             for (results.items) |item| self.allocator.free(item);
-            results.deinit();
+            results.deinit(self.allocator);
         }
 
         const prefix = try std.fmt.allocPrint(self.allocator, "conv:{s}:msg:", .{escaped_id});
@@ -573,7 +573,7 @@ pub const AIStorage = struct {
         defer iter.deinit();
 
         while (iter.next()) |entry| {
-            try results.append(try self.allocator.dupe(u8, entry.value));
+            try results.append(self.allocator, try self.allocator.dupe(u8, entry.value));
         }
 
         return results;

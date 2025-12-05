@@ -17,8 +17,18 @@ const Style = @import("../../../system/jsi/highlight_api.zig").Style;
 const Color = @import("../../../system/jsi/highlight_api.zig").Color;
 const HighlightRegistry = @import("../../../system/jsi/highlight_api.zig").HighlightRegistry;
 
+// Highlight cache for efficient repeated rendering
+const HighlightCache = @import("../../../editor/highlight_cache.zig").HighlightCache;
+const StyleSpan = @import("../../../editor/highlight_cache.zig").StyleSpan;
+
 // Shared listchars rendering (DRY: used by both layer_renderer and window_renderer)
 const listchars_renderer = @import("listchars_renderer.zig");
+
+// Namespace API for extmark signs lookup
+const namespace_api = @import("../../../system/jsi/namespace_api.zig");
+
+// Shared sign rendering (DRY: used by both layer_renderer and window_renderer)
+const sign_renderer = @import("sign_renderer.zig");
 
 // ============================================================================
 // PHASE 2.5: Layer-based Rendering Pipeline
@@ -49,6 +59,14 @@ pub fn updateLayers(
         editor.buffer()
     else
         &editor.buffer; // Duck-typed fallback for MockEditor in benchmarks
+
+    // Get buffer handle for extmark lookups (signs, virtual text)
+    const buffer_handle: i64 = if (T == *Editor) blk: {
+        if (editor.current_buffer_id) |bid| {
+            break :blk @intCast(bid.id);
+        }
+        break :blk 0;
+    } else 0; // EditorContext doesn't use buffer handles
 
     const text_rows = if (self.terminal_rows > 1) self.terminal_rows - 1 else 1;
 
@@ -84,7 +102,7 @@ pub fn updateLayers(
     // Update each layer in logical order (not z-order)
     // All layers now use unified registry (Neovim/Helix pattern)
     try updateBaseLayer(self, editor, registry, text_rows, list_enabled, listchars);
-    try updateGutterLayer(self, buffer, registry, text_rows);
+    try updateGutterLayer(self, buffer, registry, text_rows, buffer_handle);
     try updateSelectionLayer(self, buffer, visual_state, registry, text_rows);
     try updateYankLayer(self, buffer, yank_highlight, registry, text_rows);
     try updateSearchLayer(self, buffer, search_matches, search_match_index, registry, text_rows);
@@ -146,13 +164,17 @@ fn updateBaseLayer(
         );
     }
 
+    // PERFORMANCE: Get highlight cache for this buffer
+    // Cache stores computed tree-sitter styles per line to avoid re-computation
+    const highlight_cache: ?*HighlightCache = buffer.getOrCreateHighlightCache() catch null;
+
     var row: usize = 0;
     while (row < text_rows) : (row += 1) {
         const line_num = self.viewport_top + row;
 
         if (line_num < buffer.lineCount()) {
             const line = buffer.getLine(line_num).?;
-            defer buffer.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+            // getLine returns borrowed slice from cache - no free needed
             const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
             else
@@ -171,10 +193,10 @@ fn updateBaseLayer(
             const text_byte_offset = line_byte_offset + start_col;
 
             // Render text to base layer
-            // Priority: Syntax highlighting > listchars > plain text
+            // Priority: Syntax highlighting (cached) > listchars > plain text
             // Gracefully fall back to listchars/plain text if syntax highlighting fails
             const end_col = if (lang_tree_highlighter) |*lth| blk: {
-                break :blk renderWithSyntaxHighlight(self, lth, row, gutter_width, remaining, text_byte_offset, list_enabled, listchars, lc_colors, fg_color, bg_color) catch {
+                break :blk renderWithSyntaxHighlight(self, lth, row, gutter_width, remaining, text_byte_offset, line_num, line_byte_offset, highlight_cache, list_enabled, listchars, lc_colors, fg_color, bg_color) catch {
                     // Syntax highlighting failed (missing query file, etc.) - fall back to listchars or plain text
                     break :blk if (list_enabled)
                         try renderWithListChars(self, row, gutter_width, remaining, listchars, lc_colors, fg_color, bg_color)
@@ -210,6 +232,7 @@ fn updateGutterLayer(
     buffer: *const Buffer,
     registry: *const HighlightRegistry,
     text_rows: usize,
+    buffer_handle: i64,
 ) !void {
     const gutter_width = self.gutter_manager.getTotalWidth();
     if (gutter_width == 0) return;
@@ -217,6 +240,12 @@ fn updateGutterLayer(
     // Get LineNr style for background of empty gutter lines
     const line_nr_style = registry.get("LineNr");
     const empty_gutter_bg = if (line_nr_style.bg) |c| convertColor(c) else null;
+
+    // Get buffer extmarks for sign lookup
+    const buf_exts = namespace_api.getBufferExtmarks(buffer_handle);
+
+    // Check if sign column is enabled (signs are rendered directly from extmarks, not gutter_manager)
+    const sign_column_enabled = self.sign_column_config.mode == .yes;
 
     var row: usize = 0;
     while (row < text_rows) : (row += 1) {
@@ -229,15 +258,6 @@ fn updateGutterLayer(
             continue;
         }
 
-        // Render gutter content for actual buffer lines
-        var gutter_buf: [32]u8 = undefined;
-        const gutter_str_len = self.gutter_manager.renderLine(
-            line_num,
-            buffer.cursor.row,
-            &gutter_buf,
-        );
-        const gutter_str = gutter_buf[0..gutter_str_len];
-
         // Get line number highlights from unified registry
         const is_cursor_line = (line_num == buffer.cursor.row);
         const style = if (is_cursor_line)
@@ -248,31 +268,100 @@ fn updateGutterLayer(
         const gutter_fg = if (style.fg) |c| convertColor(c) else null;
         const gutter_bg = if (style.bg) |c| convertColor(c) else empty_gutter_bg;
 
-        // Render gutter characters
         var gutter_col: usize = 0;
-        var byte_idx: usize = 0;
-        while (byte_idx < gutter_str.len and gutter_col < gutter_width) {
-            const char_len = std.unicode.utf8ByteSequenceLength(gutter_str[byte_idx]) catch 1;
-            if (byte_idx + char_len > gutter_str.len) break;
 
-            const codepoint = std.unicode.utf8Decode(gutter_str[byte_idx..][0..char_len]) catch ' ';
+        // Render sign column FIRST (before line numbers) - matches Neovim layout
+        if (sign_column_enabled) {
+            // Use shared sign renderer for consistent UTF-8 handling
+            const sign = sign_renderer.lookupSign(buf_exts, line_num);
+            var sign_fg = gutter_fg;
+            if (sign.hl_group) |hl_group| {
+                const sign_style = registry.get(hl_group);
+                if (sign_style.fg) |fg| {
+                    sign_fg = convertColor(fg);
+                }
+            }
+
+            // Render sign characters
             self.gutter_layer.grid.setCell(row, gutter_col, .{
-                .char = codepoint,
-                .fg = gutter_fg,
+                .char = sign.chars.char_0,
+                .fg = sign_fg,
                 .bg = gutter_bg,
             });
-
             gutter_col += 1;
-            byte_idx += char_len;
+
+            self.gutter_layer.grid.setCell(row, gutter_col, .{
+                .char = sign.chars.char_1,
+                .fg = sign_fg,
+                .bg = gutter_bg,
+            });
+            gutter_col += 1;
         }
 
-        // Pad remaining gutter space
-        while (gutter_col < gutter_width) : (gutter_col += 1) {
-            self.gutter_layer.grid.setCell(row, gutter_col, .{
-                .char = ' ',
-                .fg = gutter_fg,
-                .bg = gutter_bg,
-            });
+        // Render line numbers AFTER sign column
+        // Get line number column directly (skip gutter_manager to avoid duplicate sign rendering)
+        const line_num_col = self.gutter_manager.getColumn("line_numbers");
+        if (line_num_col) |col| {
+            if (col.enabled and col.cached_width > 0) {
+                var line_num_buf: [32]u8 = undefined;
+                const line_num_end = @min(col.cached_width, line_num_buf.len);
+                const written = col.renderer(line_num, buffer.cursor.row, line_num_buf[0..line_num_end]);
+                const gutter_str = line_num_buf[0..written];
+
+                // Render line number characters
+                var byte_idx: usize = 0;
+                while (byte_idx < gutter_str.len and gutter_col < gutter_width) {
+                    const char_len = std.unicode.utf8ByteSequenceLength(gutter_str[byte_idx]) catch 1;
+                    if (byte_idx + char_len > gutter_str.len) break;
+
+                    const codepoint = std.unicode.utf8Decode(gutter_str[byte_idx..][0..char_len]) catch ' ';
+                    self.gutter_layer.grid.setCell(row, gutter_col, .{
+                        .char = codepoint,
+                        .fg = gutter_fg,
+                        .bg = gutter_bg,
+                    });
+
+                    gutter_col += 1;
+                    byte_idx += char_len;
+                }
+            }
+        } else {
+            // No line_numbers column - use gutter_manager.renderLine for other columns
+            // Note: renderSignColumn is a no-op (returns 0), so gutter_buf only contains
+            // non-sign columns. Signs were already rendered above from extmarks.
+            var gutter_buf: [32]u8 = undefined;
+            const gutter_str_len = self.gutter_manager.renderLine(
+                line_num,
+                buffer.cursor.row,
+                &gutter_buf,
+            );
+            const gutter_str = gutter_buf[0..gutter_str_len];
+
+            // Render gutter characters (starts after sign column which was already rendered)
+            var byte_idx: usize = 0;
+            while (byte_idx < gutter_str.len and gutter_col < gutter_width) {
+                const char_len = std.unicode.utf8ByteSequenceLength(gutter_str[byte_idx]) catch 1;
+                if (byte_idx + char_len > gutter_str.len) break;
+
+                const codepoint = std.unicode.utf8Decode(gutter_str[byte_idx..][0..char_len]) catch ' ';
+                self.gutter_layer.grid.setCell(row, gutter_col, .{
+                    .char = codepoint,
+                    .fg = gutter_fg,
+                    .bg = gutter_bg,
+                });
+
+                gutter_col += 1;
+                byte_idx += char_len;
+            }
+
+            // Pad remaining gutter space
+            while (gutter_col < gutter_width) : (gutter_col += 1) {
+                self.gutter_layer.grid.setCell(row, gutter_col, .{
+                    .char = ' ',
+                    .fg = gutter_fg,
+                    .bg = gutter_bg,
+                });
+            }
         }
     }
 
@@ -321,7 +410,7 @@ pub fn updateSelectionLayer(
         if (line_num >= visual_range.start.line and line_num <= visual_range.end.line) {
             if (line_num < buffer.lineCount()) {
                 const line = buffer.getLine(line_num).?;
-                defer buffer.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+                // getLine returns borrowed slice from cache - no free needed
                 const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                     line[0 .. line.len - 1]
                 else
@@ -352,7 +441,7 @@ pub fn updateSelectionLayer(
                     if (visual_state.contains(cursor_pos, char_pos)) {
                         // This character is selected - render with visual background
                         self.selection_layer.grid.setCell(row, screen_col, .{
-                            .char = ' ', // Transparent char, just background
+                            .char = 0, // Null char = background overlay, shows underlying text
                             .bg = visual_bg,
                         });
                     }
@@ -397,7 +486,7 @@ fn updateYankLayer(
         if (line_num >= yank_highlight.start.line and line_num <= yank_highlight.end.line) {
             if (line_num < buffer.lineCount()) {
                 const line = buffer.getLine(line_num).?;
-                defer buffer.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+                // getLine returns borrowed slice from cache - no free needed
                 const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                     line[0 .. line.len - 1]
                 else
@@ -426,7 +515,7 @@ fn updateYankLayer(
 
                     if (yank_highlight.contains(char_pos)) {
                         self.yank_layer.grid.setCell(row, screen_col, .{
-                            .char = ' ',
+                            .char = 0, // Null char = background overlay, shows underlying text
                             .bg = yank_bg,
                         });
                     }
@@ -494,7 +583,7 @@ fn updateSearchLayer(
         if (match.line >= buffer.lineCount()) continue;
 
         const line = buffer.getLine(match.line).?;
-        defer buffer.allocator.free(line);
+        // getLine returns borrowed slice from cache - no free needed
         const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
             line[0 .. line.len - 1]
         else
@@ -561,6 +650,9 @@ fn convertColor(api_color: Color) highlights.Color {
 /// - start_col: Starting column (typically gutter_width)
 /// - text: UTF-8 encoded text to render (without trailing newline)
 /// - text_byte_offset: Byte offset of text in buffer (for tree-sitter range calculation)
+/// - line_num: Buffer line number (for cache lookup)
+/// - line_byte_offset: Byte offset of line start in buffer (for cache span conversion)
+/// - highlight_cache: Optional highlight cache for this buffer
 /// - list_enabled: Whether listchars replacement is enabled
 /// - listchars: Configuration for invisible character symbols
 /// - lc_colors: Pre-computed listchars colors
@@ -575,54 +667,98 @@ fn renderWithSyntaxHighlight(
     start_col: usize,
     text: []const u8,
     text_byte_offset: usize,
+    line_num: usize,
+    line_byte_offset: usize,
+    highlight_cache: ?*HighlightCache,
     list_enabled: bool,
     listchars: *const ListChars,
     lc_colors: ListCharsColors,
     fg_color: ?highlights.Color,
     bg_color: ?highlights.Color,
 ) !usize {
-    // Get syntax highlights for this text range
-    const range = Range{
-        .start_byte = @intCast(text_byte_offset),
-        .end_byte = @intCast(text_byte_offset + text.len),
-    };
+    // PERFORMANCE: Check highlight cache first
+    // If cached, use O(spans) direct lookup instead of O(bytes) hashmap
+    var cached_spans: ?[]const StyleSpan = null;
+    var cache_hit = false;
+    var span_idx: usize = 0; // Current span index for advancing lookup
 
-    // LanguageTreeHighlighter.highlights() returns !MultiTreeStyledHighlightIterator
-    var iter = try highlighter.highlights(range);
-    defer iter.deinit();
+    if (highlight_cache) |cache| {
+        if (cache.getStyleLine(line_num)) |cached_styles| {
+            // Cache hit! Use cached spans for O(spans) lookup
+            cached_spans = cached_styles.spans;
+            cache_hit = true;
+        }
+    }
 
-    // Build highlight map (byte offset → Style)
-    // We use a simple array since we're only rendering one line at a time
+    // Build highlight map only on cache miss
     var highlight_map = std.AutoHashMap(usize, Style).init(self.allocator);
     defer highlight_map.deinit();
 
-    // MultiTreeStyledHighlightIterator.next() returns !?StyledHighlight
-    while (iter.next() catch null) |styled| {
-        // Convert absolute byte offsets to text-relative offsets
-        const range_start = if (styled.range.start_byte >= text_byte_offset)
-            styled.range.start_byte - text_byte_offset
-        else
-            0;
+    // Temporary buffer for spans to cache
+    var spans_to_cache: std.ArrayList(StyleSpan) = .empty;
+    defer spans_to_cache.deinit(self.allocator);
 
-        const range_end = if (styled.range.end_byte >= text_byte_offset)
-            @min(styled.range.end_byte - text_byte_offset, text.len)
-        else
-            0;
+    if (!cache_hit) {
+        // Cache miss - compute via tree-sitter
+        const range = Range{
+            .start_byte = @intCast(text_byte_offset),
+            .end_byte = @intCast(text_byte_offset + text.len),
+        };
 
-        // Apply style to ALL bytes in the range, not just the first byte
-        var byte_offset = range_start;
-        while (byte_offset < range_end) : (byte_offset += 1) {
-            try highlight_map.put(byte_offset, styled.style);
+        var iter = try highlighter.highlights(range);
+        defer iter.deinit();
+
+        while (iter.next() catch null) |styled| {
+            const range_start = if (styled.range.start_byte >= text_byte_offset)
+                styled.range.start_byte - text_byte_offset
+            else
+                0;
+
+            const range_end = if (styled.range.end_byte >= text_byte_offset)
+                @min(styled.range.end_byte - text_byte_offset, text.len)
+            else
+                0;
+
+            // Populate hashmap for rendering
+            var byte_offset = range_start;
+            while (byte_offset < range_end) : (byte_offset += 1) {
+                try highlight_map.put(byte_offset, styled.style);
+            }
+
+            // Collect span for caching (relative to line start)
+            const cache_start = if (styled.range.start_byte >= line_byte_offset)
+                @as(u32, @intCast(styled.range.start_byte - line_byte_offset))
+            else
+                0;
+            const cache_end = if (styled.range.end_byte >= line_byte_offset)
+                @as(u32, @intCast(@min(styled.range.end_byte - line_byte_offset, text.len + (text_byte_offset - line_byte_offset))))
+            else
+                0;
+
+            if (cache_start < cache_end) {
+                try spans_to_cache.append(self.allocator, StyleSpan{
+                    .start_byte = cache_start,
+                    .end_byte = cache_end,
+                    .style = styled.style,
+                });
+            }
+        }
+
+        // Store in cache for next render
+        if (highlight_cache) |cache| {
+            cache.setStyleLine(line_num, spans_to_cache.items) catch {};
         }
     }
 
     // Render text character by character with syntax colors
-    // Note: lc_colors.ws_fg/ws_bg used by shared module, sk_fg/sk_bg for EOL
     const sk_fg = lc_colors.sk_fg;
     const sk_bg = lc_colors.sk_bg;
     var col = start_col;
     var byte_idx: usize = 0;
     var last_non_space_col = start_col;
+
+    // Precompute the scroll offset for span lookup
+    const scroll_offset = text_byte_offset - line_byte_offset;
 
     while (byte_idx < text.len and col < self.terminal_cols) {
         const char_len = std.unicode.utf8ByteSequenceLength(text[byte_idx]) catch 1;
@@ -632,7 +768,25 @@ fn renderWithSyntaxHighlight(
         var display_char = codepoint;
 
         // Look up syntax highlight for this character
-        const syntax_style = highlight_map.get(byte_idx);
+        // PERFORMANCE: Use cached spans O(spans) or hashmap O(1) lookup
+        const syntax_style: ?Style = if (cached_spans) |spans| blk: {
+            // Byte position relative to line start
+            const line_byte = scroll_offset + byte_idx;
+
+            // Advance past expired spans (O(spans) total for entire line)
+            while (span_idx < spans.len and spans[span_idx].end_byte <= line_byte) {
+                span_idx += 1;
+            }
+
+            // Check if current byte is within current span
+            if (span_idx < spans.len) {
+                const span = spans[span_idx];
+                if (line_byte >= span.start_byte and line_byte < span.end_byte) {
+                    break :blk span.style;
+                }
+            }
+            break :blk null;
+        } else highlight_map.get(byte_idx);
 
         // Extract syntax colors (if available)
         const syntax_fg = if (syntax_style) |style|

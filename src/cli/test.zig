@@ -421,6 +421,25 @@ pub fn execute(allocator: std.mem.Allocator, sandbox_path: []const u8, verbose: 
             }
             return error.ConfigExecutionFailed;
         }
+
+        // Apply signcolumn setting to Display (registers sign column in gutter)
+        // AND to all existing windows (they were created before config loaded)
+        try editor_ctx.display.setSignColumn(highlight_config.signcolumn_mode);
+
+        {
+            const WindowOptions = @import("../editor/window.zig").WindowOptions;
+            const sc_mode: WindowOptions.SignColumn = if (std.mem.eql(u8, highlight_config.signcolumn_mode, "yes"))
+                .yes
+            else if (std.mem.eql(u8, highlight_config.signcolumn_mode, "auto"))
+                .auto
+            else
+                .no;
+
+            var win_iter = editor_ctx.editor.windows.valueIterator();
+            while (win_iter.next()) |win| {
+                win.*.options.signcolumn = sc_mode;
+            }
+        }
     }
 
     // Step 2: Load e2e.ts - runs tests using vim.e2e API

@@ -656,6 +656,20 @@ fn createEnvObject(runtime: ?*c.OVHermesRuntime) ?*c.OVHermesValue {
         "XDG_CONFIG_HOME",
         "XDG_DATA_HOME",
         "XDG_CACHE_HOME",
+        // AI Provider API Keys
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORG_ID",
+        "OLLAMA_HOST",
+        "GROQ_API_KEY",
+        "GEMINI_API_KEY",
+        "MISTRAL_API_KEY",
+        "COHERE_API_KEY",
+        "TOGETHER_API_KEY",
+        "FIREWORKS_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "DEEPSEEK_API_KEY",
     };
 
     for (env_vars) |name| {

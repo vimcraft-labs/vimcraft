@@ -2,6 +2,8 @@
 
 Guidance for Claude Code when working with the Vimcraft editor codebase.
 
+this is newly added!
+
 ## ⚠️ SACRED FILES - DO NOT MODIFY WITHOUT EXPLICIT APPROVAL
 
 | File | Why Sacred | Modification Risk | Key Functions |
@@ -11,6 +13,23 @@ Guidance for Claude Code when working with the Vimcraft editor codebase.
 | `src/system/jsi/hermes_c_api.h` | C API declarations | ABI breaks, undefined symbols | Lines 30-75: Function signatures |
 | `src/main.zig:690-743` | Main event loop with throttling | Freezes editor, loses input | Event batching logic |
 | `vendor/hermes/` | Prebuilt Hermes binaries | 287MB rebuild, version conflicts | DO NOT TOUCH |
+
+## ⚠️ CRITICAL: Performance Safeguards
+
+**Benchmarks act as safeguards on critical paths. If thresholds are exceeded, builds fail.**
+
+Incident: O(n) API call in render loop caused 10x slowdown. Benchmarks prevent regressions.
+
+| Critical Path | Threshold | Tests |
+|---------------|-----------|-------|
+| Frame render | <8ms single, <5ms avg | 3 tests |
+| Navigation (j/k/h/l) | <3ms single, <150ms for 50 | 9 tests |
+| O(n) scaling | ratio ≤15x (detects O(n²)) | 3 tests |
+| Mode switching | <3ms single, <200ms for 100 | 3 tests |
+| Stress (mixed, diagonal, word) | <400ms for 100 ops | 4 tests |
+| PTY overhead | <30% | 1 test |
+
+**Run**: `vimc test tests/e2e/perf-critical` — 23 tests, real PTY + Hermes + full stack.
 
 ## Overview
 

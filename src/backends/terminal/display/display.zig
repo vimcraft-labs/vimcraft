@@ -136,6 +136,7 @@ pub const Display = struct {
     selection_layer: *Layer, // Visual mode (z=400)
     yank_layer: *Layer, // Yank highlight (z=450)
     search_layer: *Layer, // Search highlights (z=500)
+    float_layer: *Layer, // Floating windows (z=250, above cursor)
 
     // Gutter system (line numbers, signs, etc.)
     gutter_manager: gutter.GutterManager,
@@ -270,6 +271,7 @@ pub const Display = struct {
         const selection = try layer_manager.createLayer(ZIndex.SELECTION, 24, 80, "selection");
         const yank = try layer_manager.createLayer(ZIndex.YANK, 24, 80, "yank");
         const search_layer = try layer_manager.createLayer(ZIndex.SEARCH, 24, 80, "search");
+        const float_layer = try layer_manager.createLayer(250, 24, 80, "float"); // z=250, above cursor
 
         // PHASE 6: Enable caching for static layers (huge performance win)
         // TEMPORARY FIX: Disable gutter caching due to override bug
@@ -302,6 +304,7 @@ pub const Display = struct {
             .selection_layer = selection,
             .yank_layer = yank,
             .search_layer = search_layer,
+            .float_layer = float_layer,
             .gutter_manager = gutter_mgr,
             .line_number_config = .{}, // Default: no line numbers
             .sign_column_config = .{}, // Default: no sign column
@@ -519,10 +522,12 @@ pub const Display = struct {
             if (sign_mode == .yes) {
                 if (self.gutter_manager.getColumn("signs")) |col| {
                     col.enabled = true;
+                    col.cached_width = 2;
                 } else {
                     try self.gutter_manager.registerColumn("signs", gutter.renderSignColumn);
-                    // Set width to 2 for sign column
+                    // Set width and enabled for newly registered column
                     if (self.gutter_manager.getColumn("signs")) |col| {
+                        col.enabled = true;
                         col.cached_width = 2;
                     }
                 }
@@ -701,6 +706,16 @@ pub const Display = struct {
         // Adjust viewport to keep cursor visible
         self.adjustViewport(buffer);
 
+        // BIDIRECTIONAL SYNC: Keep Window.viewport.top_line in sync with Display.viewport_top
+        // This ensures switching between single-window and multi-window render doesn't cause jumps
+        if (T == *Editor) {
+            if (editor.getCurrentWindow()) |win| {
+                if (!win.isFloating()) {
+                    win.viewport.top_line = self.viewport_top;
+                }
+            }
+        }
+
         // CRITICAL FIX: Sync gutter_manager with window options BEFORE calculating gutter_width
         // This ensures layer_renderer.updateLayers() uses the same gutter settings as renderAllWindows()
         // Without this sync, single-window mode has no line numbers, multi-window mode has them,
@@ -756,7 +771,7 @@ pub const Display = struct {
         // Use the padding-aware version to account for visual padding in grid
         const cursor_display_col = if (buffer.cursor.row < buffer.lineCount()) blk: {
             const line = buffer.getLine(buffer.cursor.row) orelse break :blk buffer.cursor.col;
-            defer buffer.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+            // getLine returns borrowed slice from cache - no free needed
             const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
             else
@@ -961,6 +976,7 @@ pub const Display = struct {
         self.cursor_layer.grid.clear();
         self.selection_layer.grid.clear();
         self.yank_layer.grid.clear();
+        self.float_layer.grid.clear();
 
         // Get active window for cursor positioning
         const active_win_id = editor.current_window_id;
@@ -971,11 +987,71 @@ pub const Display = struct {
         // But renderAllWindows uses window.cursor for positioning. Without this sync,
         // vertical movement (j/k) appears broken - state updates but cursor doesn't move visually.
         // Only sync the CURRENT window; other windows keep their own independent cursor.
+        // Determine if per-window statuslines should be shown FIRST
+        // (needed to calculate correct effective height for ensureCursorVisible)
+        // laststatus: 0=never, 1=only if multiple windows (splits, not floating), 2=always, 3=global
+        // Neovim convention: floating windows don't count toward "multiple windows" for laststatus=1
+        // CRITICAL FIX: Don't render per-window statuslines when floating windows are visible.
+        const total_windows = editor.windows.count();
+        const non_floating_count = editor.countNonFloatingWindows();
+        const has_floating_windows = total_windows > non_floating_count;
+        const show_per_window_statusline = !has_floating_windows and
+            ((laststatus >= 2) or (laststatus == 1 and non_floating_count > 1));
+
         if (active_window) |win| {
             if (editor.buffers.get(win.buffer_id)) |buffer| {
                 win.cursor.row = buffer.cursor.row;
                 win.cursor.col = buffer.cursor.col;
-                win.ensureCursorVisible(); // Update viewport if cursor moved offscreen
+
+                // CRITICAL FIX: Sync window viewport from display viewport!
+                // When switching from single-window render (display.render) to multi-window render
+                // (display.renderAllWindows), the window's viewport.top_line may be stale (still 0).
+                // Single-window render uses Display.viewport_top, multi-window uses Window.viewport.top_line.
+                // Without this sync, opening a floating window causes viewport to jump back to top briefly.
+                // Only sync for non-floating windows - floating windows have their own viewport.
+                if (!win.isFloating() and win.viewport.top_line == 0 and self.viewport_top > 0) {
+                    win.viewport.top_line = self.viewport_top;
+                    std.log.debug("VIEWPORT_SYNC: synced window.viewport.top_line from display.viewport_top: {d}", .{self.viewport_top});
+                }
+
+                // Calculate effective height for ensureCursorVisible
+                // CRITICAL: This must match the render_height used in window_renderer
+                // to avoid viewport jumping when floating windows change statusline visibility
+                const effective_height = if (show_per_window_statusline or win.isFloating())
+                    win.height
+                else
+                    // Statusline hidden, so we have extra row for content
+                    @min(win.height + 1, self.terminal_rows -| win.screen_row -| 1);
+
+                // DEBUG: Log before ensureCursorVisible
+                const old_top = win.viewport.top_line;
+                std.log.debug("RENDER_START: win_id={d}, is_float={}, cursor={d}, top_line={d}, win.height={d}, effective_height={d}, has_floats={}", .{
+                    win.id.id,
+                    win.isFloating(),
+                    win.cursor.row,
+                    win.viewport.top_line,
+                    win.height,
+                    effective_height,
+                    has_floating_windows,
+                });
+
+                // Use effective_height instead of win.height for consistent viewport calculation
+                window_renderer.ensureCursorVisibleWithHeight(win, buffer, effective_height);
+
+                if (win.viewport.top_line != old_top) {
+                    std.log.debug("VIEWPORT_SCROLL: display.zig ensureCursorVisible: top_line {d} -> {d}, cursor={d}, effective_height={d}", .{
+                        old_top,
+                        win.viewport.top_line,
+                        win.cursor.row,
+                        effective_height,
+                    });
+                }
+
+                // BIDIRECTIONAL SYNC: Keep Display.viewport_top in sync with Window.viewport.top_line
+                // This ensures switching between multi-window and single-window render doesn't cause jumps
+                if (!win.isFloating()) {
+                    self.viewport_top = win.viewport.top_line;
+                }
             }
         }
 
@@ -983,19 +1059,6 @@ pub const Display = struct {
         // This ensures floating windows render ON TOP of regular windows.
         // Without this, HashMap iteration order is unpredictable, and floating
         // windows may render before the main window, getting overwritten.
-
-        // Determine if per-window statuslines should be shown
-        // laststatus: 0=never, 1=only if multiple windows (splits, not floating), 2=always, 3=global
-        // Neovim convention: floating windows don't count toward "multiple windows" for laststatus=1
-        // CRITICAL FIX: Don't render per-window statuslines when floating windows are visible.
-        // Statuslines are rendered BEFORE compositor output (to avoid separator gap bug),
-        // but this means floating windows (rendered via compositor) can't cover them.
-        // Hiding statuslines when floating windows appear prevents visual overlap.
-        const total_windows = editor.windows.count();
-        const non_floating_count = editor.countNonFloatingWindows();
-        const has_floating_windows = total_windows > non_floating_count;
-        const show_per_window_statusline = !has_floating_windows and
-            ((laststatus >= 2) or (laststatus == 1 and non_floating_count > 1));
 
         // TIMING DEBUG
         const RENDER_PHASE_TIMING = false;
@@ -1086,14 +1149,64 @@ pub const Display = struct {
 
             const is_active = if (active_win_id) |id| win.*.id.eql(id) else false;
 
+            // CRITICAL FIX: Recalculate cursor-relative float positions AFTER ensureCursorVisible
+            // has potentially scrolled the main window's viewport.
+            // Without this, floats positioned relative to cursor use stale viewport.top_line,
+            // causing them to render at wrong screen position when viewport scrolls.
+            var render_row = win.*.screen_row;
+            var render_col = win.*.screen_col;
+
+            if (win.*.floating_config) |config| {
+                if (config.relative == .cursor) {
+                    // Recalculate position based on current viewport
+                    if (active_window) |cur_win| {
+                        const gutter_width = window_renderer.calculateWindowGutterWidth(cur_win, editor.buffers.get(cur_win.buffer_id) orelse buffer);
+                        const cursor_screen_row = cur_win.cursor.row -| cur_win.viewport.top_line;
+                        const cursor_screen_col = cur_win.cursor.col -| cur_win.viewport.left_col;
+
+                        const base_row: i32 = @intCast(cur_win.screen_row + cursor_screen_row);
+                        const raw_col = cur_win.screen_col + gutter_width + cursor_screen_col;
+                        const base_col: i32 = @intCast(if (raw_col > 0) raw_col - 1 else raw_col);
+
+                        // Apply offset from config
+                        var final_row = base_row + config.row;
+                        var final_col = base_col + config.col;
+
+                        // Adjust for anchor position
+                        switch (config.anchor) {
+                            .NW => {},
+                            .NE => final_col -= @intCast(config.width),
+                            .SW => final_row -= @intCast(config.height),
+                            .SE => {
+                                final_row -= @intCast(config.height);
+                                final_col -= @intCast(config.width);
+                            },
+                        }
+
+                        // Clamp to screen bounds
+                        if (final_row < 0) final_row = 0;
+                        if (final_col < 0) final_col = 0;
+                        if (final_row + @as(i32, @intCast(config.height)) > @as(i32, @intCast(self.terminal_rows))) {
+                            final_row = @max(0, @as(i32, @intCast(self.terminal_rows)) - @as(i32, @intCast(config.height)));
+                        }
+                        if (final_col + @as(i32, @intCast(config.width)) > @as(i32, @intCast(self.terminal_cols))) {
+                            final_col = @max(0, @as(i32, @intCast(self.terminal_cols)) - @as(i32, @intCast(config.width)));
+                        }
+
+                        render_row = @intCast(final_row);
+                        render_col = @intCast(final_col);
+                    }
+                }
+            }
+
             // Create render context for this window
             const context = window_renderer.WindowRenderContext{
                 .window = win.*,
                 .buffer = buffer,
                 .buffer_handle = @intCast(win.*.buffer_id.id),
                 .region = .{
-                    .row = win.*.screen_row,
-                    .col = win.*.screen_col,
+                    .row = render_row,
+                    .col = render_col,
                     .height = win.*.height,
                     .width = win.*.width,
                 },
@@ -1113,8 +1226,9 @@ pub const Display = struct {
             const after_render = if (RENDER_PHASE_TIMING) std.time.nanoTimestamp() else 0;
 
             // Render floating window border AROUND the content area
+            // Pass recalculated positions for cursor-relative floats
             const before_border = if (RENDER_PHASE_TIMING) std.time.nanoTimestamp() else 0;
-            window_renderer.renderFloatingWindowBorder(self, win.*, &editor.highlight_registry);
+            window_renderer.renderFloatingWindowBorder(self, win.*, &editor.highlight_registry, render_row, render_col);
             const after_border = if (RENDER_PHASE_TIMING) std.time.nanoTimestamp() else 0;
 
             // Log detailed Phase 2 breakdown
@@ -1232,7 +1346,7 @@ pub const Display = struct {
             // Using buffer.cursor causes cursor to jump between panes in vsplit
             const cursor_display_col = if (win.cursor.row < buffer.lineCount()) blk: {
                 const line = buffer.getLine(win.cursor.row) orelse break :blk win.cursor.col;
-                defer buffer.allocator.free(line);
+                // getLine returns cached/borrowed memory - do NOT free
                 const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                     line[0 .. line.len - 1]
                 else
@@ -1401,7 +1515,7 @@ pub const Display = struct {
         // Convert cursor byte position to display column (account for wide chars like emoji)
         const cursor_display_col = if (buffer.cursor.row < buffer.lineCount()) blk: {
             const line = buffer.getLine(buffer.cursor.row) orelse break :blk buffer.cursor.col;
-            defer buffer.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+            // getLine returns borrowed slice from cache - no free needed
             const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
             else
@@ -1493,7 +1607,7 @@ pub const Display = struct {
         // Convert cursor byte position to display column (account for wide chars)
         const cursor_display_col = if (buffer.cursor.row < buffer.lineCount()) blk: {
             const line = buffer.getLine(buffer.cursor.row) orelse break :blk buffer.cursor.col;
-            defer buffer.allocator.free(line);
+            // getLine returns borrowed slice from cache - no free needed
             const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
             else
@@ -1565,7 +1679,7 @@ pub const Display = struct {
         // Convert cursor byte position to display column (account for wide chars)
         const cursor_display_col = if (buffer.cursor.row < buffer.lineCount()) blk: {
             const line = buffer.getLine(buffer.cursor.row) orelse break :blk buffer.cursor.col;
-            defer buffer.allocator.free(line);
+            // getLine returns borrowed slice from cache - no free needed
             const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
             else

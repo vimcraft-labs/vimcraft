@@ -101,7 +101,6 @@ fn getState(
 ) callconv(.c) ?*c.OVHermesValue {
     const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
     const buffer = ctx.getCurrentBuffer() orelse return helpers.returnUndefined(runtime);
-    const allocator = ctx.allocator;
 
     // Create result object
     const result = c.hermes_value_create_object(runtime) orelse return helpers.returnUndefined(runtime);
@@ -191,7 +190,7 @@ fn getState(
         if (lines_arr) |la| {
             for (0..line_count) |i| {
                 if (buffer.getLine(i)) |line| {
-                    defer allocator.free(line);
+                    // getLine returns borrowed slice from cache - no free needed
                     // Remove trailing newline for cleaner API
                     const trimmed = if (line.len > 0 and line[line.len - 1] == '\n')
                         line[0 .. line.len - 1]
@@ -248,7 +247,7 @@ fn getLine(
     const line_idx: usize = @intFromFloat(line_num);
 
     if (buffer.getLine(line_idx)) |line| {
-        defer ctx.allocator.free(line);
+        // getLine returns borrowed slice from cache - no free needed
         // Remove trailing newline
         const trimmed = if (line.len > 0 and line[line.len - 1] == '\n')
             line[0 .. line.len - 1]
@@ -2488,13 +2487,13 @@ fn captureStateSnapshot(allocator: std.mem.Allocator, ctx: *E2EContext) ?StateSn
 
     for (0..preview_count) |i| {
         if (buffer.getLine(i)) |line| {
+            // getLine returns borrowed slice from cache - no free needed
             // Remove trailing newline for cleaner output
             const trimmed = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
             else
                 line;
             preview_lines[i] = allocator.dupe(u8, trimmed) catch {
-                allocator.free(line);
                 // Free already allocated lines on error
                 for (0..i) |j| {
                     allocator.free(preview_lines[j]);
@@ -2502,7 +2501,6 @@ fn captureStateSnapshot(allocator: std.mem.Allocator, ctx: *E2EContext) ?StateSn
                 allocator.free(preview_lines);
                 return null;
             };
-            allocator.free(line);
         } else {
             preview_lines[i] = "";
         }

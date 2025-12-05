@@ -357,9 +357,12 @@ pub const CompositorStats = struct {
 /// Formula: result = src + dst * (1 - src.alpha)
 /// Reference: https://en.wikipedia.org/wiki/Alpha_compositing
 fn blendCell(src: Cell, dst: Cell, opacity: f32) Cell {
-    // Fully opaque? Just replace - UNLESS src is transparent (char=0 or space)
-    // This allows cursor layer to provide background without hiding text
+    // Fully opaque with content? Just replace
     if (opacity >= 1.0 and src.char != 0 and src.char != ' ') return src;
+
+    // Fully opaque space WITH background? Replace (floating window occlusion)
+    // This differs from char=0 (null) which only provides background overlay
+    if (opacity >= 1.0 and src.char == ' ' and src.bg != null) return src;
 
     // Fully transparent? Keep dst
     if (opacity <= 0.0) return dst;
@@ -403,9 +406,12 @@ fn blendCell(src: Cell, dst: Cell, opacity: f32) Cell {
     }
 
     // Return blended cell
-    // PHASE 6 FIX: Keep dst char if src is just providing background (space/null)
-    // This allows cursor layer to only affect background without hiding text
-    const final_char = if (src.char == ' ' or src.char == 0)
+    // char=0 (null): background-only overlay (cursor layer) - keep dst char
+    // char=' ' (space) with bg: opaque space (floating window) - use space to hide dst
+    // char=' ' (space) without bg: transparent - keep dst char
+    const final_char = if (src.char == 0)
+        dst.char
+    else if (src.char == ' ' and src.bg == null)
         dst.char
     else
         src.char;

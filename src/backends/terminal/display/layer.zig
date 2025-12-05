@@ -420,7 +420,8 @@ pub const LayerManager = struct {
             std.mem.eql(u8, name, "virtual_text") or
             std.mem.eql(u8, name, "selection") or
             std.mem.eql(u8, name, "yank") or
-            std.mem.eql(u8, name, "search");
+            std.mem.eql(u8, name, "search") or
+            std.mem.eql(u8, name, "float");
     }
 };
 

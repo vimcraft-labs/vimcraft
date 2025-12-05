@@ -1035,6 +1035,101 @@ pub export fn vimBoHostObjectEnumerator(
 }
 
 // ============================================================================
+// vim.g HostObject (Global Variables)
+// ============================================================================
+
+/// vim.g HostObject getter - returns global variable value by name
+/// JavaScript: vim.g.mapleader, vim.g.myPluginVar
+pub export fn vimGHostObjectGet(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    prop_name: [*c]const u8,
+) callconv(.c) ?*c.OVHermesValue {
+    const rt = runtime orelse return null;
+    const ctx = @as(*ConfigContext, @ptrCast(@alignCast(context.?)));
+    const name = std.mem.span(prop_name);
+
+    // Get editor from context
+    const editor = ctx.editor orelse return c.hermes_value_create_undefined(rt);
+
+    // Look up global variable
+    if (editor.getGlobalVar(name)) |value| {
+        return c.hermes_value_create_string(rt, value.ptr, value.len);
+    }
+
+    return c.hermes_value_create_undefined(rt);
+}
+
+/// vim.g HostObject setter - sets global variable value by name
+/// JavaScript: vim.g.mapleader = ' '
+pub export fn vimGHostObjectSet(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+    prop_name: [*c]const u8,
+    value: ?*c.OVHermesValue,
+) callconv(.c) ?*c.OVHermesValue {
+    const rt = runtime orelse return null;
+    const ctx = @as(*ConfigContext, @ptrCast(@alignCast(context.?)));
+    const name = std.mem.span(prop_name);
+    const val = value orelse return c.hermes_value_create_undefined(rt);
+
+    // Get editor from context
+    const editor = ctx.editor orelse return c.hermes_value_create_undefined(rt);
+
+    // Handle null/undefined = delete variable
+    if (c.hermes_value_is_null(val) or c.hermes_value_is_undefined(val)) {
+        editor.delGlobalVar(name);
+        return c.hermes_value_create_undefined(rt);
+    }
+
+    // For now, only support string values (Neovim's vim.g is more flexible)
+    if (c.hermes_value_is_string(val)) {
+        var value_len: usize = 0;
+        const value_ptr = c.hermes_value_get_string(rt, val, &value_len);
+        if (value_ptr != null) {
+            editor.setGlobalVar(name, value_ptr[0..value_len]) catch {
+                return c.hermes_value_create_undefined(rt);
+            };
+        }
+    }
+
+    return c.hermes_value_create_undefined(rt);
+}
+
+/// vim.g HostObject enumerator - returns array of global variable names
+pub export fn vimGHostObjectEnumerator(
+    runtime: ?*c.OVHermesRuntime,
+    context: ?*anyopaque,
+) callconv(.c) ?*c.OVHermesValue {
+    const rt = runtime orelse return null;
+    const ctx = @as(*ConfigContext, @ptrCast(@alignCast(context.?)));
+
+    // Get editor from context
+    const editor = ctx.editor orelse return c.hermes_array_create(rt, 0);
+
+    // Count keys first
+    var count: usize = 0;
+    var iter = editor.global_vars.iterator();
+    while (iter.next()) |_| {
+        count += 1;
+    }
+
+    const arr = c.hermes_array_create(rt, count) orelse return null;
+
+    // Add keys to array
+    iter = editor.global_vars.iterator();
+    var i: usize = 0;
+    while (iter.next()) |entry| {
+        const str = c.hermes_value_create_string(rt, entry.key_ptr.*.ptr, entry.key_ptr.*.len) orelse continue;
+        c.hermes_array_set(rt, arr, i, str);
+        c.hermes_value_destroy(str);
+        i += 1;
+    }
+
+    return arr;
+}
+
+// ============================================================================
 // Registration
 // ============================================================================
 
@@ -1078,6 +1173,16 @@ pub fn register(runtime: *c.OVHermesRuntime, ctx: *ConfigContext) void {
         vimBoHostObjectGet,
         vimBoHostObjectSet,
         vimBoHostObjectEnumerator,
+        @ptrCast(ctx),
+    );
+
+    // vim.g HostObject (global variables like mapleader)
+    c.hermes_register_host_object(
+        runtime,
+        "vimG",
+        vimGHostObjectGet,
+        vimGHostObjectSet,
+        vimGHostObjectEnumerator,
         @ptrCast(ctx),
     );
 }

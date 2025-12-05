@@ -180,6 +180,7 @@ pub fn build(b: *std.Build) void {
 
     const jsi_bench_step = b.step("jsi-bench", "Run JSI HostObject performance benchmark");
     jsi_bench_step.dependOn(&run_jsi_bench.step);
+
 }
 
 /// Add C include paths to a module for @cImport to work

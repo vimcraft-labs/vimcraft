@@ -29,6 +29,9 @@ const StyleSpan = @import("../../../editor/highlight_cache.zig").StyleSpan;
 // Namespace highlights (LSP diagnostics, plugin highlights)
 const namespace_api = @import("../../../system/jsi/namespace_api.zig");
 
+// Shared sign rendering (DRY: used by both layer_renderer and window_renderer)
+const sign_renderer = @import("sign_renderer.zig");
+
 // Shared listchars rendering (DRY: used by both layer_renderer and window_renderer)
 const listchars_renderer = @import("listchars_renderer.zig");
 
@@ -125,10 +128,17 @@ pub fn renderWindow(
     window.needs_redraw = false;
 }
 
+/// Ensure cursor is visible within window viewport (public version for display.zig)
+/// This is the single source of truth for viewport scrolling calculations.
+pub fn ensureCursorVisibleWithHeight(window: *Window, buffer: *const Buffer, visible_height: usize) void {
+    ensureCursorVisible(window, buffer, visible_height);
+}
+
 /// Ensure cursor is visible within window viewport
 fn ensureCursorVisible(window: *Window, buffer: *const Buffer, visible_height: usize) void {
     const scrolloff = window.options.scrolloff;
     const cursor_row = window.cursor.row;
+    const old_top_line = window.viewport.top_line;
 
     // Clamp cursor to buffer bounds
     const max_row = if (buffer.lineCount() > 0) buffer.lineCount() - 1 else 0;
@@ -146,6 +156,18 @@ fn ensureCursorVisible(window: *Window, buffer: *const Buffer, visible_height: u
         } else if (cursor_row >= window.viewport.top_line + visible_height - scrolloff) {
             window.viewport.top_line = cursor_row -| (visible_height -| scrolloff -| 1);
         }
+    }
+
+    // DEBUG: Log when viewport actually scrolls
+    if (window.viewport.top_line != old_top_line) {
+        std.log.debug("VIEWPORT_SCROLL: window_renderer.ensureCursorVisible: top_line {d} -> {d}, cursor_row={d}, visible_height={d}, scrolloff={d}, is_float={}", .{
+            old_top_line,
+            window.viewport.top_line,
+            cursor_row,
+            visible_height,
+            scrolloff,
+            window.isFloating(),
+        });
     }
 
     // Update cursor screen position
@@ -173,7 +195,7 @@ pub fn calculateWindowGutterWidth(window: *const Window, buffer: *const Buffer) 
 }
 
 /// Render window text content to base layer
-// Debug timing flag - set to true to enable performance logging
+// Debug timing flag - set to false for production
 const RENDER_TIMING_DEBUG = false;
 
 fn renderWindowBaseLayer(
@@ -185,7 +207,7 @@ fn renderWindowBaseLayer(
     const window = ctx.window;
     const region = ctx.region;
 
-    // Timing instrumentation
+    // Timing instrumentation (disabled in production)
     const start_time = if (RENDER_TIMING_DEBUG) std.time.nanoTimestamp() else 0;
     var setup_time: i128 = 0;
     var syntax_time: i128 = 0;
@@ -193,10 +215,25 @@ fn renderWindowBaseLayer(
     var char_loop_time: i128 = 0;
     const is_floating = window.isFloating();
 
-    // Get Normal highlight from registry
-    const normal_style = ctx.registry.get("Normal");
+    // Select target layer: floating windows use float_layer (z=250) to appear above cursor layer (z=200)
+    const target_layer = if (is_floating) display.float_layer else display.base_layer;
+
+    // Get Normal or NormalFloat highlight from registry
+    // Floating windows use NormalFloat to properly occlude lower layers (e.g., CursorLine)
+    const normal_style = if (is_floating)
+        ctx.registry.get("NormalFloat")
+    else
+        ctx.registry.get("Normal");
     const fg_color = if (normal_style.fg) |c| convertColor(c) else null;
-    const bg_color = if (normal_style.bg) |c| convertColor(c) else null;
+    // Floating windows MUST have a background to occlude lower layers
+    // Fallback to dark gray if NormalFloat.bg is not set
+    const default_float_bg = highlights.Color{ .r = 0x1a, .g = 0x1b, .b = 0x26 };
+    const bg_color: ?highlights.Color = if (normal_style.bg) |c|
+        convertColor(c)
+    else if (is_floating)
+        default_float_bg
+    else
+        null;
 
     // Pre-compute listchars colors using shared module (DRY)
     const lc_colors = listchars_renderer.ListCharsColors.fromRegistry(ctx.registry, convertColor);
@@ -232,7 +269,7 @@ fn renderWindowBaseLayer(
 
         if (line_num < buffer.lineCount()) {
             const line = buffer.getLine(line_num) orelse continue;
-            defer buffer.allocator.free(line);
+            // getLine returns borrowed slice from cache - no free needed
 
             const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
@@ -255,6 +292,11 @@ fn renderWindowBaseLayer(
             // PERFORMANCE: Check cache first, only compute via tree-sitter on cache miss
             const syntax_start = if (RENDER_TIMING_DEBUG) std.time.nanoTimestamp() else 0;
 
+            // PERF FIX: Use direct span lookup for cache hits instead of O(bytes) hashmap
+            // Cache stores spans as (start_byte, end_byte, style) - we walk through them
+            // during rendering instead of pre-populating a per-byte hashmap.
+
+            // For cache miss, we still need a hashmap (built during tree-sitter iteration)
             var highlight_map = std.AutoHashMap(usize, Style).init(display.allocator);
             defer highlight_map.deinit();
 
@@ -265,30 +307,17 @@ fn renderWindowBaseLayer(
             // Check window's conceal level (0=show, 1=replace, 2=hide, 3=completely hide)
             const conceal_level = window.options.conceallevel;
 
+            // Cached spans for O(spans) lookup instead of O(bytes) hashmap
+            var cached_spans: ?[]const StyleSpan = null;
             var cache_hit = false;
+            var span_idx: usize = 0; // Current span index (advances as byte_idx increases)
 
-            // Try to get cached highlights first
+            // Try to get cached highlights first - O(1) cache lookup
             if (highlight_cache) |cache| {
                 if (cache.getStyleLine(line_num)) |cached_styles| {
-                    // Cache hit! Populate highlight_map from cache
-                    for (cached_styles.spans) |span| {
-                        // Adjust for horizontal scroll
-                        const span_start = if (span.start_byte >= start_byte)
-                            span.start_byte - start_byte
-                        else
-                            0;
-                        const span_end = if (span.end_byte >= start_byte)
-                            @min(span.end_byte - start_byte, remaining.len)
-                        else
-                            0;
-
-                        if (span_start < span_end) {
-                            var byte_offset = span_start;
-                            while (byte_offset < span_end) : (byte_offset += 1) {
-                                highlight_map.put(byte_offset, span.style) catch {};
-                            }
-                        }
-                    }
+                    // Cache hit! Store spans for direct lookup during char loop
+                    // NO hashmap population here - that was the O(bytes) bottleneck!
+                    cached_spans = cached_styles.spans;
                     cache_hit = true;
                 }
             }
@@ -425,7 +454,27 @@ fn renderWindowBaseLayer(
                 }
 
                 // Look up syntax highlight for this character
-                const syntax_style = highlight_map.get(byte_idx);
+                // PERF FIX: Use advancing span index for O(spans) total per line
+                // Since byte_idx only increases, we advance span_idx past expired spans
+                const syntax_style: ?Style = if (cached_spans) |spans| blk: {
+                    // Byte position relative to line start (spans use line-relative offsets)
+                    const line_byte = start_byte + byte_idx;
+
+                    // Advance past spans that end before current byte (O(spans) total)
+                    while (span_idx < spans.len and spans[span_idx].end_byte <= line_byte) {
+                        span_idx += 1;
+                    }
+
+                    // Check if current byte is within the current span
+                    if (span_idx < spans.len) {
+                        const span = spans[span_idx];
+                        if (line_byte >= span.start_byte and line_byte < span.end_byte) {
+                            break :blk span.style;
+                        }
+                    }
+                    break :blk null;
+                } else highlight_map.get(byte_idx); // Fallback to hashmap for cache miss
+
                 var char_fg = if (syntax_style) |style|
                     if (style.fg) |c| convertColor(c) else fg_color
                 else
@@ -472,7 +521,7 @@ fn renderWindowBaseLayer(
                     } else if (listchars_renderer.getCharReplacement(codepoint, ctx.listchars, lc_colors)) |replacement| {
                         // Space/nbsp replacement
                         if (screen_col >= region.col + gutter_width and screen_col < region.col + region.width) {
-                            display.base_layer.grid.setCell(screen_row, screen_col, .{
+                            target_layer.grid.setCell(screen_row, screen_col, .{
                                 .char = replacement.char,
                                 .fg = replacement.fg,
                                 .bg = replacement.bg,
@@ -496,7 +545,7 @@ fn renderWindowBaseLayer(
 
                 // Clip to window bounds
                 if (screen_col >= region.col + gutter_width and screen_col < region.col + region.width) {
-                    display.base_layer.grid.setCell(screen_row, screen_col, .{
+                    target_layer.grid.setCell(screen_row, screen_col, .{
                         .char = codepoint,
                         .fg = char_fg,
                         .bg = char_bg,
@@ -504,7 +553,7 @@ fn renderWindowBaseLayer(
 
                     // For wide characters (width 2), set continuation marker on next cell
                     if (display_width == 2 and screen_col + 1 < region.col + region.width) {
-                        display.base_layer.grid.setCell(screen_row, screen_col + 1, .{
+                        target_layer.grid.setCell(screen_row, screen_col + 1, .{
                             .char = ' ',
                             .fg = char_fg,
                             .bg = char_bg,
@@ -525,7 +574,7 @@ fn renderWindowBaseLayer(
             // Post-process: mark trailing spaces using shared module (DRY)
             if (ctx.list_enabled) {
                 listchars_renderer.markTrailingSpaces(
-                    &display.base_layer.grid,
+                    &target_layer.grid,
                     screen_row,
                     last_non_space_col,
                     screen_col,
@@ -535,7 +584,7 @@ fn renderWindowBaseLayer(
 
                 // Render EOL character if configured
                 screen_col += listchars_renderer.renderEol(
-                    &display.base_layer.grid,
+                    &target_layer.grid,
                     screen_row,
                     screen_col,
                     region.col + region.width,
@@ -546,7 +595,7 @@ fn renderWindowBaseLayer(
 
             // Fill rest of line with spaces
             while (screen_col < region.col + region.width) : (screen_col += 1) {
-                display.base_layer.grid.setCell(screen_row, screen_col, .{
+                target_layer.grid.setCell(screen_row, screen_col, .{
                     .char = ' ',
                     .bg = bg_color,
                 });
@@ -554,7 +603,7 @@ fn renderWindowBaseLayer(
         } else {
             // Empty line indicator (~)
             const start_col = region.col + gutter_width;
-            display.base_layer.grid.setCell(screen_row, start_col, .{
+            target_layer.grid.setCell(screen_row, start_col, .{
                 .char = '~',
                 .fg = fg_color,
                 .bg = bg_color,
@@ -563,7 +612,7 @@ fn renderWindowBaseLayer(
             // Fill rest with spaces
             var col = start_col + 1;
             while (col < region.col + region.width) : (col += 1) {
-                display.base_layer.grid.setCell(screen_row, col, .{
+                target_layer.grid.setCell(screen_row, col, .{
                     .char = ' ',
                     .bg = bg_color,
                 });
@@ -571,17 +620,10 @@ fn renderWindowBaseLayer(
         }
     }
 
-    // Output timing results for floating windows (popup hover)
-    // Note: We can't access editor.logger here, so this goes to stderr
-    // The high-level Phase 2 timing goes to Chrome console from display.zig
-    if (RENDER_TIMING_DEBUG and is_floating) {
-        std.debug.print("\n🔍 Phase2 Breakdown: Setup={d:.2}ms Syntax={d:.2}ms Namespace={d:.2}ms CharLoop={d:.2}ms HasLangTree={} Rows={d}\n", .{
-            @as(f64, @floatFromInt(setup_time)) / 1_000_000.0,
+    // Debug timing output (disabled in production via RENDER_TIMING_DEBUG flag)
+    if (RENDER_TIMING_DEBUG) {
+        std.debug.print("RENDER: syntax={d:.1}ms\n", .{
             @as(f64, @floatFromInt(syntax_time)) / 1_000_000.0,
-            @as(f64, @floatFromInt(namespace_time)) / 1_000_000.0,
-            @as(f64, @floatFromInt(char_loop_time)) / 1_000_000.0,
-            ctx.language_tree != null,
-            region.height,
         });
     }
 
@@ -632,34 +674,23 @@ fn renderWindowGutterLayer(
         // Render sign column first (if enabled)
         var gutter_offset: usize = 0;
         if (window.options.signcolumn == .yes) {
-            // Look up extmark signs for this line
-            var sign_char_0: u8 = ' ';
-            var sign_char_1: u8 = ' ';
+            // Use shared sign renderer for consistent UTF-8 handling
+            const sign = sign_renderer.lookupSignByHandle(ctx.buffer_handle, line_num);
             var sign_fg = gutter_fg;
-
-            if (namespace_api.getBufferExtmarks(ctx.buffer_handle)) |buf_exts| {
-                if (buf_exts.getSignForLine(line_num)) |sign_info| {
-                    // Get sign characters (1-2 chars)
-                    if (sign_info.text.len >= 1) sign_char_0 = sign_info.text[0];
-                    if (sign_info.text.len >= 2) sign_char_1 = sign_info.text[1];
-
-                    // Apply sign highlight group if specified
-                    if (sign_info.hl_group) |hl_group| {
-                        const sign_style = ctx.registry.get(hl_group);
-                        if (sign_style.fg) |fg| {
-                            sign_fg = convertColor(fg);
-                        }
-                    }
+            if (sign.hl_group) |hl_group| {
+                const sign_style = ctx.registry.get(hl_group);
+                if (sign_style.fg) |fg| {
+                    sign_fg = convertColor(fg);
                 }
             }
 
             display.gutter_layer.grid.setCell(screen_row, region.col, .{
-                .char = sign_char_0,
+                .char = sign.chars.char_0,
                 .fg = sign_fg,
                 .bg = style_bg,
             });
             display.gutter_layer.grid.setCell(screen_row, region.col + 1, .{
-                .char = sign_char_1,
+                .char = sign.chars.char_1,
                 .fg = sign_fg,
                 .bg = style_bg,
             });
@@ -778,7 +809,7 @@ fn renderWindowSelectionLayer(
         if (line_num >= visual_range.start.line and line_num <= visual_range.end.line) {
             if (line_num < buffer.lineCount()) {
                 const line = buffer.getLine(line_num) orelse continue;
-                defer buffer.allocator.free(line);
+                // getLine returns borrowed slice from cache - no free needed
 
                 const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                     line[0 .. line.len - 1]
@@ -810,7 +841,7 @@ fn renderWindowSelectionLayer(
 
                     if (visual_state.contains(cursor_pos, char_pos)) {
                         display.selection_layer.grid.setCell(screen_row, screen_col, .{
-                            .char = ' ', // Transparent, just background
+                            .char = 0, // Null char = background overlay, shows underlying text
                             .bg = visual_bg,
                         });
                         highlighted_any = true;
@@ -826,7 +857,7 @@ fn renderWindowSelectionLayer(
                     const first_col = region.col + gutter_width;
                     if (first_col < region.col + region.width) {
                         display.selection_layer.grid.setCell(screen_row, first_col, .{
-                            .char = ' ',
+                            .char = 0, // Null char = background overlay
                             .bg = visual_bg,
                         });
                     }
@@ -864,7 +895,7 @@ fn renderWindowYankLayer(
         if (line_num >= yank_highlight.start.line and line_num <= yank_highlight.end.line) {
             if (line_num < buffer.lineCount()) {
                 const line = buffer.getLine(line_num) orelse continue;
-                defer buffer.allocator.free(line);
+                // getLine returns borrowed slice from cache - no free needed
 
                 const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                     line[0 .. line.len - 1]
@@ -894,7 +925,7 @@ fn renderWindowYankLayer(
 
                     if (yank_highlight.contains(char_pos)) {
                         display.yank_layer.grid.setCell(screen_row, screen_col, .{
-                            .char = ' ',
+                            .char = 0, // Null char = background overlay, shows underlying text
                             .bg = yank_bg,
                         });
                     }
@@ -949,7 +980,7 @@ fn renderWindowVirtualText(
                 // End of line: after all text content
                 if (ext.line < buffer.lineCount()) {
                     const line = buffer.getLine(ext.line) orelse break :blk region.col + gutter_width;
-                    defer buffer.allocator.free(line);
+                    // getLine returns borrowed slice from cache - no free needed
 
                     const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
                         line[0 .. line.len - 1]
@@ -1196,11 +1227,15 @@ fn getBorderChars(style: BorderStyle) ?BorderChars {
 }
 
 /// Render border around a floating window
-/// This renders to the base_layer so it appears behind content
+/// This renders to the float_layer (z=250) so it appears above cursor layer
+/// override_row/col: Optional position overrides for cursor-relative floats
+/// (used when viewport scrolls after float creation)
 pub fn renderFloatingWindowBorder(
     display: *Display,
     window: *const Window,
     registry: *const HighlightRegistry,
+    override_row: ?usize,
+    override_col: ?usize,
 ) void {
     // Only render border for floating windows
     const config = window.floating_config orelse return;
@@ -1212,11 +1247,14 @@ pub fn renderFloatingWindowBorder(
     // Get FloatBorder highlight (Neovim uses FloatBorder for all border elements)
     const border_style = registry.get("FloatBorder");
     const fg_color = if (border_style.fg) |c| convertColor(c) else highlights.Color{ .r = 128, .g = 128, .b = 128 };
-    const bg_color = if (border_style.bg) |c| convertColor(c) else null;
+    // Border MUST have background to occlude lower layers - fallback to dark gray
+    const default_float_bg = highlights.Color{ .r = 0x1a, .g = 0x1b, .b = 0x26 };
+    const bg_color: ?highlights.Color = if (border_style.bg) |c| convertColor(c) else default_float_bg;
 
     // Get window region (this is the CONTENT area, border is OUTSIDE it)
-    const content_row = window.screen_row;
-    const content_col = window.screen_col;
+    // Use overrides if provided (for cursor-relative floats after viewport scroll)
+    const content_row = override_row orelse window.screen_row;
+    const content_col = override_col orelse window.screen_col;
     const content_height = window.height;
     const content_width = window.width;
 
@@ -1227,14 +1265,14 @@ pub fn renderFloatingWindowBorder(
     const border_bottom: usize = content_row + content_height;
     const border_right: usize = content_col + content_width;
 
-    const grid_height = display.base_layer.grid.height;
-    const grid_width = display.base_layer.grid.width;
+    const grid_height = display.float_layer.grid.height;
+    const grid_width = display.float_layer.grid.width;
 
     // Render top border row
     if (border_top < grid_height and content_row > 0) {
         // Top-left corner
         if (border_left < grid_width and content_col > 0) {
-            display.base_layer.grid.setCell(border_top, border_left, .{
+            display.float_layer.grid.setCell(border_top, border_left, .{
                 .char = border_chars.top_left,
                 .fg = fg_color,
                 .bg = bg_color,
@@ -1244,7 +1282,7 @@ pub fn renderFloatingWindowBorder(
         // Top horizontal line
         var col = content_col;
         while (col < border_right and col < grid_width) : (col += 1) {
-            display.base_layer.grid.setCell(border_top, col, .{
+            display.float_layer.grid.setCell(border_top, col, .{
                 .char = border_chars.horizontal,
                 .fg = fg_color,
                 .bg = bg_color,
@@ -1253,7 +1291,7 @@ pub fn renderFloatingWindowBorder(
 
         // Top-right corner
         if (border_right < grid_width) {
-            display.base_layer.grid.setCell(border_top, border_right, .{
+            display.float_layer.grid.setCell(border_top, border_right, .{
                 .char = border_chars.top_right,
                 .fg = fg_color,
                 .bg = bg_color,
@@ -1271,7 +1309,7 @@ pub fn renderFloatingWindowBorder(
     while (row < border_bottom and row < grid_height) : (row += 1) {
         // Left border
         if (border_left < grid_width and content_col > 0) {
-            display.base_layer.grid.setCell(row, border_left, .{
+            display.float_layer.grid.setCell(row, border_left, .{
                 .char = border_chars.vertical,
                 .fg = fg_color,
                 .bg = bg_color,
@@ -1280,7 +1318,7 @@ pub fn renderFloatingWindowBorder(
 
         // Right border
         if (border_right < grid_width) {
-            display.base_layer.grid.setCell(row, border_right, .{
+            display.float_layer.grid.setCell(row, border_right, .{
                 .char = border_chars.vertical,
                 .fg = fg_color,
                 .bg = bg_color,
@@ -1292,7 +1330,7 @@ pub fn renderFloatingWindowBorder(
     if (border_bottom < grid_height) {
         // Bottom-left corner
         if (border_left < grid_width and content_col > 0) {
-            display.base_layer.grid.setCell(border_bottom, border_left, .{
+            display.float_layer.grid.setCell(border_bottom, border_left, .{
                 .char = border_chars.bottom_left,
                 .fg = fg_color,
                 .bg = bg_color,
@@ -1302,7 +1340,7 @@ pub fn renderFloatingWindowBorder(
         // Bottom horizontal line
         var col = content_col;
         while (col < border_right and col < grid_width) : (col += 1) {
-            display.base_layer.grid.setCell(border_bottom, col, .{
+            display.float_layer.grid.setCell(border_bottom, col, .{
                 .char = border_chars.horizontal,
                 .fg = fg_color,
                 .bg = bg_color,
@@ -1311,7 +1349,7 @@ pub fn renderFloatingWindowBorder(
 
         // Bottom-right corner
         if (border_right < grid_width) {
-            display.base_layer.grid.setCell(border_bottom, border_right, .{
+            display.float_layer.grid.setCell(border_bottom, border_right, .{
                 .char = border_chars.bottom_right,
                 .fg = fg_color,
                 .bg = bg_color,
@@ -1329,7 +1367,7 @@ pub fn renderFloatingWindowBorder(
         renderShadowEffect(display, content_row, content_col, content_height, content_width, grid_height, grid_width);
     }
 
-    display.base_layer.markDirty();
+    display.float_layer.markDirty();
 }
 
 /// Render title/footer text within the border
@@ -1408,7 +1446,7 @@ fn renderBorderTitle(
         }
 
         if (col >= content_col) {
-            display.base_layer.grid.setCell(row, col, .{
+            display.float_layer.grid.setCell(row, col, .{
                 .char = codepoint,
                 .fg = fg_color,
                 .bg = bg_color,
@@ -1416,7 +1454,7 @@ fn renderBorderTitle(
 
             // Handle wide characters (e.g., CJK, emoji)
             if (char_display_width == 2 and col + 1 < grid_width and col + 1 < content_col + content_width) {
-                display.base_layer.grid.setCell(row, col + 1, .{
+                display.float_layer.grid.setCell(row, col + 1, .{
                     .char = ' ',
                     .fg = fg_color,
                     .bg = bg_color,
@@ -1447,7 +1485,7 @@ fn renderShadowEffect(
     if (shadow_right_col < grid_width) {
         var row = content_row + 1;
         while (row <= content_row + content_height + 1 and row < grid_height) : (row += 1) {
-            display.base_layer.grid.setCell(row, shadow_right_col, .{
+            display.float_layer.grid.setCell(row, shadow_right_col, .{
                 .char = ' ',
                 .fg = null,
                 .bg = shadow_color,
@@ -1460,7 +1498,7 @@ fn renderShadowEffect(
     if (shadow_bottom_row < grid_height) {
         var col = content_col + 1;
         while (col <= content_col + content_width + 1 and col < grid_width) : (col += 1) {
-            display.base_layer.grid.setCell(shadow_bottom_row, col, .{
+            display.float_layer.grid.setCell(shadow_bottom_row, col, .{
                 .char = ' ',
                 .fg = null,
                 .bg = shadow_color,

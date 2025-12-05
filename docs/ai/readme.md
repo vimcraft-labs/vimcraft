@@ -1,9 +1,75 @@
 # Vimcraft AI Documentation
 
 **Philosophy:** Design for the LLM, not for the human. Respect the alien intelligence.
-**Status:** DESIGN PHASE 🚧
+**Status:** INFRASTRUCTURE COMPLETE ✅ | LLM-NATIVE PRIMITIVES PLANNED 📅
 **Paradigm:** LLM-centric primitives (not human-centric tools)
-**Timeline:** 8 weeks implementation
+
+---
+
+## Current Implementation Status
+
+### Infrastructure Layer (COMPLETE ✅)
+
+| API | Purpose | Status |
+|-----|---------|--------|
+| `vim.ai.state.*` | Read-only editor state access | ✅ Complete |
+| `vim.ai.storage.patterns.*` | Pattern persistence (LMDB + usearch) | ✅ Complete |
+| `vim.ai.storage.edges.*` | Graph relationships | ✅ Complete |
+| `vim.ai.storage.conversations.*` | Conversation history | ✅ Complete |
+| `vim.ai.providers.*` | LLM API abstraction (OpenAI/Anthropic/Ollama) | ✅ Complete |
+| `vim.ai.utils.*` | Token estimation, error handling | ✅ Complete |
+
+#### Important Limitations
+
+**HTTP Client:** The `vim.ai.providers.*` API builds request JSON and parses responses, but does NOT make HTTP calls. You must use an external HTTP client (curl, node-fetch, etc.) to actually call the LLM APIs. This is by design - Zig doesn't have a built-in HTTP client, and we prioritize stability over embedding libcurl.
+
+```javascript
+// Usage pattern:
+const endpoint = vim.ai.providers.getEndpoint();
+const headers = vim.ai.providers.getHeaders();
+const body = vim.ai.providers.buildRequest({ model: 'gpt-4', messages: [...] });
+
+// You provide the HTTP call (via vim.process.spawn, fetch, etc.)
+const responseJson = await fetch(endpoint, { method: 'POST', headers, body });
+
+// We parse the response
+const response = vim.ai.providers.parseResponse(responseJson);
+```
+
+**Streaming:** Not yet supported. The provider API handles non-streaming requests only. Streaming support is planned for a future release.
+
+**Error Handling:** Use `vim.ai.utils.getLastError()` to retrieve the last error message after a failed operation.
+
+### LLM-Native Primitives (RESERVED FOR FUTURE 📅)
+
+| API | Purpose | Status |
+|-----|---------|--------|
+| `vim.ai.native.patterns.*` | Pattern Space (navigate, compose, introspect) | 📅 Planned |
+| `vim.ai.native.context.*` | Context Flow (embedding streams, attention) | 📅 Planned |
+| `vim.ai.native.reality.*` | Reality Interface (perceive, actuate, feedback) | 📅 Planned |
+| `vim.ai.native.meta.*` | Meta-Cognition (uncertainty, reasoning) | 📅 Planned |
+| `vim.ai.native.compose.*` | Pattern Composition (discovery, evolution) | 📅 Planned |
+
+---
+
+## Namespace Architecture
+
+```
+vim.ai.*                    # AI namespace
+├── state.*                 # [INFRA] Editor state access (buffer, cursor, etc.)
+├── storage.*               # [INFRA] Persistence layer
+│   ├── patterns.*          #   Pattern CRUD with vectors
+│   ├── edges.*             #   Graph relationships
+│   └── conversations.*     #   Conversation history
+├── providers.*             # [INFRA] LLM API abstraction
+├── utils.*                 # [INFRA] Utilities (token estimation)
+└── native.*                # [FUTURE] LLM-native primitives
+    ├── patterns.*          #   Pattern Space (navigate, compose)
+    ├── context.*           #   Context Flow (streams, attention)
+    ├── reality.*           #   Reality Interface (feedback loops)
+    ├── meta.*              #   Meta-Cognition (uncertainty)
+    └── compose.*           #   Pattern Composition
+```
 
 ---
 
@@ -20,8 +86,8 @@ Just like:
 - `vim.register.*` → users compose copy/paste
 
 We provide:
-- `vim.ai.native.*` → **LLM-native primitives** for alien intelligence
-- `vim.ai.human.*` → Human-friendly wrappers for traditional use
+- `vim.ai.native.*` → **LLM-native primitives** for alien intelligence (FUTURE)
+- `vim.ai.state/storage/providers.*` → Infrastructure layer (CURRENT)
 
 ### The Paradigm Shift
 

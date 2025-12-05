@@ -34,7 +34,7 @@ fn extractCharWise(
     // Single line selection
     if (start.line == end.line) {
         const line = buffer.getLine(start.line) orelse return allocator.alloc([]const u8, 0);
-        defer allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+        // getLine returns borrowed slice from cache - no free needed
 
         // Extract substring from start.col to end.col (inclusive)
         const start_col = @min(start.col, line.len);
@@ -64,7 +64,7 @@ fn extractCharWise(
 
     // First line: from start.col to end of line
     const first_line = buffer.getLine(start.line) orelse return error.InvalidLine;
-    defer allocator.free(first_line); // ✅ FIX: Free owned memory from getLine()
+    // getLine returns borrowed slice from cache - no free needed
     const first_start = @min(start.col, first_line.len);
     const first_end = first_line.len;
 
@@ -81,7 +81,7 @@ fn extractCharWise(
     var i = start.line + 1;
     while (i < end.line) : (i += 1) {
         const middle_line = buffer.getLine(i) orelse continue;
-        defer allocator.free(middle_line); // ✅ FIX: Free owned memory from getLine()
+        // getLine returns borrowed slice from cache - no free needed
 
         // Remove trailing newline
         const middle_text = if (middle_line.len > 0 and middle_line[middle_line.len - 1] == '\n')
@@ -95,7 +95,7 @@ fn extractCharWise(
 
     // Last line: from start to end.col
     const last_line = buffer.getLine(end.line) orelse return error.InvalidLine;
-    defer allocator.free(last_line); // ✅ FIX: Free owned memory from getLine()
+    // getLine returns borrowed slice from cache - no free needed
     const last_end = @min(end.col + 1, last_line.len); // +1 for inclusive
 
     // Remove trailing newline if present
@@ -130,7 +130,7 @@ fn extractLineWise(
     var i = start.line;
     while (i <= end.line) : (i += 1) {
         const line = buffer.getLine(i) orelse continue;
-        defer allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+        // getLine returns borrowed slice from cache - no free needed
 
         // Remove trailing newline for storage (register adds it back during paste)
         const text = if (line.len > 0 and line[line.len - 1] == '\n')
@@ -174,7 +174,7 @@ fn extractBlockWise(
             line_idx += 1;
             continue;
         };
-        defer allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+        // getLine returns borrowed slice from cache - no free needed
 
         // Extract rectangle segment from this line
         const actual_start = @min(start_col, line.len);

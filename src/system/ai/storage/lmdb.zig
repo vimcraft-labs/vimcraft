@@ -386,7 +386,7 @@ pub const PrefixIterator = struct {
         var txn = try env.beginReadTransaction();
         errdefer txn.abort();
 
-        var cursor = try txn.cursor();
+        const cursor = try txn.cursor();
 
         return .{
             .txn = txn,
@@ -411,7 +411,7 @@ pub const PrefixIterator = struct {
             if (e.key.len >= self.prefix.len and
                 std.mem.startsWith(u8, e.key, self.prefix))
             {
-                return e;
+                return .{ .key = e.key, .value = e.value };
             }
         }
 

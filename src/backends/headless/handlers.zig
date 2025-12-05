@@ -27,7 +27,7 @@ pub fn handleGetState(ctx: HandlerContext) !protocol.ResponseResult {
 
     for (0..ctx.buffer.lineCount()) |i| {
         if (ctx.buffer.getLine(i)) |line| {
-            defer ctx.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+            // getLine returns cached/borrowed memory - do NOT free
             const owned = try ctx.allocator.dupe(u8, line);
             try buffer_lines.append(ctx.allocator, owned);
         }
@@ -55,7 +55,7 @@ pub fn handleGetState(ctx: HandlerContext) !protocol.ResponseResult {
 
         for (range.start.line..range.end.line + 1) |line_idx| {
             const line = ctx.buffer.getLine(line_idx) orelse continue;
-            defer ctx.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+            // getLine returns cached/borrowed memory - do NOT free
             const owned = try ctx.allocator.dupe(u8, line);
             try text_lines.append(ctx.allocator, owned);
         }
@@ -487,7 +487,7 @@ pub fn handleExecuteKeysWithRenderTrace(
     const buf = editor.buffer();
     for (0..buf.lineCount()) |i| {
         if (buf.getLine(i)) |line| {
-            defer ctx.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+            // getLine returns cached/borrowed memory - do NOT free
             const owned = try ctx.allocator.dupe(u8, line);
             try buffer_lines.append(ctx.allocator, owned);
         }

@@ -193,7 +193,7 @@ pub const TestHarness = struct {
         // Show each line with line numbers
         for (0..self.buffer.lineCount()) |i| {
             const line = self.buffer.getLine(i).?;
-            defer self.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+            // getLine returns cached/borrowed memory - do NOT free
             const line_clean = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
             else
@@ -224,7 +224,7 @@ pub const TestHarness = struct {
 
         for (0..self.buffer.lineCount()) |i| {
             const line = self.buffer.getLine(i).?;
-            defer self.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+            // getLine returns cached/borrowed memory - do NOT free
             const line_clean = if (line.len > 0 and line[line.len - 1] == '\n')
                 line[0 .. line.len - 1]
             else
@@ -291,7 +291,7 @@ pub const TestHarness = struct {
             try self.print("\n❌ ASSERTION FAILED: Line {} does not exist\n", .{line_num});
             return error.AssertionFailed;
         };
-        defer self.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+        // getLine returns cached/borrowed memory - do NOT free
 
         const line_clean = if (line.len > 0 and line[line.len - 1] == '\n')
             line[0 .. line.len - 1]

@@ -1059,29 +1059,52 @@ pub export fn apiBufSetExtmark(
         }
     }
 
-    // Parse signText option: 1-2 character sign for signcolumn (e.g., "+", ">>", "✓")
+    // Parse signText option: 1-2 character sign for signcolumn (e.g., "+", ">>", "✓", "▎")
+    // CRITICAL: Must duplicate immediately - Hermes reuses internal string buffer!
+    // If we parse signHlGroup next, it will overwrite the memory signText pointed to
+    // NOTE: We count Unicode codepoints (1-2 allowed), not bytes. Multi-byte chars like "▎" are valid.
     var sign_text: ?[]const u8 = null;
+    var sign_text_owned: ?[]u8 = null; // Track ownership for cleanup
     if (c.hermes_value_get_property(rt, opts_val, "signText")) |st_val| {
         if (c.hermes_value_is_string(st_val)) {
             var st_len: usize = 0;
             const st_ptr = c.hermes_value_get_string(rt, st_val, &st_len);
-            if (st_ptr != null and st_len > 0 and st_len <= 2) {
-                sign_text = st_ptr[0..st_len];
+            if (st_ptr != null and st_len > 0) {
+                // Count Unicode codepoints to allow 1-2 chars (which may be up to 8 bytes for 2 4-byte chars)
+                const text = st_ptr[0..st_len];
+                var codepoint_count: usize = 0;
+                var byte_idx: usize = 0;
+                while (byte_idx < text.len) {
+                    const len = std.unicode.utf8ByteSequenceLength(text[byte_idx]) catch 1;
+                    byte_idx += len;
+                    codepoint_count += 1;
+                    if (codepoint_count > 2) break; // Early exit if more than 2 codepoints
+                }
+                if (codepoint_count >= 1 and codepoint_count <= 2) {
+                    // Duplicate immediately to avoid Hermes buffer reuse issues
+                    sign_text_owned = ctx.allocator.dupe(u8, st_ptr[0..st_len]) catch null;
+                    sign_text = sign_text_owned;
+                }
             }
         }
     }
+    defer if (sign_text_owned) |st| ctx.allocator.free(st);
 
     // Parse signHlGroup option: highlight group for sign text
+    // CRITICAL: Must duplicate immediately - Hermes reuses internal string buffer!
     var sign_hl_group: ?[]const u8 = null;
+    var sign_hl_group_owned: ?[]u8 = null;
     if (c.hermes_value_get_property(rt, opts_val, "signHlGroup")) |shg_val| {
         if (c.hermes_value_is_string(shg_val)) {
             var shg_len: usize = 0;
             const shg_ptr = c.hermes_value_get_string(rt, shg_val, &shg_len);
             if (shg_ptr != null and shg_len > 0) {
-                sign_hl_group = shg_ptr[0..shg_len];
+                sign_hl_group_owned = ctx.allocator.dupe(u8, shg_ptr[0..shg_len]) catch null;
+                sign_hl_group = sign_hl_group_owned;
             }
         }
     }
+    defer if (sign_hl_group_owned) |shg| ctx.allocator.free(shg);
 
     // Get or create buffer extmarks
     const buf_exts = ctx.getOrCreateBufferExtmarks(buf_handle) catch {

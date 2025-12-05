@@ -234,7 +234,7 @@ pub export fn apiBufGetLines(
     _ = context;
 
     const rt = runtime orelse return null;
-    const ctx = global_ctx orelse return c.hermes_value_create_null(rt);
+    _ = global_ctx orelse return c.hermes_value_create_null(rt);
 
     if (count < 4) return c.hermes_value_create_null(rt);
 
@@ -268,7 +268,7 @@ pub export fn apiBufGetLines(
             i += 1;
             continue;
         };
-        defer ctx.allocator.free(line);
+        // getLine returns cached/borrowed memory - do NOT free
 
         // Remove trailing newline if present
         const clean_line = if (line.len > 0 and line[line.len - 1] == '\n')
@@ -328,7 +328,7 @@ pub export fn apiBufSetLines(
     var line_num: usize = 0;
     while (line_num < start) : (line_num += 1) {
         const line = buffer.getLine(line_num) orelse continue;
-        defer ctx.allocator.free(line);
+        // getLine returns cached/borrowed memory - do NOT free
         new_content.appendSlice(ctx.allocator, line) catch continue;
         if (line.len == 0 or line[line.len - 1] != '\n') {
             new_content.append(ctx.allocator, '\n') catch continue;
@@ -354,7 +354,7 @@ pub export fn apiBufSetLines(
     line_num = end;
     while (line_num < line_count) : (line_num += 1) {
         const line = buffer.getLine(line_num) orelse continue;
-        defer ctx.allocator.free(line);
+        // getLine returns cached/borrowed memory - do NOT free
         new_content.appendSlice(ctx.allocator, line) catch continue;
     }
 
@@ -605,7 +605,7 @@ pub export fn apiBufGetText(
     var row = sr;
     while (row <= er) : (row += 1) {
         const line = buffer.getLine(row) orelse continue;
-        defer ctx.allocator.free(line);
+        // getLine returns cached/borrowed memory - do NOT free
 
         // Remove trailing newline
         const clean_line = if (line.len > 0 and line[line.len - 1] == '\n')
@@ -705,14 +705,14 @@ pub export fn apiBufSetText(
     var row: usize = 0;
     while (row < sr) : (row += 1) {
         const line = buffer.getLine(row) orelse continue;
-        defer ctx.allocator.free(line);
+        // getLine returns cached/borrowed memory - do NOT free
         new_content.appendSlice(ctx.allocator, line) catch continue;
     }
 
     // Add start of start_row (before start_col)
     if (sr < line_count) {
         const start_line = buffer.getLine(sr) orelse "";
-        defer if (start_line.len > 0) ctx.allocator.free(@constCast(start_line));
+        // getLine returns cached/borrowed memory - do NOT free
         const clean_start = if (start_line.len > 0 and start_line[start_line.len - 1] == '\n')
             start_line[0 .. start_line.len - 1]
         else
@@ -727,7 +727,7 @@ pub export fn apiBufSetText(
     // Add end of end_row (after end_col)
     if (er < line_count) {
         const end_line = buffer.getLine(er) orelse "";
-        defer if (end_line.len > 0) ctx.allocator.free(@constCast(end_line));
+        // getLine returns cached/borrowed memory - do NOT free
         const suffix_start = @min(ec, end_line.len);
         new_content.appendSlice(ctx.allocator, end_line[suffix_start..]) catch {};
     }
@@ -736,7 +736,7 @@ pub export fn apiBufSetText(
     row = er + 1;
     while (row < line_count) : (row += 1) {
         const line = buffer.getLine(row) orelse continue;
-        defer ctx.allocator.free(line);
+        // getLine returns cached/borrowed memory - do NOT free
         new_content.appendSlice(ctx.allocator, line) catch continue;
     }
 
@@ -953,7 +953,7 @@ pub export fn apiBufGetOffset(
     _ = context;
 
     const rt = runtime orelse return null;
-    const ctx = global_ctx orelse return c.hermes_value_create_number(rt, -1);
+    _ = global_ctx orelse return c.hermes_value_create_number(rt, -1);
 
     if (count < 2) return c.hermes_value_create_number(rt, -1);
 
@@ -975,7 +975,7 @@ pub export fn apiBufGetOffset(
     var i: usize = 0;
     while (i < @as(usize, @intCast(line_num))) : (i += 1) {
         const line = buffer.getLine(i) orelse continue;
-        defer ctx.allocator.free(line);
+        // getLine returns cached/borrowed memory - do NOT free
         offset += line.len;
     }
 

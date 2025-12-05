@@ -45,6 +45,8 @@ pub const diagnostic_api = @import("diagnostic_api.zig");
 pub const treesitter_api = @import("treesitter_api.zig");
 pub const search_api = @import("search_api.zig");
 pub const git_api = @import("git_api.zig");
+pub const ai_state_api = @import("ai_state_api.zig");
+pub const ai_storage_api = @import("ai_storage_api.zig");
 
 // Import new transpiler system
 const transpiler = @import("../transpiler/loader.zig");
@@ -71,6 +73,7 @@ pub var global_process_async_ctx: ?*process_async_api.AsyncProcessContext = null
 pub var global_pty_ctx: ?*pty_api.PtyContext = null;
 pub var global_fetch_ctx: ?*fetch_api.FetchContext = null;
 pub var global_e2e_ctx: ?*e2e_api.E2EContext = null;
+pub var global_ai_storage_ctx: ?*ai_storage_api.AiStorageApiContext = null;
 
 /// Global transpiler cache state (initialized in main.zig)
 pub var global_cache_dir: ?[]const u8 = null;
@@ -375,6 +378,26 @@ pub fn initJSI(
     global_fetch_ctx = fetch_ctx;
     fetch_api.register(runtime, fetch_ctx);
 
+    // Register AI State API (vim.ai.state.* for editor state access)
+    const ai_state_ctx = allocator.create(ai_state_api.AiStateApiContext) catch @panic("Failed to allocate AiStateApiContext");
+    ai_state_ctx.* = ai_state_api.AiStateApiContext{
+        .allocator = allocator,
+        .editor = if (T == *Editor) @ptrCast(editor_or_context) else null,
+        .editor_ctx = if (T == *EditorContext) @ptrCast(editor_or_context) else null,
+    };
+    ai_state_api.register(runtime, ai_state_ctx);
+
+    // Register AI Storage/Providers API (vim.ai.storage.*, vim.ai.providers.*, vim.ai.utils.*)
+    // This provides infrastructure: pattern storage, graph edges, LLM provider abstraction
+    const ai_storage_ctx = allocator.create(ai_storage_api.AiStorageApiContext) catch @panic("Failed to allocate AiStorageApiContext");
+    ai_storage_ctx.* = ai_storage_api.AiStorageApiContext{
+        .allocator = allocator,
+        // Storage and provider are initialized lazily when first accessed from JS
+        // This avoids loading LMDB/usearch unless AI features are actually used
+    };
+    global_ai_storage_ctx = ai_storage_ctx;
+    ai_storage_api.register(runtime, ai_storage_ctx);
+
     // Register E2E API (vim.e2e - E2E testing and plugin development debugging)
     // Available in ALL modes (Editor + EditorContext) - difference is rendering backend, not API
     // CRITICAL: Use function pointer for getCurrentBuffer to support multi-window (splits)
@@ -601,6 +624,9 @@ pub fn deinitJSI() void {
     namespace_api.deinit();
     // Clean up diagnostic context
     diagnostic_api.deinit();
+    // Clean up AI APIs
+    ai_state_api.deinit();
+    ai_storage_api.deinit();
     global_allocator = null;
 }
 

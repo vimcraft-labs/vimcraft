@@ -70,7 +70,7 @@ pub fn findTextObject(
 /// Find word boundaries (vim 'word': letters, digits, underscore)
 fn findWord(buffer: *const Buffer, modifier: TextObjectModifier) ?Range {
     const line = buffer.getLine(buffer.cursor.row) orelse return null;
-    defer buffer.allocator.free(line);
+    // getLine returns cached/borrowed memory - do NOT free
     const cursor_col = buffer.cursor.col;
 
     if (cursor_col >= line.len) return null;
@@ -133,7 +133,7 @@ fn findWord(buffer: *const Buffer, modifier: TextObjectModifier) ?Range {
 /// Find WORD boundaries (vim 'WORD': everything except whitespace)
 fn findWORD(buffer: *const Buffer, modifier: TextObjectModifier) ?Range {
     const line = buffer.getLine(buffer.cursor.row) orelse return null;
-    defer buffer.allocator.free(line);
+    // getLine returns cached/borrowed memory - do NOT free
     const cursor_col = buffer.cursor.col;
 
     if (cursor_col >= line.len) return null;
@@ -186,7 +186,7 @@ fn findPair(buffer: *const Buffer, open: u8, close: u8, modifier: TextObjectModi
     // First, try to find the pair on the current line
     const row = buffer.cursor.row;
     const line = buffer.getLine(row) orelse return null;
-    defer buffer.allocator.free(line);
+    // getLine returns cached/borrowed memory - do NOT free
     const line_start = buffer.content.byteOfLine(row);
 
     // Search backward from cursor for open delimiter
@@ -242,7 +242,7 @@ fn findPair(buffer: *const Buffer, open: u8, close: u8, modifier: TextObjectModi
 /// Find matching quotes
 fn findQuote(buffer: *const Buffer, quote: u8, modifier: TextObjectModifier) ?Range {
     const line = buffer.getLine(buffer.cursor.row) orelse return null;
-    defer buffer.allocator.free(line);
+    // getLine returns cached/borrowed memory - do NOT free
     const line_start = buffer.content.byteOfLine(buffer.cursor.row);
 
     var start_offset: ?usize = null;

@@ -8,12 +8,12 @@ const grapheme = @import("ghostty_grapheme");
 /// Returns true if cursor moved, false if already at boundary
 pub fn moveLeft(buffer: *Buffer) bool {
     if (buffer.cursor.col > 0) {
+        // getLine returns cached/borrowed memory - do NOT free
         const line = buffer.getLine(buffer.cursor.row) orelse {
             buffer.cursor.col -= 1;
             buffer.cursor.goal_column = buffer.cursor.col;
             return true;
         };
-        defer buffer.allocator.free(line);
 
         // Find the start of the current grapheme cluster by walking backwards
         var pos = buffer.cursor.col;
@@ -62,8 +62,8 @@ pub fn moveLeft(buffer: *Buffer) bool {
 /// Returns true if cursor moved, false if already at boundary
 /// In normal mode, cursor stops ON the last character (not after it)
 pub fn moveRight(buffer: *Buffer) bool {
+    // getLine returns cached/borrowed memory - do NOT free
     const line = buffer.getLine(buffer.cursor.row) orelse return false;
-    defer buffer.allocator.free(line);
     // Use visual length (excludes newline) - Vim behavior: cursor stops ON last char in normal mode
     const visual_len = buffer.getLineLengthVisual(buffer.cursor.row);
 
@@ -207,7 +207,7 @@ pub fn moveToLineEnd(buffer: *Buffer) void {
         buffer.cursor.goal_column = buffer.cursor.col;
         return;
     };
-    defer buffer.allocator.free(line);
+    // getLine returns cached/borrowed memory - do NOT free
 
     // Get visual length (exclude newline)
     const visual_len = if (line.len > 0 and line[line.len - 1] == '\n')
@@ -225,8 +225,8 @@ pub fn moveToLineEnd(buffer: *Buffer) void {
 
 /// Move to first non-blank character of line (^)
 pub fn moveToFirstNonBlank(buffer: *Buffer) void {
+    // getLine returns cached/borrowed memory - do NOT free
     const line = buffer.getLine(buffer.cursor.row) orelse return;
-    defer buffer.allocator.free(line);
 
     for (line, 0..) |char, i| {
         if (char != ' ' and char != '\t') {
@@ -256,6 +256,24 @@ pub fn moveToFileEnd(buffer: *Buffer) void {
     }
 }
 
+/// Move to specific line number (nG, :n)
+/// Line numbers are 1-indexed (Vim convention)
+pub fn moveToLine(buffer: *Buffer, line_number: usize) void {
+    if (buffer.lineCount() == 0) return;
+
+    // Convert 1-indexed to 0-indexed, clamp to valid range
+    const target_row = if (line_number == 0)
+        0 // Line 0 means line 1 in Vim
+    else if (line_number > buffer.lineCount())
+        buffer.lineCount() - 1
+    else
+        line_number - 1;
+
+    buffer.cursor.row = target_row;
+    // Move to first non-blank character (Vim convention for G with count)
+    moveToFirstNonBlank(buffer);
+}
+
 /// Check if character is word constituent
 fn isWordChar(c: u8) bool {
     return (c >= 'a' and c <= 'z') or
@@ -266,8 +284,8 @@ fn isWordChar(c: u8) bool {
 
 /// Move to next word start (w)
 pub fn moveWordForward(buffer: *Buffer) void {
+    // getLine returns cached/borrowed memory - do NOT free
     const line = buffer.getLine(buffer.cursor.row) orelse return;
-    defer buffer.allocator.free(line);
 
     var col = buffer.cursor.col;
 
@@ -312,8 +330,8 @@ pub fn moveWordBackward(buffer: *Buffer) void {
         }
     }
 
+    // getLine returns cached/borrowed memory - do NOT free
     const line = buffer.getLine(buffer.cursor.row) orelse return;
-    defer buffer.allocator.free(line);
 
     // Handle case where we're already at column 0 after line wrap
     if (buffer.cursor.col == 0) {
@@ -347,8 +365,8 @@ pub fn moveWordBackward(buffer: *Buffer) void {
 
 /// Move to word end (e)
 pub fn moveWordEnd(buffer: *Buffer) void {
+    // getLine returns cached/borrowed memory - do NOT free
     const line = buffer.getLine(buffer.cursor.row) orelse return;
-    defer buffer.allocator.free(line);
 
     var col = buffer.cursor.col;
 

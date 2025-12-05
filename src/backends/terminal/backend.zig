@@ -687,7 +687,7 @@ pub const TerminalBackend = struct {
                     // Move BUFFER cursor to clicked position (clamped to buffer bounds)
                     if (buffer_row < buf.lineCount()) {
                         const line = buf.getLine(buffer_row) orelse return true;
-                        defer buf.allocator.free(line);
+                        // getLine returns cached/borrowed memory - do NOT free
                         const line_len = if (line.len > 0 and line[line.len - 1] == '\n')
                             line.len - 1
                         else
@@ -723,7 +723,7 @@ pub const TerminalBackend = struct {
                 const buf = self.editor.getCurrentBuffer() orelse return true;
                 if (buffer_row < buf.lineCount()) {
                     const line = buf.getLine(buffer_row) orelse return true;
-                    defer buf.allocator.free(line);
+                    // getLine returns cached/borrowed memory - do NOT free
                     const line_len = if (line.len > 0 and line[line.len - 1] == '\n')
                         line.len - 1
                     else

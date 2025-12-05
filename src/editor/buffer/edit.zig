@@ -269,7 +269,7 @@ pub const EditOps = struct {
                 .cursor_after = buffer.cursor,
             };
         };
-        defer buffer.allocator.free(line); // getLine() returns owned memory
+        // getLine returns borrowed slice from cache - no free needed
 
         const start_offset = buffer.getCursorOffset();
         var col = buffer.cursor.col;
@@ -305,7 +305,7 @@ pub const EditOps = struct {
                 .cursor_after = buffer.cursor,
             };
         };
-        defer buffer.allocator.free(line); // getLine() returns owned memory
+        // getLine returns borrowed slice from cache - no free needed
 
         const start_offset = buffer.getCursorOffset();
         const line_start = buffer.content.byteOfLine(buffer.cursor.row);
@@ -347,7 +347,7 @@ pub const EditOps = struct {
         const line = buffer.getLine(buffer.cursor.row) orelse {
             return try self.allocator.alloc(u8, 0);
         };
-        defer buffer.allocator.free(line); // getLine() returns owned memory
+        // getLine returns borrowed slice from cache - no free needed
 
         const start_col = buffer.cursor.col;
         var end_col = line.len;
@@ -370,7 +370,7 @@ pub const EditOps = struct {
         const line = buffer.getLine(buffer.cursor.row) orelse {
             return try self.allocator.alloc(u8, 0);
         };
-        defer buffer.allocator.free(line); // getLine() returns owned memory
+        // getLine returns borrowed slice from cache - no free needed
 
         const end_col = @min(buffer.cursor.col, line.len);
         return try self.allocator.dupe(u8, line[0..end_col]);
@@ -382,7 +382,7 @@ pub const EditOps = struct {
         const line = buffer.getLine(buffer.cursor.row) orelse {
             return try self.allocator.alloc(u8, 0);
         };
-        defer buffer.allocator.free(line); // getLine() returns owned memory
+        // getLine returns borrowed slice from cache - no free needed
 
         const start_col = buffer.cursor.col;
         var col = start_col;

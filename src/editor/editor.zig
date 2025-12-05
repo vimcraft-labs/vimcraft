@@ -113,6 +113,36 @@ const PendingTextObject = struct {
     }
 };
 
+/// Pending numeric count for Vim count prefix (e.g., 5j, 10dd, 228G)
+/// Accumulates digits until a command is executed
+const PendingCount = struct {
+    value: usize = 0,
+    has_count: bool = false,
+
+    /// Add a digit to the accumulator
+    fn addDigit(self: *PendingCount, digit: u8) void {
+        const d = digit - '0';
+        self.value = self.value * 10 + d;
+        self.has_count = true;
+    }
+
+    /// Get the count (returns 1 if no count was specified)
+    fn getCount(self: *const PendingCount) usize {
+        return if (self.has_count) self.value else 1;
+    }
+
+    /// Check if a count was explicitly specified
+    fn hasCount(self: *const PendingCount) bool {
+        return self.has_count;
+    }
+
+    /// Clear the accumulator
+    fn clear(self: *PendingCount) void {
+        self.value = 0;
+        self.has_count = false;
+    }
+};
+
 /// Search direction (/ = forward, ? = backward)
 pub const SearchDirection = enum {
     forward,
@@ -191,6 +221,10 @@ pub const Editor = struct {
     yank_highlight: YankHighlight,
     keymap_mgr: KeymapManager,
 
+    // Global variables (vim.g.mapleader, etc.)
+    // Values are owned strings, freed on deinit/overwrite
+    global_vars: std.StringHashMap([]const u8),
+
     // Tree-sitter filetype detection
     ts_loader: Loader,
 
@@ -232,6 +266,7 @@ pub const Editor = struct {
     pending_cmd: PendingCommand,
     pending_register: PendingRegister,
     pending_text_object: PendingTextObject,
+    pending_count: PendingCount, // Numeric count prefix (e.g., 5j, 10dd, 228G)
     cmd_buffer: CommandBuffer,
 
     // Search state
@@ -330,6 +365,7 @@ pub const Editor = struct {
             },
             .yank_highlight = YankHighlight{},
             .keymap_mgr = KeymapManager.init(allocator),
+            .global_vars = std.StringHashMap([]const u8).init(allocator),
             .ts_loader = ts_loader,
             .parser = parser,
             .logger = Logger.init(allocator),
@@ -337,6 +373,7 @@ pub const Editor = struct {
             .pending_cmd = PendingCommand{},
             .pending_register = PendingRegister{},
             .pending_text_object = PendingTextObject{},
+            .pending_count = PendingCount{},
             .cmd_buffer = CommandBuffer.init(allocator),
             // Search state
             .search_buffer = CommandBuffer.init(allocator),
@@ -511,6 +548,15 @@ pub const Editor = struct {
 
         self.register_mgr.deinit();
         self.keymap_mgr.deinit();
+
+        // Clean up global variables (owned strings)
+        var g_iter = self.global_vars.iterator();
+        while (g_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.global_vars.deinit();
+
         self.ts_loader.deinit();
         // Note: Buffer.syntax is cleaned up by each buffer's deinit() - no global cleanup needed
         self.parser.deinit();
@@ -522,6 +568,44 @@ pub const Editor = struct {
         self.search_pattern_saved.deinit(self.allocator);
         self.search_matches.deinit(self.allocator);
         self.logger.deinit();
+    }
+
+    // ============================================================================
+    // Global Variables (vim.g)
+    // ============================================================================
+
+    /// Get a global variable value (returns null if not set)
+    pub fn getGlobalVar(self: *Editor, name: []const u8) ?[]const u8 {
+        return self.global_vars.get(name);
+    }
+
+    /// Set a global variable (allocates and owns both key and value)
+    pub fn setGlobalVar(self: *Editor, name: []const u8, value: []const u8) !void {
+        // If key exists, free old value (key is reused)
+        if (self.global_vars.getPtr(name)) |old_value| {
+            self.allocator.free(old_value.*);
+            // Update with new value
+            old_value.* = try self.allocator.dupe(u8, value);
+        } else {
+            // New key - allocate both key and value
+            const key = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(key);
+            const val = try self.allocator.dupe(u8, value);
+            try self.global_vars.put(key, val);
+        }
+    }
+
+    /// Delete a global variable
+    pub fn delGlobalVar(self: *Editor, name: []const u8) void {
+        if (self.global_vars.fetchRemove(name)) |entry| {
+            self.allocator.free(entry.key);
+            self.allocator.free(entry.value);
+        }
+    }
+
+    /// Get mapleader (defaults to backslash if not set)
+    pub fn getMapleader(self: *Editor) []const u8 {
+        return self.getGlobalVar("mapleader") orelse "\\";
     }
 
     /// Get pointer to current buffer (Helix-style accessor)
@@ -588,7 +672,7 @@ pub const Editor = struct {
 
         // Detect filetype
         const first_line = buf.getLine(0);
-        defer if (first_line != null) self.allocator.free(first_line.?);
+        // getLine returns borrowed slice from cache - no free needed
         const filetype = self.ts_loader.detectFiletype(path, first_line);
 
         if (filetype) |ft| {
@@ -1362,7 +1446,7 @@ pub const Editor = struct {
 
         // Detect filetype using loader
         const first_line = buf.getLine(0);
-        defer if (first_line != null) self.allocator.free(first_line.?); // ✅ FIX: Free owned memory from getLine()
+        // getLine returns borrowed slice from cache - no free needed
         const filetype = self.ts_loader.detectFiletype(path, first_line);
 
         if (filetype) |ft| {
@@ -1465,6 +1549,7 @@ pub const Editor = struct {
         // ESC cancels pending keymap state (Step 4: ESC cancellation)
         if (input.len == 1 and input[0] == 27) { // ESC
             self.keymap_mgr.clearPending();
+            self.pending_count.clear(); // Clear any pending count
             // Note: Also clears other pending states below
         }
 
@@ -1850,7 +1935,7 @@ pub const Editor = struct {
                                 self.pending_register.clear();
                                 return false; // No line to yank, no state change
                             };
-                            defer self.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+                            // getLine returns cached/borrowed memory - do NOT free
 
                             const text = if (line.len > 0 and line[line.len - 1] == '\n')
                                 line[0 .. line.len - 1]
@@ -1939,38 +2024,92 @@ pub const Editor = struct {
             // Get current buffer for single character commands
             const buf = self.getCurrentBuffer() orelse return false;
 
+            // Handle numeric count prefix (1-9, or 0 when count already started)
+            // Vim: "1-9 start a count, 0 continues count or goes to line start"
+            if (char >= '1' and char <= '9') {
+                self.pending_count.addDigit(char);
+                return false; // Just accumulating count, no state change
+            }
+            if (char == '0' and self.pending_count.hasCount()) {
+                self.pending_count.addDigit(char);
+                return false; // Continuing count accumulation
+            }
+
+            // Get count and prepare to clear it after command execution
+            const count = self.pending_count.getCount();
+
             switch (char) {
-                // Basic movement (hjkl) - check return value for boundary detection
-                'h' => return movement.moveLeft(buf),
-                'j' => return movement.moveDown(buf),
-                'k' => return movement.moveUp(buf),
-                'l' => return movement.moveRight(buf),
+                // Basic movement (hjkl) - apply count
+                'h' => {
+                    defer self.pending_count.clear();
+                    var moved = false;
+                    for (0..count) |_| {
+                        if (movement.moveLeft(buf)) moved = true;
+                    }
+                    return moved;
+                },
+                'j' => {
+                    defer self.pending_count.clear();
+                    var moved = false;
+                    for (0..count) |_| {
+                        if (movement.moveDown(buf)) moved = true;
+                    }
+                    return moved;
+                },
+                'k' => {
+                    defer self.pending_count.clear();
+                    var moved = false;
+                    for (0..count) |_| {
+                        if (movement.moveUp(buf)) moved = true;
+                    }
+                    return moved;
+                },
+                'l' => {
+                    defer self.pending_count.clear();
+                    var moved = false;
+                    for (0..count) |_| {
+                        if (movement.moveRight(buf)) moved = true;
+                    }
+                    return moved;
+                },
 
                 // Line movement - always changes position (or no-op if already there)
                 '0' => {
+                    defer self.pending_count.clear();
                     movement.moveToLineStart(buf);
                     return true; // Always changes state (or already at start)
                 },
                 '$' => {
+                    defer self.pending_count.clear();
                     movement.moveToLineEnd(buf);
                     return true;
                 },
                 '^' => {
+                    defer self.pending_count.clear();
                     movement.moveToFirstNonBlank(buf);
                     return true;
                 },
 
-                // Word movement - always changes position
+                // Word movement - apply count
                 'w' => {
-                    movement.moveWordForward(buf);
+                    defer self.pending_count.clear();
+                    for (0..count) |_| {
+                        movement.moveWordForward(buf);
+                    }
                     return true;
                 },
                 'b' => {
-                    movement.moveWordBackward(buf);
+                    defer self.pending_count.clear();
+                    for (0..count) |_| {
+                        movement.moveWordBackward(buf);
+                    }
                     return true;
                 },
                 'e' => {
-                    movement.moveWordEnd(buf);
+                    defer self.pending_count.clear();
+                    for (0..count) |_| {
+                        movement.moveWordEnd(buf);
+                    }
                     return true;
                 },
 
@@ -2017,8 +2156,16 @@ pub const Editor = struct {
                     return false; // Just setting pending state
                 },
                 'G' => {
-                    movement.moveToFileEnd(buf);
-                    return true; // Moved to end of file
+                    defer self.pending_count.clear();
+                    if (self.pending_count.hasCount()) {
+                        // nG = go to line n (1-indexed in Vim)
+                        const target_line = count;
+                        movement.moveToLine(buf, target_line);
+                    } else {
+                        // G without count = go to end of file
+                        movement.moveToFileEnd(buf);
+                    }
+                    return true;
                 },
 
                 // Viewport adjustment (zz, zt, zb)
@@ -2968,7 +3115,7 @@ pub const Editor = struct {
 
         for (0..line_count) |line_idx| {
             const line = buf.getLine(line_idx) orelse continue;
-            defer self.allocator.free(line); // getLine returns owned memory
+            // getLine returns cached/borrowed memory - do NOT free
 
             var col: usize = 0;
             while (col + actual_pattern.len <= line.len) {
@@ -3285,7 +3432,7 @@ pub const Editor = struct {
     pub fn getWordUnderCursor(self: *Editor) ?[]const u8 {
         const buf = self.getCurrentBuffer() orelse return null;
         const line = buf.getLine(buf.cursor.row) orelse return null;
-        defer buf.allocator.free(line);
+        // getLine returns cached/borrowed memory - do NOT free
 
         const cursor_col = buf.cursor.col;
         if (cursor_col >= line.len) return null;
@@ -3593,7 +3740,7 @@ pub const Editor = struct {
             }
             return;
         };
-        defer self.allocator.free(line);
+        // getLine returns cached/borrowed memory - do NOT free
 
         // Find matches
         var matches = try self.findMatchesOnLine(line, pattern, ignore_case);
@@ -3895,7 +4042,8 @@ pub const Editor = struct {
     }
 
     /// Trigger an autocommand event
-    /// Creates Neovim-compatible args object and emits to JavaScript listeners
+    /// Routes to both the EventEmitter (legacy vim.on() listeners) and
+    /// AutocmdManager (vim.api.createAutocmd() handlers).
     ///
     /// The args object contains these properties (matching Neovim's autocmd callback):
     ///   - id: autocommand id (always 0 for now)
@@ -3910,7 +4058,27 @@ pub const Editor = struct {
     ///   editor.triggerAutocommand("BufEnter");
     ///   editor.triggerAutocommand("InsertLeave");
     pub fn triggerAutocommand(self: *Editor, event_name: []const u8) void {
-        const emitter = self.event_emitter orelse return; // No JSI runtime yet
+        const autocmd_api = @import("../system/jsi/autocmd_api.zig");
+        const jsi_api = @import("../system/jsi/jsi_api.zig");
+
+        // Get buffer and file info for event data
+        const buf = self.getCurrentBuffer();
+        const file_path = if (buf) |b| b.filepath orelse "" else "";
+        const buf_id: u32 = if (self.current_buffer_id) |id| @truncate(id.id) else 0;
+
+        // Execute vim.api.createAutocmd() handlers via AutocmdManager
+        if (jsi_api.global_autocmd_manager) |autocmd_mgr| {
+            autocmd_mgr.execAutocmds(event_name, autocmd_api.AutocmdEventData{
+                .buf = buf_id,
+                .file = file_path,
+                .match = file_path, // For most events, match is the filepath
+            }) catch |err| {
+                self.logger.err("Failed to execute autocmds for '{s}': {}", .{ event_name, err }) catch {};
+            };
+        }
+
+        // Also emit to legacy vim.on() listeners via EventEmitter
+        const emitter = self.event_emitter orelse return;
 
         // Get runtime from EventEmitter
         const runtime = emitter.runtime;
@@ -3949,16 +4117,14 @@ pub const Editor = struct {
             c.hermes_value_destroy(v);
         }
 
-        // buf: buffer number (0 for now, single-buffer support)
-        const buf_val = c.hermes_value_create_number(runtime, 0);
+        // buf: buffer number
+        const buf_val = c.hermes_value_create_number(runtime, @floatFromInt(buf_id));
         if (buf_val) |v| {
             c.hermes_value_set_property(runtime, args_obj, "buf", v);
             c.hermes_value_destroy(v);
         }
 
         // file: file path (or empty string if no file loaded)
-        const buf = self.getCurrentBuffer();
-        const file_path = if (buf) |b| b.filepath orelse "" else "";
         const file_val = c.hermes_value_create_string(runtime, file_path.ptr, file_path.len);
         if (file_val) |v| {
             c.hermes_value_set_property(runtime, args_obj, "file", v);
@@ -4197,7 +4363,7 @@ test "Editor: 'A' followed by 'ii' inserts both characters on same line" {
 
     // Verify: First line should be "# Vimcraftii\n"
     const first_line = buf.getLine(0).?;
-    defer allocator.free(first_line);
+    // getLine returns borrowed slice from cache - no free needed
     try std.testing.expectEqualStrings("# Vimcraftii\n", first_line);
 
     // Verify: Cursor should be at (0, 12) - after the two i's
@@ -4372,7 +4538,7 @@ test "Keymap: mode-specific mappings don't leak" {
 
     // Verify: 'j' was inserted at cursor position
     const line = buf.getLine(1).?;
-    defer allocator.free(line);
+    // getLine returns cached/borrowed memory - do NOT free
     try std.testing.expect(std.mem.startsWith(u8, line, "j"));
 }
 
@@ -4464,7 +4630,7 @@ test "Keymap: pending key loss bug - j then x (when jk is mapped)" {
 
     // Verify 'x' executed by checking first char was deleted from line 2
     const line = buf.getLine(1).?;
-    defer allocator.free(line);
+    // getLine returns cached/borrowed memory - do NOT free
     try std.testing.expectEqualStrings("ine 2\n", line); // 'l' deleted
 }
 

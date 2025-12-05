@@ -168,7 +168,7 @@ fn deleteBlockWise(buffer: *Buffer, start: Position, end: Position) !void {
             line_num -= 1;
             continue;
         };
-        defer buffer.allocator.free(line); // getLine() returns owned memory
+        // getLine returns borrowed slice from cache - no free needed
 
         const line_start_offset = buffer.content.byteOfLine(line_num);
 
@@ -260,7 +260,7 @@ test "visual_ops: delete single line character-wise" {
 
     // Check result: "Hello \n"
     const line = buffer.getLine(0).?;
-    defer allocator.free(line); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     try std.testing.expectEqualStrings("Hello \n", line);
 
     // Check cursor is at start of deletion (col 6)
@@ -301,7 +301,7 @@ test "visual_ops: delete line-wise" {
     // Check result: "Line 3\n"
     try std.testing.expectEqual(@as(usize, 1), buffer.lineCount());
     const line = buffer.getLine(0).?;
-    defer allocator.free(line); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     try std.testing.expectEqualStrings("Line 3\n", line);
 
     // Check cursor at start of remaining line
@@ -342,7 +342,7 @@ test "visual_ops: change character-wise enters insert mode" {
 
     // Check content deleted
     const line = buffer.getLine(0).?;
-    defer allocator.free(line); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     try std.testing.expectEqualStrings("Hello \n", line);
 
     // Check cursor positioned for insertion

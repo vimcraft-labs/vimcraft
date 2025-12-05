@@ -36,6 +36,7 @@ declare const vimOpt: Record<string, unknown>;
 declare const vimOptLocal: Record<string, unknown>;
 declare const vimOptGlobal: Record<string, unknown>;
 declare const vimBo: Record<string, unknown>;
+declare const vimG: Record<string, unknown>;
 declare const vimCursor: object | undefined;
 declare const vimLayer: {
   screenchar(row: number, col: number): number;
@@ -71,6 +72,53 @@ declare const vimEventEmitter: {
   listenerCount(event: string): number;
 } | undefined;
 declare const vimMetrics: object | undefined;
+// AI State API (vim.ai.state.*)
+declare const __aiState: {
+  buffer(): string;
+  selection(): string;
+  cursor(): { row: number; col: number };
+  line(): string;
+  lines(start?: number, end?: number): string[];
+  filetype(): string;
+  filename(): string;
+  lineCount(): number;
+} | undefined;
+
+// AI Storage API (vim.ai.storage.*)
+declare const __aiStoragePatterns: {
+  save(id: string, json: string, embedding: number[] | null, tags: string[], successRate?: number): boolean;
+  get(id: string): string | null;
+  delete(id: string): boolean;
+  findByTag(tag: string): string[];
+  stats(): { vectorCount: number; vectorMemoryBytes: number; vectorCapacity: number };
+} | undefined;
+declare const __aiStorageEdges: {
+  add(from: string, rel: string, to: string, metadata?: string): boolean;
+  remove(from: string, rel: string, to: string): boolean;
+  outgoing(from: string, rel?: string): Array<{ from: string; relationship: string; to: string; metadata: string }>;
+  incoming(to: string, rel?: string): Array<{ from: string; relationship: string; to: string; metadata: string }>;
+} | undefined;
+
+// AI Storage Conversations API (vim.ai.storage.conversations.*)
+declare const __aiStorageConversations: {
+  add(convId: string, timestamp: number, messageJson: string): boolean;
+  get(convId: string): string[];
+} | undefined;
+
+// AI Providers API (vim.ai.providers.*)
+declare const __aiProviders: {
+  configure(config: { provider: string; apiKey: string; baseUrl?: string }): boolean;
+  buildRequest(request: { model: string; messages: Array<{ role: string; content: string }>; temperature?: number; maxTokens?: number; stream?: boolean }): string;
+  getEndpoint(): string;
+  getHeaders(): Array<{ name: string; value: string }>;
+  parseResponse(json: string): { id: string; model: string; content?: string; finishReason: string; usage: { promptTokens: number; completionTokens: number; totalTokens: number } };
+} | undefined;
+
+// AI Utils API (vim.ai.utils.*)
+declare const __aiUtils: {
+  estimateTokens(text: string): number;
+  getLastError(): string | null;
+} | undefined;
 declare const __fs: object | undefined;
 declare const __process: {
   platform: string;
@@ -1481,6 +1529,18 @@ interface VimObject {
   lsp: object;
   e2e: object;
   g: Record<string, unknown>;
+  ai: {
+    context: {
+      buffer(): string;
+      selection(): string;
+      cursor(): { row: number; col: number };
+      line(): string;
+      lines(start?: number, end?: number): string[];
+      filetype(): string;
+      filename(): string;
+      lineCount(): number;
+    };
+  };
   schedule(callback: () => void): void;
   defer(callback: () => void, delay?: number): void;
   notify(message: string, level?: string): void;
@@ -1501,6 +1561,14 @@ const vim: VimObject = {
   opt: createOptionsProxy('vim.opt', vimOpt, getAllOptions),
   optLocal: createOptionsProxy('vim.optLocal', vimOptLocal, () => getAllOptionsWithScope('local')),
   optGlobal: createOptionsProxy('vim.optGlobal', vimOptGlobal, () => getAllOptionsWithScope('global')),
+
+  // vim.mapleader - convenient shorthand for vim.g.mapleader
+  get mapleader(): string {
+    return (vimG['mapleader'] as string) || '\\';
+  },
+  set mapleader(value: string) {
+    vimG['mapleader'] = value;
+  },
 
   bo: new Proxy(
     { get [Symbol.toStringTag]() { return 'vim.bo'; } },
@@ -1531,21 +1599,54 @@ const vim: VimObject = {
     }
   ),
 
+  // vim.g - Global variables (vim.g.mapleader, etc.)
+  g: new Proxy(
+    { get [Symbol.toStringTag]() { return 'vim.g'; } },
+    {
+      get(target, prop) {
+        if (prop === Symbol.toStringTag) return 'vim.g';
+        if (typeof prop === 'symbol') return undefined;
+        return vimG[prop as string];
+      },
+      set(target, prop, value) {
+        if (typeof prop === 'symbol') return false;
+        vimG[prop as string] = value;
+        return true;
+      },
+      has(target, prop) {
+        if (typeof prop === 'symbol') return false;
+        return vimG[prop as string] !== undefined;
+      },
+      deleteProperty(target, prop) {
+        if (typeof prop === 'symbol') return false;
+        vimG[prop as string] = undefined; // Setting to undefined deletes in our host
+        return true;
+      }
+    }
+  ),
+
   layer: vimLayer,
   motion: vimMotion,
 
   keymap: {
     set(mode: string, lhs: string, rhs: string | (() => void), opts?: object): void {
+      // Expand <leader> to mapleader value (default: backslash)
+      const mapleader = vimG['mapleader'] as string || '\\';
+      const expandedLhs = lhs.replace(/<leader>/gi, mapleader);
+
       if (typeof rhs === 'function') {
         const id = (globalThis as any)._nextKeymapId++;
         (globalThis as any)._keymapCallbacks[id] = rhs;
-        vimKeymap.set(mode, lhs, id, opts);
+        vimKeymap.set(mode, expandedLhs, id, opts);
       } else {
-        vimKeymap.set(mode, lhs, rhs, opts);
+        vimKeymap.set(mode, expandedLhs, rhs, opts);
       }
     },
     del(mode: string, lhs: string): void {
-      vimKeymap.del(mode, lhs);
+      // Expand <leader> for deletion too
+      const mapleader = vimG['mapleader'] as string || '\\';
+      const expandedLhs = lhs.replace(/<leader>/gi, mapleader);
+      vimKeymap.del(mode, expandedLhs);
     }
   },
 
@@ -1559,7 +1660,18 @@ const vim: VimObject = {
   fn: vimFn,
   lsp: {},
   e2e: {},
-  g: {},
+  ai: {
+    context: {
+      buffer: () => '',
+      selection: () => '',
+      cursor: () => ({ row: 0, col: 0 }),
+      line: () => '',
+      lines: () => [],
+      filetype: () => '',
+      filename: () => '',
+      lineCount: () => 0,
+    }
+  },
 
   schedule(callback: () => void): void {
     (globalThis as any).setTimeout(callback, 0);
@@ -1605,6 +1717,72 @@ if (typeof vimE2E !== 'undefined') {
   vim.e2e = vimE2E;
   Object.freeze(vim.e2e);
 }
+
+// Add AI namespace - Infrastructure layer for AI features
+// NOTE: vim.ai.native.* is RESERVED for future LLM-native primitives
+// (Pattern Space, Context Flow, Reality Interface, Meta-Cognition)
+vim.ai = {
+  // Editor state access (read-only)
+  state: typeof __aiState !== 'undefined' ? __aiState : {
+    buffer: () => '',
+    selection: () => '',
+    cursor: () => ({ row: 0, col: 0 }),
+    line: () => '',
+    lines: () => [],
+    filetype: () => '',
+    filename: () => '',
+    lineCount: () => 0,
+  },
+
+  // Storage infrastructure (LMDB + usearch)
+  storage: {
+    // Pattern persistence with optional embeddings
+    patterns: typeof __aiStoragePatterns !== 'undefined' ? __aiStoragePatterns : {
+      save: () => false,
+      get: () => null,
+      delete: () => false,
+      findByTag: () => [],
+      stats: () => ({ vectorCount: 0, vectorMemoryBytes: 0, vectorCapacity: 0 }),
+    },
+
+    // Graph edges (relationships between patterns)
+    edges: typeof __aiStorageEdges !== 'undefined' ? __aiStorageEdges : {
+      add: () => false,
+      remove: () => false,
+      outgoing: () => [],
+      incoming: () => [],
+    },
+
+    // Conversation history persistence
+    conversations: typeof __aiStorageConversations !== 'undefined' ? __aiStorageConversations : {
+      add: () => false,
+      get: () => [],
+    },
+  },
+
+  // LLM provider abstraction (OpenAI/Anthropic/Ollama)
+  providers: typeof __aiProviders !== 'undefined' ? __aiProviders : {
+    configure: () => false,
+    buildRequest: () => '{}',
+    getEndpoint: () => '',
+    getHeaders: () => [],
+    parseResponse: () => ({ id: '', model: '', finishReason: 'unknown', usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } }),
+  },
+
+  // Utility functions
+  utils: typeof __aiUtils !== 'undefined' ? __aiUtils : {
+    estimateTokens: () => 0,
+    getLastError: () => null,
+  },
+};
+Object.freeze(vim.ai.state);
+Object.freeze(vim.ai.storage.patterns);
+Object.freeze(vim.ai.storage.edges);
+Object.freeze(vim.ai.storage.conversations);
+Object.freeze(vim.ai.storage);
+Object.freeze(vim.ai.providers);
+Object.freeze(vim.ai.utils);
+Object.freeze(vim.ai);
 
 // Freeze immutable APIs
 Object.freeze(vim.motion);
@@ -1675,7 +1853,22 @@ if (typeof __fs !== 'undefined') {
 
 if (typeof __process !== 'undefined') {
   const originalSpawn = __process.spawn;
-  (globalThis as any).process = Object.assign({}, __process, {
+  // Note: Object.assign doesn't copy HostObject properties, so we must explicitly include them
+  (globalThis as any).process = {
+    // HostObject properties (must be accessed directly)
+    env: __process.env,
+    platform: __process.platform,
+    arch: __process.arch,
+    // HostObject methods
+    cwd: () => __process.cwd(),
+    exit: (code?: number) => __process.exit(code),
+    spawn: (cmd: string, args?: string[], opts?: any) => {
+      let nativeOpts = opts;
+      if (opts && opts.env && typeof opts.env === 'object') {
+        nativeOpts = { ...opts, env: { ...opts.env, __keys: Object.keys(opts.env) } };
+      }
+      return originalSpawn.call(__process, cmd, args || [], nativeOpts || {});
+    },
     exec(cmd: string, args?: string[], opts?: { env?: Record<string, string> }) {
       let nativeOpts = opts;
       if (opts && opts.env && typeof opts.env === 'object') {
@@ -1683,7 +1876,7 @@ if (typeof __process !== 'undefined') {
       }
       return originalSpawn.call(__process, cmd, args || [], nativeOpts || {});
     }
-  });
+  };
   Object.freeze((globalThis as any).process);
 }
 

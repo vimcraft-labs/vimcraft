@@ -653,6 +653,24 @@ fn runEditor(allocator: std.mem.Allocator, filepath: ?[]const u8) !void {
         // CRITICAL: Apply sign column config BEFORE loading plugins
         // This ensures getGutterWidth() returns the correct value when plugins initialize
         try display.setSignColumn(highlight_config.signcolumn_mode);
+
+        // Apply signcolumn setting to all existing windows
+        // Windows are created BEFORE config loads, so their options default to .auto
+        // We need to propagate the global setting to window-local options
+        {
+            const WindowOptions = @import("editor/window.zig").WindowOptions;
+            const sc_mode: WindowOptions.SignColumn = if (std.mem.eql(u8, highlight_config.signcolumn_mode, "yes"))
+                .yes
+            else if (std.mem.eql(u8, highlight_config.signcolumn_mode, "auto"))
+                .auto
+            else
+                .no;
+
+            var win_iter = editor.windows.valueIterator();
+            while (win_iter.next()) |win| {
+                win.*.options.signcolumn = sc_mode;
+            }
+        }
     }
 
     // Enter raw terminal mode
@@ -1069,6 +1087,22 @@ fn runEditorWithDebugger(allocator: std.mem.Allocator, filepath: []const u8) !vo
         debugger.log(msg, .info);
     }
     try display.setSignColumn(highlight_config.signcolumn_mode);
+
+    // Apply signcolumn setting to all existing windows (they were created before config loaded)
+    {
+        const WindowOptions = @import("editor/window.zig").WindowOptions;
+        const sc_mode: WindowOptions.SignColumn = if (std.mem.eql(u8, highlight_config.signcolumn_mode, "yes"))
+            .yes
+        else if (std.mem.eql(u8, highlight_config.signcolumn_mode, "auto"))
+            .auto
+        else
+            .no;
+
+        var win_iter = editor.windows.valueIterator();
+        while (win_iter.next()) |win| {
+            win.*.options.signcolumn = sc_mode;
+        }
+    }
 
     // Enter raw terminal mode
     try display.enterRawMode();

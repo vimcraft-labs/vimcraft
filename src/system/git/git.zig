@@ -302,7 +302,8 @@ pub fn getWorkTreeDiff(repo: *Repository, filepath: []const u8, allocator: std.m
     }
     defer c.git_diff_free(diff);
 
-    // Collect hunks
+    // Collect hunks by examining individual line changes
+    // This gives us accurate line-by-line tracking instead of treating entire hunks as changed
     var hunks: std.ArrayListUnmanaged(DiffHunk) = .empty;
     errdefer hunks.deinit(allocator);
 
@@ -321,27 +322,68 @@ pub fn getWorkTreeDiff(repo: *Repository, filepath: []const u8, allocator: std.m
             var lines_in_hunk: usize = 0;
             result = c.git_patch_get_hunk(&hunk, &lines_in_hunk, patch, hunk_idx);
             if (result < 0 or hunk == null) continue;
-            const h = hunk.?; // Unwrap the optional
 
-            // Determine hunk type based on old/new line counts
-            const old_lines = h.old_lines;
-            const new_lines = h.new_lines;
-            const hunk_type: HunkType = if (old_lines == 0)
-                .add
-            else if (new_lines == 0)
-                .delete
-            else
-                .change;
+            // Track consecutive lines of same type for coalescing into hunks
+            var current_start: ?usize = null;
+            var current_count: usize = 0;
+            var current_type: ?HunkType = null;
 
-            // new_start is 1-indexed in git, convert to 0-indexed
-            const start_line: usize = if (h.new_start > 0) @intCast(h.new_start - 1) else 0;
-            const line_count: usize = if (new_lines > 0) @intCast(new_lines) else 1;
+            // Iterate through individual lines to find actual changes
+            var line_idx: usize = 0;
+            while (line_idx < lines_in_hunk) : (line_idx += 1) {
+                var line: ?*const c.git_diff_line = null;
+                result = c.git_patch_get_line_in_hunk(&line, patch, hunk_idx, line_idx);
+                if (result < 0 or line == null) continue;
+                const l = line.?;
 
-            hunks.append(allocator, .{
-                .start_line = start_line,
-                .line_count = line_count,
-                .hunk_type = hunk_type,
-            }) catch return GitError.OutOfMemory;
+                // Check line origin: '+' for add, '-' for delete, ' ' for context
+                const origin = l.origin;
+                const line_type: ?HunkType = switch (origin) {
+                    '+' => .add,
+                    '-' => .delete,
+                    else => null, // Context line or other - skip
+                };
+
+                if (line_type) |lt| {
+                    // Get line number in new file (for additions/changes) or old file (for deletions)
+                    const line_num: usize = if (lt == .delete)
+                        (if (l.old_lineno > 0) @intCast(l.old_lineno - 1) else 0)
+                    else
+                        (if (l.new_lineno > 0) @intCast(l.new_lineno - 1) else 0);
+
+                    // Check if we can extend current hunk
+                    if (current_type != null and current_type.? == lt and current_start != null) {
+                        const expected_next = current_start.? + current_count;
+                        if (line_num == expected_next) {
+                            current_count += 1;
+                            continue;
+                        }
+                    }
+
+                    // Emit previous hunk if exists
+                    if (current_start != null and current_count > 0 and current_type != null) {
+                        hunks.append(allocator, .{
+                            .start_line = current_start.?,
+                            .line_count = current_count,
+                            .hunk_type = current_type.?,
+                        }) catch return GitError.OutOfMemory;
+                    }
+
+                    // Start new hunk
+                    current_start = line_num;
+                    current_count = 1;
+                    current_type = lt;
+                }
+            }
+
+            // Emit final hunk from this git hunk
+            if (current_start != null and current_count > 0 and current_type != null) {
+                hunks.append(allocator, .{
+                    .start_line = current_start.?,
+                    .line_count = current_count,
+                    .hunk_type = current_type.?,
+                }) catch return GitError.OutOfMemory;
+            }
         }
     }
 

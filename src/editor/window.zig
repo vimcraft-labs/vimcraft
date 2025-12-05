@@ -343,6 +343,7 @@ pub const Window = struct {
     /// Ensure cursor is visible in viewport, scrolling if necessary
     pub fn ensureCursorVisible(self: *Window) void {
         const scrolloff = self.options.scrolloff;
+        const old_top_line = self.viewport.top_line;
 
         // Vertical scrolling
         if (self.height > 0) {
@@ -354,6 +355,18 @@ pub const Window = struct {
             } else if (self.cursor.row >= self.viewport.top_line + self.height - scrolloff) {
                 self.viewport.top_line = self.cursor.row -| (self.height -| scrolloff -| 1);
             }
+        }
+
+        // DEBUG: Log when viewport actually scrolls
+        if (self.viewport.top_line != old_top_line) {
+            std.log.debug("VIEWPORT_SCROLL: window.ensureCursorVisible: top_line {d} -> {d}, cursor_row={d}, height={d}, scrolloff={d}, is_float={}", .{
+                old_top_line,
+                self.viewport.top_line,
+                self.cursor.row,
+                self.height,
+                scrolloff,
+                self.isFloating(),
+            });
         }
 
         // Horizontal scrolling (if wrap is disabled)

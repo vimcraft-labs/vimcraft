@@ -87,6 +87,11 @@ pub const Buffer = struct {
     // Cache is invalidated on buffer edits, filetype change, or explicit request
     highlight_cache: ?*HighlightCache = null,
 
+    // Line content cache for efficient rendering (avoids re-extracting lines from rope)
+    // Cache is invalidated on buffer edits. Callers get borrowed slices, no alloc per call.
+    // Key: line number, Value: owned line string (including newline if present)
+    line_cache: std.AutoHashMapUnmanaged(usize, []const u8) = .{},
+
     pub fn init(allocator: std.mem.Allocator) Buffer {
         return .{
             .allocator = allocator,
@@ -117,6 +122,10 @@ pub const Buffer = struct {
 
         // Clean up highlight cache
         self.deinitHighlightCache();
+
+        // Clean up line cache
+        self.clearLineCache();
+        self.line_cache.deinit(self.allocator);
 
         // Clean up active transaction if any
         if (self.active_transaction) |*trans| {
@@ -180,11 +189,20 @@ pub const Buffer = struct {
     }
 
     /// Get line by index (0-based)
-    /// Returns OWNED slice (must be freed by caller) including newline if present
+    /// Returns BORROWED slice from cache - caller must NOT free
     /// Returns null if line_num is out of bounds
+    /// Cache is automatically invalidated on buffer edits (incrementVersion)
     pub fn getLine(self: *const Buffer, line_num: usize) ?[]const u8 {
         if (line_num >= self.lineCount()) return null;
 
+        // Check cache first (O(1) lookup)
+        // Use constCast for cache update - this is "logical const" (cache is optimization)
+        const mutable_self = @constCast(self);
+        if (mutable_self.line_cache.get(line_num)) |cached| {
+            return cached;
+        }
+
+        // Cache miss - extract from rope
         const start = self.content.byteOfLine(line_num);
         const end = if (line_num + 1 < self.lineCount())
             self.content.byteOfLine(line_num + 1)
@@ -195,21 +213,29 @@ pub const Buffer = struct {
         var line_rope = self.content.slice(start, end) catch return null;
         defer line_rope.deinit();
 
-        // Convert to owned string (caller must free with Rope's allocator)
-        return line_rope.toString() catch null;
+        // Convert to owned string and store in cache
+        const line = line_rope.toString() catch return null;
+        mutable_self.line_cache.put(self.allocator, line_num, line) catch {
+            // Cache put failed, free the line and return null
+            self.allocator.free(line);
+            return null;
+        };
+
+        // Return borrowed slice from cache
+        return line;
     }
 
     /// Get line length (in bytes, includes newline if present)
     pub fn getLineLength(self: *const Buffer, line_num: usize) usize {
         const line = self.getLine(line_num) orelse return 0;
-        defer self.allocator.free(line); // Free owned memory
+        // getLine now returns borrowed slice from cache - no free needed
         return line.len;
     }
 
     /// Get visual line length (excludes newline)
     pub fn getLineLengthVisual(self: *const Buffer, line_num: usize) usize {
         const line = self.getLine(line_num) orelse return 0;
-        defer self.allocator.free(line); // Free owned memory
+        // getLine now returns borrowed slice from cache - no free needed
         // Exclude newline for visual length
         return if (line.len > 0 and line[line.len - 1] == '\n')
             line.len - 1
@@ -283,6 +309,18 @@ pub const Buffer = struct {
         if (self.highlight_cache) |cache| {
             cache.invalidateAll();
         }
+
+        // Invalidate line cache on any edit
+        self.clearLineCache();
+    }
+
+    /// Clear the line cache and free all cached strings
+    fn clearLineCache(self: *Buffer) void {
+        var it = self.line_cache.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.line_cache.clearRetainingCapacity();
     }
 
     /// Start a transaction for grouping multiple changes
@@ -590,7 +628,7 @@ pub const Buffer = struct {
     /// Delete word forward (dw)
     pub fn deleteWord(self: *Buffer) !void {
         const line = self.getLine(self.cursor.row) orelse return;
-        defer self.allocator.free(line); // Free owned memory from getLine()
+        // getLine returns borrowed slice from cache - no free needed
 
         // Invalidate external ArrayBuffers before modification
         self.incrementVersion();
@@ -881,11 +919,11 @@ test "Buffer: load simple content" {
     try std.testing.expectEqual(@as(usize, 2), buffer.lineCount());
 
     const line1 = buffer.getLine(0).?;
-    defer allocator.free(line1); // Free owned memory
+    // getLine returns borrowed slice from cache - no free needed
     try std.testing.expectEqualStrings("Hello\n", line1);
 
     const line2 = buffer.getLine(1).?;
-    defer allocator.free(line2); // Free owned memory
+    // getLine returns borrowed slice from cache - no free needed
     try std.testing.expectEqualStrings("World\n", line2);
 }
 
@@ -962,6 +1000,6 @@ test "Buffer: paste with tab during transaction" {
 
     // Verify line content
     const line1 = buffer.getLine(0).?;
-    defer allocator.free(line1); // Free owned memory
+    // getLine returns borrowed slice from cache - no free needed
     try std.testing.expectEqualStrings("hello\tworld\n", line1);
 }

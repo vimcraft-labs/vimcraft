@@ -80,7 +80,7 @@ fn pasteSingleLineAfter(buffer: *Buffer, text: []const u8, cursor_before: Cursor
 
     // Move one character forward (paste AFTER cursor)
     const line = buffer.getLine(buffer.cursor.row) orelse return cursor_before;
-    defer buffer.allocator.free(line); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     if (buffer.cursor.col < line.len and line[buffer.cursor.col] != '\n') {
         insert_offset += 1;
     }
@@ -158,7 +158,7 @@ fn pasteMultiLineCharWiseAfter(buffer: *Buffer, lines: []const []const u8, curso
 
     // Get current line
     const current_line = buffer.getLine(buffer.cursor.row) orelse return cursor_before;
-    defer buffer.allocator.free(current_line); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
 
     // Calculate insertion offset (after cursor)
     var insert_offset = buffer.getCursorOffset();
@@ -288,7 +288,7 @@ fn pasteLineWiseAfter(buffer: *Buffer, reg: *const YankReg) !Cursor {
 
     // Move to end of current line
     const current_line = buffer.getLine(buffer.cursor.row) orelse return buffer.cursor;
-    defer buffer.allocator.free(current_line); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     const line_end_offset = buffer.getCursorOffset() + (current_line.len - buffer.cursor.col);
 
     // Build text to insert (lines with newlines)
@@ -427,7 +427,7 @@ fn pasteBlockWiseAfter(buffer: *Buffer, reg: *const YankReg) !Cursor {
         }
 
         const target_line = buffer.getLine(target_row) orelse continue;
-        defer buffer.allocator.free(target_line); // getLine() returns owned memory
+        // getLine returns borrowed slice from cache - no free needed
 
         // Calculate offset for insertion
         const line_start_offset = buffer.content.byteOfLine(target_row);
@@ -498,7 +498,7 @@ fn pasteBlockWiseBefore(buffer: *Buffer, reg: *const YankReg) !Cursor {
         }
 
         const target_line = buffer.getLine(target_row) orelse continue;
-        defer buffer.allocator.free(target_line); // getLine() returns owned memory
+        // getLine returns borrowed slice from cache - no free needed
 
         // Calculate offset for insertion
         const line_start_offset = buffer.content.byteOfLine(target_row);
@@ -576,7 +576,7 @@ test "paste: single line after cursor" {
 
     // Check result: "Hello XXXWorld\n" - XXX inserted after space, before 'W'
     const line = buffer.getLine(0).?;
-    defer allocator.free(line); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     try std.testing.expectEqualStrings("Hello XXXWorld\n", line);
 
     // Check cursor position (should be on last 'X' at position 8)
@@ -615,7 +615,7 @@ test "paste: single line before cursor" {
 
     // Check result: "Hello XXX World\n"
     const line = buffer.getLine(0).?;
-    defer allocator.free(line); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     try std.testing.expectEqualStrings("Hello XXXWorld\n", line);
 
     // Check cursor position (should be on last 'X')
@@ -659,9 +659,9 @@ test "paste: multi-line character-wise after cursor" {
     // Line 0: "Line AAA\n" (original "Line " + "AAA\n")
     // Line 1: "BBB1\n" ("BBB" + remaining "1\n")
     const line0 = buffer.getLine(0).?;
-    defer allocator.free(line0); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     const line1 = buffer.getLine(1).?;
-    defer allocator.free(line1); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     try std.testing.expectEqualStrings("Line AAA\n", line0);
     try std.testing.expectEqualStrings("BBB1\n", line1);
 
@@ -734,11 +734,11 @@ test "paste: block-wise after cursor" {
     // Line 1: "ghiYYYjkl\n"
     // Line 2: "mnoZZZpqr\n"
     const line0 = buffer.getLine(0).?;
-    defer allocator.free(line0); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     const line1 = buffer.getLine(1).?;
-    defer allocator.free(line1); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     const line2 = buffer.getLine(2).?;
-    defer allocator.free(line2); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
 
     try std.testing.expectEqualStrings("abcXXXdef\n", line0);
     try std.testing.expectEqualStrings("ghiYYYjkl\n", line1);
@@ -783,11 +783,11 @@ test "paste: block-wise before cursor" {
     // Line 1: "ghYYYijkl\n"
     // Line 2: "mnZZZopqr\n"
     const line0 = buffer.getLine(0).?;
-    defer allocator.free(line0); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     const line1 = buffer.getLine(1).?;
-    defer allocator.free(line1); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     const line2 = buffer.getLine(2).?;
-    defer allocator.free(line2); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
 
     try std.testing.expectEqualStrings("abXXXcdef\n", line0);
     try std.testing.expectEqualStrings("ghYYYijkl\n", line1);
@@ -835,11 +835,11 @@ test "paste: block-wise with padding (short lines)" {
     // Line 1: "cd YYY\n"
     // Line 2: "ef ZZZ\n"
     const line0 = buffer.getLine(0).?;
-    defer allocator.free(line0); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     const line1 = buffer.getLine(1).?;
-    defer allocator.free(line1); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
     const line2 = buffer.getLine(2).?;
-    defer allocator.free(line2); // getLine() returns owned memory
+    // getLine returns borrowed slice from cache - no free needed
 
     try std.testing.expectEqualStrings("ab XXX\n", line0);
     try std.testing.expectEqualStrings("cd YYY\n", line1);

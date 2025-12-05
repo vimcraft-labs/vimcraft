@@ -268,18 +268,23 @@ pub fn renderHybridLineNumber(line_num: usize, cursor_line: usize, buf: []u8) us
     }
 }
 
-/// Sign column renderer (placeholder for diagnostics/git/marks)
-/// Returns 2 chars: "[sign] " or "  "
+/// Sign column renderer - NO-OP for width tracking only
+///
+/// Signs are rendered directly from extmarks in layer_renderer.zig and window_renderer.zig.
+/// This column is registered in gutter_manager solely for cached_width = 2 to be included
+/// in getTotalWidth(). The renderer itself outputs nothing.
+///
+/// Architecture:
+/// - Git/diagnostic signs are stored as extmarks via vim.api.bufSetExtmark()
+/// - layer_renderer.updateGutterLayer() looks up signs from namespace_api.getSignForLine()
+/// - window_renderer.renderWindow() also looks up signs from extmarks
+/// - This renderer is legacy scaffolding that may be removed when sign width tracking
+///   is moved to a dedicated field instead of a gutter column.
 pub fn renderSignColumn(line_num: usize, cursor_line: usize, buf: []u8) usize {
     _ = line_num;
     _ = cursor_line;
-    // TODO: Look up actual signs for this line
-    // For now, render empty sign column (2 spaces)
-    if (buf.len >= 2) {
-        buf[0] = ' ';
-        buf[1] = ' ';
-        return 2;
-    }
+    _ = buf;
+    // No-op: actual sign rendering happens in layer_renderer/window_renderer from extmarks
     return 0;
 }
 

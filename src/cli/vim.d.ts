@@ -6398,6 +6398,26 @@ export interface Vim {
   // Note: vim.defer_fn is not needed - use standard setTimeout() instead
 
   // =========================================================================
+  // Leader Key
+  // =========================================================================
+
+  /**
+   * The leader key for `<leader>` mappings.
+   *
+   * Set this BEFORE defining any `<leader>` keymaps.
+   * Default is backslash (`\`).
+   *
+   * @example
+   * // Set leader to space (common choice)
+   * vim.mapleader = ' ';
+   *
+   * // Now define leader mappings
+   * vim.keymap.set('n', '<leader>gp', () => previewHunk());
+   * vim.keymap.set('n', '<leader>w', ':w<CR>');
+   */
+  mapleader: string;
+
+  // =========================================================================
   // Variable Scopes
   // =========================================================================
 
@@ -6483,6 +6503,200 @@ export interface Vim {
    * const path = vim.env.PATH;
    */
   env: Record<string, string>;
+
+  /**
+   * AI Infrastructure Layer.
+   *
+   * Provides infrastructure for AI features:
+   * - `state`: Read-only editor state access
+   * - `storage`: Pattern persistence (LMDB + usearch vectors)
+   * - `providers`: LLM API abstraction (OpenAI, Anthropic, Ollama)
+   * - `utils`: Utility functions (token estimation)
+   *
+   * NOTE: `vim.ai.native.*` is RESERVED for future LLM-native primitives:
+   * - Pattern Space (navigate, compose, introspect)
+   * - Context Flow (embedding streams, attention masks)
+   * - Reality Interface (perceive, actuate, feedback loops)
+   * - Meta-Cognition (uncertainty, reasoning traces)
+   *
+   * @example
+   * // Get buffer content for AI prompt
+   * const content = vim.ai.state.buffer();
+   *
+   * // Get current line for inline completion
+   * const line = vim.ai.state.line();
+   * const cursor = vim.ai.state.cursor();
+   *
+   * @example
+   * // Configure provider and make request
+   * vim.ai.providers.configure({ provider: 'anthropic', apiKey: '...' });
+   * const json = vim.ai.providers.buildRequest({
+   *   model: 'claude-3-sonnet-20240229',
+   *   messages: [{ role: 'user', content: 'Hello!' }]
+   * });
+   */
+  ai: {
+    /**
+     * Read-only access to editor state.
+     * Use for gathering context to send to LLMs.
+     */
+    state: {
+      /** Returns full buffer content as a string */
+      buffer(): string;
+      /** Returns selected text in visual mode, or empty string */
+      selection(): string;
+      /** Returns cursor position (0-indexed) */
+      cursor(): { row: number; col: number };
+      /** Returns current line content */
+      line(): string;
+      /** Returns line range (0-indexed, end exclusive) */
+      lines(start?: number, end?: number): string[];
+      /** Returns detected filetype (e.g., 'rust', 'typescript') */
+      filetype(): string;
+      /** Returns current filename/path */
+      filename(): string;
+      /** Returns total line count in buffer */
+      lineCount(): number;
+    };
+
+    /**
+     * Storage infrastructure for AI patterns and relationships.
+     * Uses LMDB (key-value) + usearch (HNSW vectors).
+     */
+    storage: {
+      /**
+       * Pattern persistence with optional embeddings.
+       * Stores patterns as JSON with optional vector embeddings for similarity search.
+       */
+      patterns: {
+        /**
+         * Save a pattern with optional embedding.
+         * @param id - Unique pattern identifier
+         * @param json - Pattern data as JSON string
+         * @param embedding - Optional embedding vector for similarity search
+         * @param tags - Tags for indexing
+         * @param successRate - Optional success rate (0-1) for ranking
+         */
+        save(id: string, json: string, embedding: number[] | null, tags: string[], successRate?: number): boolean;
+        /** Get pattern by ID */
+        get(id: string): string | null;
+        /** Delete pattern and all indexes */
+        delete(id: string): boolean;
+        /** Find patterns by tag */
+        findByTag(tag: string): string[];
+        /** Get storage statistics */
+        stats(): { vectorCount: number; vectorMemoryBytes: number; vectorCapacity: number };
+      };
+
+      /**
+       * Graph edges for relationships between patterns.
+       * Uses DynamoDB-style key patterns for efficient traversal.
+       */
+      edges: {
+        /** Add a relationship edge */
+        add(from: string, rel: string, to: string, metadata?: string): boolean;
+        /** Remove an edge */
+        remove(from: string, rel: string, to: string): boolean;
+        /** Get outgoing edges from a node */
+        outgoing(from: string, rel?: string): Array<{ from: string; relationship: string; to: string; metadata: string }>;
+        /** Get incoming edges to a node */
+        incoming(to: string, rel?: string): Array<{ from: string; relationship: string; to: string; metadata: string }>;
+      };
+
+      /**
+       * Conversation history persistence.
+       * Store and retrieve conversation messages in timestamp order.
+       */
+      conversations: {
+        /**
+         * Add a message to a conversation.
+         * @param convId - Unique conversation identifier
+         * @param timestamp - Unix timestamp in milliseconds
+         * @param messageJson - Message as JSON string (e.g., {role, content})
+         *
+         * @example
+         * vim.ai.storage.conversations.add('conv-1', Date.now(), JSON.stringify({
+         *   role: 'user',
+         *   content: 'Hello!'
+         * }));
+         */
+        add(convId: string, timestamp: number, messageJson: string): boolean;
+
+        /**
+         * Get all messages in a conversation (in timestamp order).
+         * @param convId - Conversation identifier
+         * @returns Array of message JSON strings
+         *
+         * @example
+         * const messages = vim.ai.storage.conversations.get('conv-1');
+         * messages.forEach(json => {
+         *   const msg = JSON.parse(json);
+         *   console.log(`${msg.role}: ${msg.content}`);
+         * });
+         */
+        get(convId: string): string[];
+      };
+    };
+
+    /**
+     * LLM provider abstraction.
+     * Supports OpenAI, Anthropic, and Ollama with unified request/response format.
+     */
+    providers: {
+      /**
+       * Configure the provider.
+       * @example
+       * vim.ai.providers.configure({
+       *   provider: 'anthropic',
+       *   apiKey: process.env.ANTHROPIC_API_KEY,
+       * });
+       */
+      configure(config: { provider: 'openai' | 'anthropic' | 'ollama' | 'custom'; apiKey: string; baseUrl?: string }): boolean;
+      /** Build request JSON for the configured provider */
+      buildRequest(request: {
+        model: string;
+        messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string }>;
+        temperature?: number;
+        maxTokens?: number;
+        stream?: boolean;
+      }): string;
+      /** Get the chat endpoint URL */
+      getEndpoint(): string;
+      /** Get required headers for API calls */
+      getHeaders(): Array<{ name: string; value: string }>;
+      /** Parse provider response JSON into unified format */
+      parseResponse(json: string): {
+        id: string;
+        model: string;
+        content?: string;
+        finishReason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | 'unknown';
+        usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+      };
+    };
+
+    /**
+     * Utility functions for AI features.
+     */
+    utils: {
+      /**
+       * Estimate tokens for text (heuristic: ~4 chars per token).
+       * Useful for context limit checks before sending to LLM.
+       */
+      estimateTokens(text: string): number;
+
+      /**
+       * Get the last error message from AI storage/provider operations.
+       * Returns null if no error has occurred.
+       *
+       * @example
+       * const success = vim.ai.storage.patterns.save('id', '{}', null, ['tag'], 0.5);
+       * if (!success) {
+       *   console.error('Save failed:', vim.ai.utils.getLastError());
+       * }
+       */
+      getLastError(): string | null;
+    };
+  };
 }
 
 // ============================================================================

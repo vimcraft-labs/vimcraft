@@ -49,7 +49,7 @@ fn benchDeleteLine(buffer: *Buffer) !void {
 fn benchYankLine(buffer: *Buffer, register_mgr: *RegisterManager) !void {
     const line_num = buffer.cursor.row;
     const line = buffer.getLine(line_num) orelse return;
-    defer buffer.allocator.free(line); // ✅ FIX: Free owned memory from getLine()
+    // getLine returns cached/borrowed memory - do NOT free
 
     const text = if (line.len > 0 and line[line.len - 1] == '\n')
         line[0 .. line.len - 1]
