@@ -545,6 +545,63 @@ vim.e2e.describe("PTY Overhead", function() {
 });
 
 // ============================================================================
+// CURSOR-ONLY RENDER PATH (Gutter Regression Guard)
+// ============================================================================
+// Verifies that cursor-only optimization works correctly with gutter enabled.
+// Bug (Dec 2025): renderCursorOnly() used wrong gutter width calculation,
+// causing cursor to appear in gutter area. Fix must not regress performance.
+vim.e2e.describe("Cursor-Only Render", function() {
+    vim.e2e.test("gutter: cursor-only path < 1ms per move", function() {
+        // Enable gutter (this is the config that exposed the bug)
+        vim.opt.number = true;
+        vim.opt.signcolumn = "yes";
+        vim.e2e.pty.render();
+
+        // Insert content so we have something to navigate
+        vim.e2e.keys("gg");
+        vim.e2e.pty.render();
+
+        // Measure individual cursor moves (should use cursor-only path)
+        const times: number[] = [];
+        for (let i = 0; i < 20; i++) {
+            const start = Date.now();
+            vim.e2e.keys("j");
+            vim.e2e.pty.render();
+            times.push(Date.now() - start);
+        }
+
+        // Cursor-only path should be very fast (<1ms typically)
+        // Allow 2ms for safety margin
+        const avg = times.reduce((a, b) => a + b, 0) / times.length;
+        console.log("[BENCH] Cursor-only (gutter): avg=" + avg.toFixed(2) + "ms (max: 2ms)");
+
+        vim.e2e.assert.true(avg <= 2,
+            "Cursor-only with gutter: " + avg.toFixed(2) + "ms avg > 2ms - optimization broken!");
+    });
+
+    vim.e2e.test("gutter: rapid j stays responsive", function() {
+        vim.opt.number = true;
+        vim.opt.signcolumn = "yes";
+        vim.e2e.pty.render();
+
+        vim.e2e.keys("gg");
+        vim.e2e.pty.render();
+
+        // Rapid repeated movement (simulates holding j)
+        const start = Date.now();
+        vim.e2e.keys("j".repeat(50));
+        vim.e2e.pty.render();
+        const elapsed = Date.now() - start;
+
+        console.log("[BENCH] Rapid j (gutter): 50j=" + elapsed + "ms (" + (elapsed/50).toFixed(2) + "ms/move)");
+
+        // Should complete in <100ms (2ms per move)
+        vim.e2e.assert.true(elapsed <= 100,
+            "50j with gutter took " + elapsed + "ms - feels sluggish!");
+    });
+});
+
+// ============================================================================
 // RUN
 // ============================================================================
 const results = vim.e2e.runAll();

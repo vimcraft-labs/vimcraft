@@ -1518,6 +1518,7 @@ test "main: imports" {
 // Import test files for discovery
 comptime {
     _ = @import("backends/terminal/display/cursorline_test.zig");
+    _ = @import("backends/terminal/display/viewport_state_test.zig"); // ViewportState unit tests
     _ = @import("editor/config/highlights_test.zig");
     _ = @import("editor/editor_test.zig");
     _ = @import("system/jsi/jsi_tests.zig");

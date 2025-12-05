@@ -679,8 +679,14 @@ pub const TerminalBackend = struct {
                     const local_row = screen_row - win.screen_row;
                     const local_col = screen_col - win.screen_col;
 
+                    // Get the buffer for this window first (needed for gutter width calculation)
+                    // HashMap stores *Buffer, so get returns *Buffer directly
+                    const buf = self.editor.buffers.get(win.buffer_id) orelse return true;
+
                     // Account for gutter width (line numbers, signs, etc.)
-                    const gutter_width = self.display.gutter_manager.getTotalWidth();
+                    // CRITICAL FIX: Use window-specific gutter width to match rendering
+                    const wr = @import("display/window_renderer.zig");
+                    const gutter_width = wr.calculateWindowGutterWidth(win, buf);
                     const text_col = if (local_col >= gutter_width)
                         local_col - gutter_width
                     else
@@ -689,10 +695,6 @@ pub const TerminalBackend = struct {
                     // Convert to buffer coordinates using window's viewport
                     const buffer_row = win.viewport.top_line +| local_row;
                     const buffer_col = win.viewport.left_col +| text_col;
-
-                    // Get the buffer for this window
-                    // HashMap stores *Buffer, so get returns *Buffer directly
-                    const buf = self.editor.buffers.get(win.buffer_id) orelse return true;
 
                     // Move BUFFER cursor to clicked position (clamped to buffer bounds)
                     if (buffer_row < buf.lineCount()) {
@@ -718,8 +720,16 @@ pub const TerminalBackend = struct {
                 }
             } else {
                 // SINGLE-WINDOW MODE: Original behavior
+                // Get buffer and window for gutter width calculation
+                const buf = self.editor.getCurrentBuffer() orelse return true;
+
                 // Account for gutter width (line numbers, signs, etc.)
-                const gutter_width = self.display.gutter_manager.getTotalWidth();
+                // CRITICAL FIX: Use window-specific gutter width to match rendering
+                const wr = @import("display/window_renderer.zig");
+                const gutter_width = if (self.editor.getCurrentWindow()) |win|
+                    wr.calculateWindowGutterWidth(win, buf)
+                else
+                    self.display.gutter_manager.getTotalWidth(); // Fallback
 
                 // Use saturating addition to prevent integer overflow
                 const buffer_row = self.display.viewport_top +| screen_row;
@@ -728,9 +738,6 @@ pub const TerminalBackend = struct {
                 else
                     0;
                 const buffer_col = self.display.viewport_left +| text_col;
-
-                // Move cursor to clicked position (clamped to buffer bounds)
-                const buf = self.editor.getCurrentBuffer() orelse return true;
                 if (buffer_row < buf.lineCount()) {
                     const line = buf.getLine(buffer_row) orelse return true;
                     // getLine returns cached/borrowed memory - do NOT free
@@ -866,14 +873,44 @@ pub const TerminalBackend = struct {
         self.last_mode_is_command = current_mode_is_command;
         self.last_mode_is_search = current_mode_is_search;
 
-        // CRITICAL FIX: Detect if viewport scroll is needed
+        // CRITICAL FIX: Detect if viewport scroll is needed (vertical OR horizontal)
         // If cursor moved beyond viewport boundaries, we MUST do a full render to update screen content
         // renderCursorOnly() only moves the terminal cursor, it doesn't re-render buffer content
         const viewport_scroll_needed = if (buf) |b| blk: {
+            // Vertical scroll check
             const text_rows = if (self.display.terminal_rows > 1) self.display.terminal_rows - 1 else 1;
             const cursor_below_viewport = b.cursor.row >= self.display.viewport_top + text_rows;
             const cursor_above_viewport = b.cursor.row < self.display.viewport_top;
-            break :blk cursor_below_viewport or cursor_above_viewport;
+            const vertical_scroll = cursor_below_viewport or cursor_above_viewport;
+
+            // Horizontal scroll check (for long lines)
+            // Calculate cursor display column (accounting for wide characters)
+            // Note: char_width already imported at line 813
+            const window_renderer = @import("display/window_renderer.zig");
+            const cursor_display_col = if (b.cursor.row < b.lineCount()) col_blk: {
+                const line = b.getLine(b.cursor.row) orelse break :col_blk b.cursor.col;
+                const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
+                    line[0 .. line.len - 1]
+                else
+                    line;
+                break :col_blk char_width.byteToDisplayColumn(line_without_newline, b.cursor.col);
+            } else b.cursor.col;
+
+            // Calculate text area width (account for gutter)
+            const gutter_width = if (self.editor.getCurrentWindow()) |win|
+                window_renderer.calculateWindowGutterWidth(win, b)
+            else
+                self.display.gutter_manager.getTotalWidth();
+            const text_cols = if (self.display.terminal_cols > gutter_width)
+                self.display.terminal_cols - gutter_width
+            else
+                self.display.terminal_cols;
+
+            const cursor_beyond_right = cursor_display_col >= self.display.viewport_left + text_cols;
+            const cursor_before_left = cursor_display_col < self.display.viewport_left;
+            const horizontal_scroll = cursor_beyond_right or cursor_before_left;
+
+            break :blk vertical_scroll or horizontal_scroll;
         } else false;
 
         // CRITICAL FIX: Detect if viewport_top changed (zz/zt/zb commands)
@@ -921,13 +958,17 @@ pub const TerminalBackend = struct {
 
         // CURSOR-ONLY RENDER PATH: Skip compositor if only cursor moved AND no viewport scroll needed
         // This reduces 457 cursor position codes to 1!
-        // CRITICAL: Also check viewport_top_changed for zz/zt/zb commands (scroll without cursor moving out of viewport)
-        // CRITICAL FIX: Also check needs_layer_update for cursorline/relativenumber/linenumber (cursor row changed)
-        // CRITICAL FIX: Also check mode_changed for status line updates (i/ESC changes mode display)
-        // CRITICAL FIX: Also check js_state_changed for hot reload (highlight changes require full render)
-        // CRITICAL FIX: Also check current_mode_is_command - command mode needs full render to show command buffer
-        // CRITICAL FIX: Also check current_mode_is_search - search mode needs full render to show search buffer
-        // CRITICAL FIX: Also check has_multiple_windows - renderCursorOnly doesn't handle window offsets!
+        // Conditions that require full render:
+        // - buffer_changed: content modified
+        // - yank_active: yank highlight animation
+        // - visual_active: visual selection rendering
+        // - viewport_scroll_needed: scroll to keep cursor visible
+        // - viewport_top_changed: zz/zt/zb scroll commands
+        // - needs_layer_update: cursorline/relativenumber/linenumber changed row
+        // - mode_changed: status line mode display
+        // - js_state_changed: JavaScript plugin modifications
+        // - current_mode_is_command/search: input buffer display
+        // - has_multiple_windows: cursor position relative to window
         if (!has_multiple_windows and !buffer_changed and !yank_active and !visual_active and !viewport_scroll_needed and !viewport_top_changed and !needs_layer_update and !mode_changed and !js_state_changed and !current_mode_is_command and !current_mode_is_search) {
             // Only cursor moved (Normal mode) - use lightweight path
             try self.display.renderCursorOnly(self.editor);
@@ -1018,36 +1059,20 @@ pub const TerminalBackend = struct {
         else
             2;
 
-        // Choose render path: single-window vs multi-window
-        // Use renderAllWindows when there are multiple windows (splits active) OR floating windows exist
-        // NOTE: has_multiple_windows already declared above (line 871) for cursor-only optimization check
-        const has_floating_windows = self.editor.hasFloatingWindows();
-
-        if (has_multiple_windows or has_floating_windows) {
-            // MULTI-WINDOW RENDER PATH: Use the window renderer
-            try self.display.renderAllWindows(
-                self.editor,
-                status,
-                &self.editor.visual_state,
-                &self.editor.yank_highlight,
-                cursorline_enabled,
-                list_enabled,
-                &listchars,
-                laststatus,
-            );
-        } else {
-            // SINGLE-WINDOW RENDER PATH: Use the original render function
-            try self.display.render(
-                self.editor,
-                status,
-                cursorline_enabled,
-                &self.editor.visual_state,
-                &self.editor.yank_highlight,
-                list_enabled,
-                &listchars,
-                laststatus,
-            );
-        }
+        // UNIFIED RENDER PATH: Always use renderAllWindows
+        // Single-window mode is just one window at (0,0) filling the screen.
+        // This eliminates duplicate rendering code in layer_renderer vs window_renderer.
+        // The window_renderer handles all cases correctly with proper clipping.
+        try self.display.renderAllWindows(
+            self.editor,
+            status,
+            &self.editor.visual_state,
+            &self.editor.yank_highlight,
+            cursorline_enabled,
+            list_enabled,
+            &listchars,
+            laststatus,
+        );
 
         // Set cursor shape ONLY when mode changes (prevent flickering during rapid input)
         // PERFORMANCE FIX: Sending cursor shape codes on every render (10+ times/sec when holding a key)

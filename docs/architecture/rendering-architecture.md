@@ -54,43 +54,45 @@ A **hierarchical, component-based rendering system** that:
 
 ## Current Vimcraft Rendering Implementation
 
-### Architecture Overview
+### Architecture Overview (Current Implementation)
 
 ```
 ┌─────────────────────────────────────────────┐
-│ main.zig - Event Loop                       │
+│ main.zig / backend.zig - Event Loop         │
 │ (Input handling + render triggers)          │
 └────────────────┬────────────────────────────┘
                  │
                  ├──→ Buffer modifications
-                 ├──→ Mode changes
+                 ├──→ Mode changes / viewport commands (zz, zt, zb)
                  ├──→ Configuration updates
-                 └──→ Plugin events
+                 └──→ Plugin events (extmarks, signs)
                  │
 ┌────────────────▼────────────────────────────┐
 │ display.zig - Display Manager               │
-│ (Orchestrates rendering pipeline)           │
+│ (Orchestrates layer-based rendering)        │
 ├─────────────────────────────────────────────┤
-│ 1. adjustViewport()                         │
-│ 2. updateGridFromBuffer()                   │
-│ 3. diff() → changes                         │
-│ 4. renderUpdates()                          │
-│ 5. swapBuffers()                            │
+│ 1. ViewportState.fromWindow() (snapshot)    │
+│ 2. layer_renderer.updateLayers()            │
+│ 3. compositor.composite(layers)             │
+│ 4. output_renderer.renderUpdates()          │
+│ 5. terminal flush                           │
 └────────────────┬────────────────────────────┘
                  │
-        ┌────────┴────────┬──────────┐
-        │                 │          │
-   ┌────▼─────┐    ┌─────▼──┐  ┌───▼────┐
-   │ ScreenGrid│    │ Gutter │  │ Char   │
-   │ (Cells)   │    │Manager │  │ Width  │
-   │           │    │        │  │        │
-   │ current[] │    └────────┘  └────────┘
-   │ previous[]│    
-   │ dirty[]   │    
-   └───────────┘    
-
-┌─────────────────────────────────────────────┐
+    ┌────────────┼────────────┬───────────────┐
+    │            │            │               │
+┌───▼────┐  ┌────▼─────┐  ┌───▼────┐   ┌─────▼─────┐
+│ Layers │  │Compositor│  │ Screen │   │ Window    │
+│        │  │          │  │ Grid   │   │ Renderer  │
+│ BASE   │  │ blend()  │  │        │   │           │
+│ GUTTER │  │ z-order  │  │current │   │ gutter    │
+│ CURSOR │  │ opacity  │  │previous│   │ content   │
+│ SEARCH │  └──────────┘  │ dirty  │   │ signs     │
+│ FLOAT  │                └────────┘   └───────────┘
+└────────┘                    │
+                              │
+┌─────────────────────────────▼───────────────┐
 │ Terminal Output (ANSI Escape Codes)         │
+│ (Synchronized updates, cursor tracking)     │
 └─────────────────────────────────────────────┘
 ```
 
@@ -186,16 +188,55 @@ Step 5: swapBuffers()
 | **Terminal I/O** | ~0.5ms | <1ms | Depends on escape codes |
 | **Total frame** | ~2-3ms | <5ms | <16ms for 60fps |
 
-### Current Limitations
+### Current Implementation (December 2025)
 
-1. **Single buffer only**: No support for splits, floats, or multiple windows
-2. **Flat rendering model**: Everything rendered to one grid
-3. **Viewport limitations**: Only vertical scroll + horizontal per-line
-4. **No layering**: Can't express z-order or overlapping regions
-5. **Monolithic flow**: Hard to compose with plugin rendering
-6. **Gutter coupling**: Tight integration with main grid
-7. **Color limitations**: No palette/highlight group abstraction
-8. **Status line hardcoded**: Can't customize or extend
+The proposed multi-layer architecture has been **fully implemented**:
+
+1. **Layer system** (`layer.zig`): Z-ordered layers with opacity
+2. **Compositor** (`compositor.zig`): Porter-Duff alpha blending
+3. **Layer renderer** (`layer_renderer.zig`): Entry point for layer-based rendering
+4. **Sign renderer** (`sign_renderer.zig`): Gitsigns/extmark sign rendering
+5. **ViewportState**: Immutable viewport snapshots for renderers
+6. **HighlightRegistry**: Unified highlight system (Neovim/Helix pattern)
+7. **Floating windows**: Full z-order support for popups/menus
+8. **Horizontal scroll**: Per-window viewport with cursor tracking
+
+#### Layer Z-Index Order (Implemented)
+
+```zig
+pub const ZIndex = struct {
+    pub const BASE: i32 = 0;           // Buffer content
+    pub const GUTTER: i32 = 100;       // Line numbers, signs, folds
+    pub const CURSOR: i32 = 200;       // Text cursor
+    pub const VIRTUAL_TEXT: i32 = 300; // Inline diagnostics, hints
+    pub const SELECTION: i32 = 400;    // Visual mode selection
+    pub const YANK: i32 = 450;         // Yank flash highlights
+    pub const SEARCH: i32 = 500;       // Search highlights
+    pub const FLOAT: i32 = 600;        // Floating windows (LSP popups)
+    pub const CMDLINE: i32 = 700;      // Command line
+    pub const MESSAGE: i32 = 800;      // Error/info messages
+    pub const MODAL: i32 = 900;        // Modal overlays/dialogs
+};
+```
+
+#### Current Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| **Layer** | `layer.zig` | Layer abstraction with z-index, opacity, dirty tracking |
+| **Compositor** | `compositor.zig` | Blends layers into output grid |
+| **LayerRenderer** | `layer_renderer.zig` | Updates layers from buffer state |
+| **SignRenderer** | `sign_renderer.zig` | Decodes UTF-8 signs for gutter |
+| **WindowRenderer** | `window_renderer.zig` | Per-window content rendering |
+| **VirtualText** | `virtual_text.zig` | Inline extmarks/diagnostics |
+| **DirtyRect** | `dirty_rect.zig` | Rectangular damage tracking |
+| **ViewportState** | `display.zig` | Immutable viewport snapshot |
+
+### Remaining Limitations
+
+1. **Tab pages**: Not yet implemented
+2. **Scroll regions**: Could optimize large scrolls
+3. **Syntax highlight caching**: Per-window cache exists but could be improved
 
 ---
 
@@ -542,7 +583,9 @@ vim.api.nvim_win_patch_lines(win, {
 
 ---
 
-## Proposed Multi-Layer Architecture
+## Implemented Multi-Layer Architecture
+
+> **Status**: Fully implemented as of December 2025. See `src/backends/terminal/display/` for implementation.
 
 ### Layer 1: Core Grid System (Zig)
 
@@ -1054,99 +1097,47 @@ debug_log.log("Render took {d:.2}ms", .{bench.elapsed_ms()});
 
 ---
 
-## Recommendations
+## Implementation Status
 
-### Phase 1: Foundation (2-3 weeks)
+### Phase 1: Foundation ✅ Complete
 **Goal**: Enhance current grid system without breaking changes
 
-1. **Add damage region tracking**
-   - Keep per-line bitset for compatibility
-   - Add optional rectangle tracking
-   - Diff algorithm aware of both
+1. ✅ **Damage region tracking** - `dirty_rect.zig`
+2. ✅ **Highlight system** - `HighlightRegistry` in `highlight_api.zig`
+3. ✅ **Diff algorithm** - Rectangle-based in compositor
+4. ✅ **Render batching** - Single flush per frame
 
-2. **Enhance highlight system**
-   - Registry of named groups
-   - Vim-standard groups
-   - Plugin-extensible groups
-
-3. **Improve diff algorithm**
-   - Benchmark current performance
-   - Consider rectangle-based approach
-   - Maintain <1ms target
-
-4. **Add render batching**
-   - Accumulate changes in batch
-   - Single flush per frame
-   - Clearer frame boundaries
-
-### Phase 2: Window Manager (3-4 weeks)
+### Phase 2: Window Manager ✅ Complete
 **Goal**: Support splits and floating windows
 
-1. **Implement window tree**
-   - Parent-child relationships
-   - Layout information
-   - Bounds calculation
+1. ✅ **Window tree** - `window.zig`, `window_layout.zig`
+2. ✅ **Split operations** - vsplit/hsplit implemented
+3. ✅ **Floating windows** - Z-order via `layer.zig` ZIndex
+4. ✅ **Layer rendering** - `compositor.zig` with alpha blending
 
-2. **Add split operations**
-   - vsplit / hsplit
-   - Window resizing
-   - Layout recalculation
-
-3. **Implement floating windows**
-   - Z-order support
-   - Positioned bounds
-   - Damage regions for overlaps
-
-4. **Integrate with rendering**
-   - Render window tree
-   - Composite layers
-   - Preserve performance
-
-### Phase 3: Plugin API (3-4 weeks)
+### Phase 3: Plugin API ✅ Complete
 **Goal**: Enable plugin rendering safely
 
-1. **Define declarative API**
-   - Float window creation
-   - Content rendering
-   - Highlight application
+1. ✅ **Declarative API** - `vim.api.openWin()`, `vim.api.bufSetExtmark()`
+2. ✅ **Safeguards** - Namespace isolation for extmarks
+3. ✅ **Plugin examples** - git-bundle (gitsigns), LSP popups
+4. ✅ **Performance** - <5ms render with floating windows
 
-2. **Implement safeguards**
-   - Separate plugin/core regions
-   - Bounds validation
-   - Error handling
-
-3. **Add plugin examples**
-   - Simple float example
-   - List with highlights
-   - Real-time filtering
-
-4. **Performance testing**
-   - Telescope-like workload
-   - Large lists
-   - Real-time updates
-
-### Phase 4: Advanced Features (ongoing)
+### Phase 4: Advanced Features ✅ Mostly Complete
 **Goal**: Full feature parity with mature editors
 
-1. **Syntax highlighting**
-   - Tree-sitter integration
-   - Incremental parsing
-   - Per-window caching
+1. ✅ **Syntax highlighting** - Tree-sitter with `HighlightCache`
+2. ✅ **Search highlighting** - Search layer with match highlights
+3. ✅ **Completion menus** - Floating window support
+4. ✅ **Diagnostics display** - Virtual text extmarks
 
-2. **Search highlighting**
-   - Visual feedback
-   - Efficient region updates
-   - Match counting
+### Remaining Work
 
-3. **Completion menus**
-   - Automatic positioning
-   - Filtering display
-   - Keyboard navigation
-
-4. **Diagnostics display**
-   - Inline errors
-   - Gutter indicators
-   - Floating messages
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Tab pages | 📅 Planned | Window layout extension |
+| Scroll regions | 📅 Planned | Terminal optimization |
+| Mouse support | 📅 Planned | Region-based hit detection |
 
 ### Key Principles
 
@@ -1209,4 +1200,108 @@ Key success metrics:
 - Zero data corruption from plugin rendering
 
 This architecture positions Vimcraft to be a modern, maintainable alternative to Neovim while leveraging Zig's performance and JavaScript's accessibility for plugins.
+
+---
+
+## ViewportState Refactor (December 2025)
+
+### Problem: Viewport State Coordination Bug
+
+When using mappings like `H -> Hzz` (move to top of viewport, then center), rapid `j` key presses caused the cursor to flash/jump between the centered position and the viewport edge.
+
+**Root Cause**:
+1. `backend.zig` executes `zz` and sets `Window.viewport.top_line`
+2. `display.zig` calls `ensureCursorVisible()` which overwrites the viewport position
+3. No coordination mechanism between viewport adjustment and ensure-visible logic
+
+### Solution: ViewportState Abstraction
+
+Introduced `ViewportState` struct - an immutable snapshot passed to renderers:
+
+```zig
+pub const ViewportState = struct {
+    top: usize,      // First visible line
+    left: usize,     // Horizontal scroll
+    height: usize,   // Visible rows
+    width: usize,    // Visible columns
+
+    pub fn fromWindow(win: *const Window, ...) ViewportState;
+    pub fn fromDisplay(display: *const Display) ViewportState;
+};
+```
+
+### Architecture Changes
+
+| Before | After |
+|--------|-------|
+| Renderers read `Display.viewport_top` | Renderers receive `ViewportState` as parameter |
+| Multiple sources of truth (Display, Window) | Single source: `Window.viewport.top_line` |
+| Implicit data flow | Explicit parameter passing |
+| Hard to test renderers | Can pass mock ViewportState |
+
+### Data Flow
+
+```
+Window.viewport.top_line (canonical source)
+        │
+        ▼
+ViewportState.fromWindow()
+        │
+        ├──→ layer_renderer.updateLayers(viewport, ...)
+        ├──→ window_renderer.renderWindow(viewport, ...)
+        └──→ cursor positioning
+```
+
+### Skip Flag for Viewport Adjustments
+
+The `skip_ensure_cursor_visible` flag prevents `ensureCursorVisible` from overriding explicit viewport positioning:
+
+```zig
+// After zz/zt/zb execution
+editor.skip_ensure_cursor_visible = true;
+
+// In render
+if (!editor.skip_ensure_cursor_visible) {
+    win.ensureCursorVisibleWithHeight(...);
+}
+
+// After render (one-shot flag)
+editor.skip_ensure_cursor_visible = false;
+```
+
+### Performance
+
+This refactor is **zero-cost** (marginally faster):
+
+| Access Pattern | Cost |
+|---------------|------|
+| `self.viewport_top` (field access) | 1 memory load |
+| `viewport: ViewportState` (parameter) | 0 memory loads (register) |
+
+Benchmark results (29 perf-critical tests):
+- Single frame: 1ms
+- 50j: 3ms (0.06ms/move)
+- All tests: PASS
+
+### Benefits
+
+1. **Single Source of Truth**: Window.viewport is canonical
+2. **Explicit Data Flow**: Renderers declare their inputs
+3. **Testable**: Can unit test renderers with mock ViewportState
+4. **Debuggable**: Easy to trace where viewport comes from
+5. **No Performance Cost**: Actually marginally faster
+
+### Related Bug Fixes (December 2025)
+
+#### Cursor-Gutter Boundary Fix
+- **Bug**: `renderCursorOnly()` used `gutter_manager.getTotalWidth()` instead of window-specific gutter width
+- **Symptom**: Cursor rendered inside gutter area when line numbers enabled
+- **Fix**: Use `window_renderer.calculateWindowGutterWidth()` for window-specific calculation
+- **Test**: `tests/e2e/cursor-gutter-boundary/e2e.ts`
+
+#### Horizontal Scroll Fix
+- **Bug**: `viewport_scroll_needed` only checked vertical bounds, not horizontal
+- **Symptom**: Moving `l` on long lines didn't scroll buffer horizontally
+- **Fix**: Added horizontal scroll detection in `backend.zig` viewport check
+- **Test**: `tests/e2e/horizontal-scroll/e2e.ts`
 

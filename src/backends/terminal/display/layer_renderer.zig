@@ -1,5 +1,6 @@
 const std = @import("std");
 const Display = @import("display.zig").Display;
+const ViewportState = @import("display.zig").ViewportState;
 const Buffer = @import("../../../editor/buffer/buffer.zig").Buffer;
 const Editor = @import("../../../editor/editor.zig").Editor;
 const SearchMatch = @import("../../../editor/editor.zig").SearchMatch;
@@ -40,9 +41,15 @@ const sign_renderer = @import("sign_renderer.zig");
 /// This is the new rendering entry point that replaces updateGridFromBuffer
 /// Generic over Editor/EditorContext types (both have same fields)
 /// Uses unified HighlightRegistry (Neovim/Helix pattern - ONE system for all highlights)
+///
+/// ViewportState is passed explicitly (zero-cost abstraction):
+/// - Makes data flow explicit (renderers declare their inputs)
+/// - Enables unit testing with mock viewport
+/// - Marginally faster (register vs memory access)
 pub fn updateLayers(
     self: *Display,
     editor: anytype,
+    viewport: ViewportState,
     _: []const u8, // status - not used yet, will be for status layer
     registry: *const HighlightRegistry,
     visual_state: *const VisualState,
@@ -68,8 +75,6 @@ pub fn updateLayers(
         break :blk 0;
     } else 0; // EditorContext doesn't use buffer handles
 
-    const text_rows = if (self.terminal_rows > 1) self.terminal_rows - 1 else 1;
-
     // Clear layers that ALWAYS need full rebuild
     self.base_layer.clear();
     self.gutter_layer.clear();
@@ -77,16 +82,14 @@ pub fn updateLayers(
     self.yank_layer.clear();
     self.search_layer.clear();
 
-    // CRITICAL FIX: Don't clear selection layer on every render!
-    // Selection layer should only be cleared when:
-    // - Visual mode deactivates (!visual_state.active)
-    // - Visual mode type changes (char → line → block)
-    // - Viewport changes significantly
-    // For cursor movements within visual mode, use incremental updates
+    // Selection layer is cleared in updateSelectionLayer() when visual mode is active.
+    // When visual mode is inactive, we clear it here to remove stale selection highlights.
+    // NOTE: We cannot optimize selection layer clearing because the selection region
+    // changes on EVERY cursor move (it's defined by anchor + cursor position).
     if (!visual_state.active) {
-        // Visual mode inactive - clear selection layer
         self.selection_layer.clear();
     }
+
     // Note: virtual_text_layer is managed by plugins via JSI
 
     // Get search matches from editor (only for Editor type, not EditorContext)
@@ -101,12 +104,13 @@ pub fn updateLayers(
 
     // Update each layer in logical order (not z-order)
     // All layers now use unified registry (Neovim/Helix pattern)
-    try updateBaseLayer(self, editor, registry, text_rows, list_enabled, listchars);
-    try updateGutterLayer(self, buffer, registry, text_rows, buffer_handle);
-    try updateSelectionLayer(self, buffer, visual_state, registry, text_rows);
-    try updateYankLayer(self, buffer, yank_highlight, registry, text_rows);
-    try updateSearchLayer(self, buffer, search_matches, search_match_index, registry, text_rows);
-    try updateCursorLayer(self, buffer, registry, cursorline_enabled, text_rows);
+    // Pass viewport to each layer updater for consistent viewport handling
+    try updateBaseLayer(self, editor, viewport, registry, list_enabled, listchars);
+    try updateGutterLayer(self, buffer, viewport, registry, buffer_handle);
+    try updateSelectionLayer(self, buffer, viewport, visual_state, registry);
+    try updateYankLayer(self, buffer, viewport, yank_highlight, registry);
+    try updateSearchLayer(self, buffer, viewport, search_matches, search_match_index, registry);
+    try updateCursorLayer(self, buffer, viewport, registry, cursorline_enabled);
 
     // Virtual text layer is updated by plugins, so skip it here
 }
@@ -119,11 +123,12 @@ const ListCharsColors = listchars_renderer.ListCharsColors;
 fn updateBaseLayer(
     self: *Display,
     editor: anytype,
+    viewport: ViewportState,
     registry: *const HighlightRegistry,
-    text_rows: usize,
     list_enabled: bool,
     listchars: *const ListChars,
 ) !void {
+    const text_rows = viewport.height;
     // Get buffer from editor (handles both Editor and EditorContext types)
     const T = @TypeOf(editor);
     const buffer = if (T == *Editor)
@@ -132,7 +137,7 @@ fn updateBaseLayer(
         editor.buffer()
     else
         &editor.buffer; // Duck-typed fallback for MockEditor in benchmarks
-    const gutter_width = self.gutter_manager.getTotalWidth();
+    const gutter_width = viewport.gutter_width;
 
     // Get Normal highlight from unified registry (Neovim/Helix pattern)
     const normal_style = registry.get("Normal");
@@ -170,7 +175,7 @@ fn updateBaseLayer(
 
     var row: usize = 0;
     while (row < text_rows) : (row += 1) {
-        const line_num = self.viewport_top + row;
+        const line_num = viewport.top + row;
 
         if (line_num < buffer.lineCount()) {
             const line = buffer.getLine(line_num).?;
@@ -181,7 +186,7 @@ fn updateBaseLayer(
                 line;
 
             // Apply horizontal scroll (Neovim behavior: all lines scroll together)
-            const h_offset = self.viewport_left;
+            const h_offset = viewport.left;
             const start_col = if (h_offset > 0)
                 char_width.displayColumnToByte(line_without_newline, h_offset)
             else
@@ -230,11 +235,12 @@ fn updateBaseLayer(
 fn updateGutterLayer(
     self: *Display,
     buffer: *const Buffer,
+    viewport: ViewportState,
     registry: *const HighlightRegistry,
-    text_rows: usize,
     buffer_handle: i64,
 ) !void {
-    const gutter_width = self.gutter_manager.getTotalWidth();
+    const text_rows = viewport.height;
+    const gutter_width = viewport.gutter_width;
     if (gutter_width == 0) return;
 
     // Get LineNr style for background of empty gutter lines
@@ -249,7 +255,7 @@ fn updateGutterLayer(
 
     var row: usize = 0;
     while (row < text_rows) : (row += 1) {
-        const line_num = self.viewport_top + row;
+        const line_num = viewport.top + row;
 
         // Neovim behavior: lines beyond EOF have empty gutter (no line numbers)
         if (line_num >= buffer.lineCount()) {
@@ -372,10 +378,11 @@ fn updateGutterLayer(
 pub fn updateSelectionLayer(
     self: *Display,
     buffer: *const Buffer,
+    viewport: ViewportState,
     visual_state: *const VisualState,
     registry: *const HighlightRegistry,
-    text_rows: usize,
 ) !void {
+    const text_rows = viewport.height;
     if (!visual_state.active) return;
 
     // CRITICAL FIX: Clear selection layer ONLY when visual mode is active
@@ -396,7 +403,7 @@ pub fn updateSelectionLayer(
     else
         highlights.Color{ .r = 80, .g = 80, .b = 80 };
 
-    const gutter_width = self.gutter_manager.getTotalWidth();
+    const gutter_width = viewport.gutter_width;
     const text_cols = if (self.terminal_cols > gutter_width)
         self.terminal_cols - gutter_width
     else
@@ -404,7 +411,7 @@ pub fn updateSelectionLayer(
 
     var row: usize = 0;
     while (row < text_rows) : (row += 1) {
-        const line_num = self.viewport_top + row;
+        const line_num = viewport.top + row;
 
         // Check if line is in selection range
         if (line_num >= visual_range.start.line and line_num <= visual_range.end.line) {
@@ -417,7 +424,7 @@ pub fn updateSelectionLayer(
                     line;
 
                 // Apply horizontal scroll (Neovim behavior: all lines scroll together)
-                const h_offset = self.viewport_left;
+                const h_offset = viewport.left;
                 const start_col = if (h_offset > 0)
                     char_width.displayColumnToByte(line_without_newline, h_offset)
                 else
@@ -460,10 +467,11 @@ pub fn updateSelectionLayer(
 fn updateYankLayer(
     self: *Display,
     buffer: *const Buffer,
+    viewport: ViewportState,
     yank_highlight: *const YankHighlight,
     registry: *const HighlightRegistry,
-    text_rows: usize,
 ) !void {
+    const text_rows = viewport.height;
     if (!yank_highlight.active or !yank_highlight.isVisible()) return;
 
     // Get YankFlash highlight from unified registry
@@ -473,7 +481,7 @@ fn updateYankLayer(
     else
         highlights.Color{ .r = 100, .g = 100, .b = 50 };
 
-    const gutter_width = self.gutter_manager.getTotalWidth();
+    const gutter_width = viewport.gutter_width;
     const text_cols = if (self.terminal_cols > gutter_width)
         self.terminal_cols - gutter_width
     else
@@ -481,7 +489,7 @@ fn updateYankLayer(
 
     var row: usize = 0;
     while (row < text_rows) : (row += 1) {
-        const line_num = self.viewport_top + row;
+        const line_num = viewport.top + row;
 
         if (line_num >= yank_highlight.start.line and line_num <= yank_highlight.end.line) {
             if (line_num < buffer.lineCount()) {
@@ -493,7 +501,7 @@ fn updateYankLayer(
                     line;
 
                 // Apply horizontal scroll (Neovim behavior: all lines scroll together)
-                const h_offset = self.viewport_left;
+                const h_offset = viewport.left;
                 const start_col = if (h_offset > 0)
                     char_width.displayColumnToByte(line_without_newline, h_offset)
                 else
@@ -534,11 +542,12 @@ fn updateYankLayer(
 fn updateSearchLayer(
     self: *Display,
     buffer: *const Buffer,
+    viewport: ViewportState,
     search_matches: []const SearchMatch,
     current_match_index: ?usize,
     registry: *const HighlightRegistry,
-    text_rows: usize,
 ) !void {
+    const text_rows = viewport.height;
     if (search_matches.len == 0) return;
 
     // Get Search highlight from unified registry (Neovim: Search = all matches)
@@ -564,7 +573,7 @@ fn updateSearchLayer(
     else
         null;
 
-    const gutter_width = self.gutter_manager.getTotalWidth();
+    const gutter_width = viewport.gutter_width;
     const text_cols = if (self.terminal_cols > gutter_width)
         self.terminal_cols - gutter_width
     else
@@ -573,11 +582,11 @@ fn updateSearchLayer(
     // Iterate through all search matches
     for (search_matches, 0..) |match, match_idx| {
         // Check if match is in visible viewport
-        if (match.line < self.viewport_top or match.line >= self.viewport_top + text_rows) {
+        if (match.line < viewport.top or match.line >= viewport.top + text_rows) {
             continue;
         }
 
-        const screen_row = match.line - self.viewport_top;
+        const screen_row = match.line - viewport.top;
 
         // Get line content to calculate display column
         if (match.line >= buffer.lineCount()) continue;
@@ -590,7 +599,7 @@ fn updateSearchLayer(
             line;
 
         // Apply horizontal scroll
-        const h_offset = self.viewport_left;
+        const h_offset = viewport.left;
         const start_col = if (h_offset > 0)
             char_width.displayColumnToByte(line_without_newline, h_offset)
         else
@@ -1008,16 +1017,17 @@ fn renderWithListChars(
 fn updateCursorLayer(
     self: *Display,
     buffer: *const Buffer,
+    viewport: ViewportState,
     registry: *const HighlightRegistry,
     cursorline_enabled: bool,
-    text_rows: usize,
 ) !void {
+    const text_rows = viewport.height;
     if (!cursorline_enabled) return;
 
     const cursor_line = buffer.cursor.row;
-    if (cursor_line < self.viewport_top or cursor_line >= self.viewport_top + text_rows) return;
+    if (cursor_line < viewport.top or cursor_line >= viewport.top + text_rows) return;
 
-    const screen_row = cursor_line - self.viewport_top;
+    const screen_row = cursor_line - viewport.top;
 
     // Get CursorLine highlight from unified registry
     const cursorline_style = registry.get("CursorLine");
@@ -1028,7 +1038,7 @@ fn updateCursorLayer(
     // Render cursorline background for TEXT AREA ONLY (not gutter)
     // Neovim-compatible: CursorLine = text area, CursorLineNr = gutter
     // The gutter layer handles cursor line highlighting via CursorLineNr
-    const gutter_width = self.gutter_manager.getTotalWidth();
+    const gutter_width = viewport.gutter_width;
     for (gutter_width..self.terminal_cols) |col| {
         self.cursor_layer.grid.setCell(screen_row, col, .{
             .char = 0, // NULL character - won't hide base layer text

@@ -102,71 +102,9 @@ pub const Compositor = struct {
         });
     }
 
-    /// Composite only dirty layers (PHASE 6 OPTIMIZATION)
-    /// Uses layer caching and incremental composition for maximum performance
-    pub fn compositeIncremental(self: *Compositor, layers: []const *Layer) !void {
-        // Reset stats
-        self.stats = .{};
-        const start = std.time.nanoTimestamp();
-
-        // Find first dirty layer
-        var first_dirty: ?usize = null;
-        for (layers, 0..) |layer, i| {
-            if (layer.dirty and layer.enabled) {
-                first_dirty = i;
-                break;
-            }
-        }
-
-        // No dirty layers? All layers cached! Ultra-fast path
-        if (first_dirty == null) {
-            // Count cached layers
-            for (layers) |layer| {
-                if (layer.enabled and layer.cacheable and layer.cache_valid) {
-                    self.stats.layers_cached += 1;
-                    // Estimate cells from cache (assuming full grid)
-                    self.stats.cells_from_cache += self.output_grid.width * self.output_grid.height;
-                }
-            }
-            const end = std.time.nanoTimestamp();
-            self.stats.composite_time_ns = @intCast(end - start);
-            return;
-        }
-
-        // PHASE 6 FIX: Don't clear output grid!
-        // Incremental composition means we only re-blend dirty layers
-        // Cached layers stay in the output from previous frame
-        // self.output_grid.clear(); // ← REMOVED! This was deleting cached content
-
-        // Composite ALL layers (cached ones will be skipped but their previous
-        // composition result remains in output_grid)
-        for (layers[0..]) |layer| {
-            if (!layer.enabled) {
-                self.stats.layers_skipped += 1;
-                continue;
-            }
-
-            // PHASE 6: Skip composition for cacheable layers that are clean
-            if (layer.canSkipComposition()) {
-                self.stats.layers_cached += 1;
-                // Note: In a full implementation, we'd use the cached result
-                // For now, we skip the layer entirely (optimization opportunity)
-                continue;
-            }
-
-            try self.blendLayer(layer);
-            self.stats.layers_composited += 1;
-
-            // Mark layer as clean after composition
-            if (layer.dirty) {
-                // Layer will be marked clean by Display after rendering
-            }
-        }
-
-        // Record time
-        const end = std.time.nanoTimestamp();
-        self.stats.composite_time_ns = @intCast(end - start);
-    }
+    // NOTE: compositeIncremental() was removed - it was dead code (never called).
+    // The dirty_rect infrastructure in blendLayer() IS used for incremental updates.
+    // Full Phase 6 incremental composition can be added later if needed.
 
     /// Blend single layer onto output grid
     /// OPTIMIZATION: Uses dirty rectangle tracking (Neovim-style)

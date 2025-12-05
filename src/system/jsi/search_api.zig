@@ -121,6 +121,46 @@ pub export fn vimGetWordUnderCursor(
     return c.hermes_value_create_string(runtime, word.ptr, word.len);
 }
 
+/// Execute keys as if typed by user (vim.api.feedkeys equivalent)
+/// JavaScript: vimApiFeedkeys(keys: string, mode?: string)
+pub export fn vimApiFeedkeys(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    if (arg_count < 1) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    const editor = global_editor orelse {
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    // Get keys string
+    const keys_arg = args[0] orelse {
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    var keys_len: usize = 0;
+    const keys_ptr = c.hermes_value_get_string(runtime, keys_arg, &keys_len);
+    if (keys_ptr == null or keys_len == 0) {
+        return c.hermes_value_create_undefined(runtime);
+    }
+
+    const keys = keys_ptr[0..keys_len];
+
+    // Execute the keys
+    _ = editor.executeKeys(keys) catch {
+        return c.hermes_value_create_undefined(runtime);
+    };
+
+    // Trigger re-render
+    editor.js_state_dirty = true;
+
+    return c.hermes_value_create_undefined(runtime);
+}
+
 /// Clear search pattern completely
 /// JavaScript: vimSearchClearPattern()
 pub export fn vimSearchClearPattern(
@@ -205,6 +245,18 @@ pub fn registerSearchApi(runtime: ?*c.OVHermesRuntime) void {
     );
     if (get_word_fn) |f| {
         c.hermes_object_set_property(runtime, global, "vimGetWordUnderCursor", f);
+        c.hermes_value_destroy(f);
+    }
+
+    // vimApiFeedkeys
+    const feedkeys_fn = c.hermes_create_function(
+        runtime,
+        "vimApiFeedkeys",
+        vimApiFeedkeys,
+        null,
+    );
+    if (feedkeys_fn) |f| {
+        c.hermes_object_set_property(runtime, global, "vimApiFeedkeys", f);
         c.hermes_value_destroy(f);
     }
 }

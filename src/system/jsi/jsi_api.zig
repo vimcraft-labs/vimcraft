@@ -47,6 +47,9 @@ pub const search_api = @import("search_api.zig");
 pub const git_api = @import("git_api.zig");
 pub const ai_state_api = @import("ai_state_api.zig");
 pub const ai_storage_api = @import("ai_storage_api.zig");
+pub const ai_mem_api = @import("ai_mem_api.zig");
+pub const ai_llm_api = @import("ai_llm_api.zig");
+pub const ai_chat_api = @import("ai_chat_api.zig");
 
 // Import new transpiler system
 const transpiler = @import("../transpiler/loader.zig");
@@ -74,6 +77,9 @@ pub var global_pty_ctx: ?*pty_api.PtyContext = null;
 pub var global_fetch_ctx: ?*fetch_api.FetchContext = null;
 pub var global_e2e_ctx: ?*e2e_api.E2EContext = null;
 pub var global_ai_storage_ctx: ?*ai_storage_api.AiStorageApiContext = null;
+pub var global_ai_mem_ctx: ?*ai_mem_api.AiMemApiContext = null;
+pub var global_ai_llm_ctx: ?*ai_llm_api.AiLlmApiContext = null;
+pub var global_ai_chat_ctx: ?*ai_chat_api.AiChatApiContext = null;
 
 /// Global transpiler cache state (initialized in main.zig)
 pub var global_cache_dir: ?[]const u8 = null;
@@ -391,6 +397,40 @@ pub fn initJSI(
     global_ai_storage_ctx = ai_storage_ctx;
     ai_storage_api.register(runtime, ai_storage_ctx);
 
+    // Register AI Memory API (vim.ai.mem.*)
+    // THE DIFFERENTIATOR: Dynamic memory blocks with temperature-based context budget
+    const ai_mem_ctx = allocator.create(ai_mem_api.AiMemApiContext) catch @panic("Failed to allocate AiMemApiContext");
+    ai_mem_ctx.* = ai_mem_api.AiMemApiContext{
+        .allocator = allocator,
+        // Memory is initialized lazily when first accessed from JS
+    };
+    global_ai_mem_ctx = ai_mem_ctx;
+    ai_mem_api.register(runtime, ai_mem_ctx);
+
+    // Register AI LLM API (vim.ai.llm.*)
+    // Orchestrates LLM communication with memory-based context
+    const ai_llm_ctx = allocator.create(ai_llm_api.AiLlmApiContext) catch @panic("Failed to allocate AiLlmApiContext");
+    ai_llm_ctx.* = ai_llm_api.AiLlmApiContext{
+        .allocator = allocator,
+        // LLM is initialized lazily after configure() is called
+    };
+    global_ai_llm_ctx = ai_llm_ctx;
+    ai_llm_api.register(runtime, ai_llm_ctx);
+
+    // Register AI Chat API (vim.ai.chat.*)
+    // Manages conversation sessions with auto-summarization
+    const ai_chat_ctx = ai_chat_api.AiChatApiContext.init(allocator) catch @panic("Failed to init AiChatApiContext");
+    global_ai_chat_ctx = ai_chat_ctx;
+    ai_chat_api.global_ctx = ai_chat_ctx;
+    c.hermes_register_host_object(
+        runtime,
+        "__aiChat",
+        ai_chat_api.aiChatHostObjectGet,
+        null,
+        null,
+        @ptrCast(ai_chat_ctx),
+    );
+
     // Register E2E API (vim.e2e - E2E testing and plugin development debugging)
     // Available in ALL modes (Editor + EditorContext) - difference is rendering backend, not API
     // CRITICAL: Use function pointer for getCurrentBuffer to support multi-window (splits)
@@ -633,6 +673,9 @@ pub fn deinitJSI() void {
     // Clean up AI APIs
     ai_state_api.deinit();
     ai_storage_api.deinit();
+    ai_mem_api.deinit();
+    ai_llm_api.deinit();
+    ai_chat_api.deinitChatApi();
     global_allocator = null;
 }
 

@@ -196,12 +196,24 @@ pub export fn apiWinSetCursor(
     const row: usize = if (row_1indexed > 0) @intCast(row_1indexed - 1) else 0;
     const col_usize: usize = if (col >= 0) @intCast(col) else 0;
 
+    // Get editor for buffer cursor sync and dirty flag
+    const editor = getEditorFromContext(ctx);
+
     // Try to set cursor on Window struct first (multi-window support)
     if (getWindowFromHandle(ctx, win_handle)) |window| {
         window.cursor.row = row;
         window.cursor.col = col_usize;
         window.ensureCursorVisible();
         window.markDirty();
+
+        // CRITICAL: Also update buffer.cursor - this is what the editor actually uses
+        // window.cursor is just a cache that gets synced on focus
+        if (editor) |e| {
+            if (e.buffers.get(window.buffer_id)) |buffer| {
+                buffer.moveCursorTo(row, col_usize);
+            }
+            e.js_state_dirty = true; // Trigger re-render
+        }
         return c.hermes_value_create_undefined(rt);
     }
 
@@ -209,6 +221,9 @@ pub export fn apiWinSetCursor(
     if (win_handle == 0) {
         const buffer = ctx.get_buffer_fn(ctx.context_ptr) orelse return c.hermes_value_create_undefined(rt);
         buffer.moveCursorTo(row, col_usize);
+        if (editor) |e| {
+            e.js_state_dirty = true; // Trigger re-render
+        }
     }
 
     return c.hermes_value_create_undefined(rt);

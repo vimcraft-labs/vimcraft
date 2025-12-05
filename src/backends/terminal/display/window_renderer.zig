@@ -4,6 +4,7 @@ const Buffer = @import("../../../editor/buffer/buffer.zig").Buffer;
 const Window = @import("../../../editor/window.zig").Window;
 const WindowId = @import("../../../editor/window.zig").WindowId;
 const Editor = @import("../../../editor/editor.zig").Editor;
+const SearchMatch = @import("../../../editor/editor.zig").SearchMatch;
 const highlights = @import("../../../editor/config/highlights.zig");
 const VisualState = @import("../../../editor/visual/visual.zig").VisualState;
 const YankHighlight = @import("../../../editor/visual/yank_highlight.zig").YankHighlight;
@@ -82,6 +83,10 @@ pub const WindowRenderContext = struct {
     listchars: *const ListChars,
     /// LanguageTree for highlighting with injection support (null if unavailable)
     language_tree: ?*LanguageTree = null,
+    /// Search matches to highlight (empty slice if no active search)
+    search_matches: []const SearchMatch = &[_]SearchMatch{},
+    /// Index of current search match (for CurSearch highlight)
+    search_match_index: ?usize = null,
 };
 
 /// Render a window to the display's layers
@@ -118,6 +123,11 @@ pub fn renderWindow(
     // Render yank highlight layer
     if (ctx.yank_highlight.active and ctx.yank_highlight.isVisible() and ctx.is_active) {
         try renderWindowYankLayer(display, ctx, gutter_width);
+    }
+
+    // Render search highlight layer
+    if (ctx.search_matches.len > 0 and ctx.is_active) {
+        try renderWindowSearchLayer(display, ctx, gutter_width);
     }
 
     // Render extmark virtual text (Neovim-style virt_text)
@@ -893,6 +903,112 @@ fn renderWindowYankLayer(
     }
 
     display.yank_layer.markDirty();
+}
+
+/// Render search matches to search_layer (z=500)
+/// Highlights all search matches visible in the window viewport
+/// Current match uses CurSearch highlight, others use Search highlight
+fn renderWindowSearchLayer(
+    display: *Display,
+    ctx: *const WindowRenderContext,
+    gutter_width: usize,
+) !void {
+    const buffer = ctx.buffer;
+    const window = ctx.window;
+    const region = ctx.region;
+    const search_matches = ctx.search_matches;
+    const current_match_index = ctx.search_match_index;
+
+    if (search_matches.len == 0) return;
+
+    // Get Search highlight from registry (all matches)
+    const search_style = ctx.registry.get("Search");
+    const search_bg = if (search_style.bg) |c|
+        highlights.Color.fromApiColor(c)
+    else
+        highlights.Color{ .r = 255, .g = 255, .b = 0 }; // Default: yellow
+    const search_fg: ?highlights.Color = if (search_style.fg) |c|
+        highlights.Color.fromApiColor(c)
+    else
+        null;
+
+    // CurSearch highlight for current match (Neovim 0.8+)
+    const cursearch_style = ctx.registry.get("CurSearch");
+    const cursearch_bg = if (cursearch_style.bg) |c|
+        highlights.Color.fromApiColor(c)
+    else
+        highlights.Color{ .r = 255, .g = 128, .b = 0 }; // Default: orange
+    const cursearch_fg: ?highlights.Color = if (cursearch_style.fg) |c|
+        highlights.Color.fromApiColor(c)
+    else
+        null;
+
+    const text_cols = if (region.width > gutter_width)
+        region.width - gutter_width
+    else
+        region.width;
+
+    // Iterate through all search matches
+    for (search_matches, 0..) |match, match_idx| {
+        // Check if match is in visible viewport
+        if (match.line < window.viewport.top_line or
+            match.line >= window.viewport.top_line + region.height)
+        {
+            continue;
+        }
+
+        const screen_row = region.row + (match.line - window.viewport.top_line);
+
+        // Bounds check
+        if (screen_row >= display.search_layer.grid.height) continue;
+
+        // Get line content to calculate display column
+        if (match.line >= buffer.lineCount()) continue;
+
+        const line = buffer.getLine(match.line).?;
+        const line_without_newline = if (line.len > 0 and line[line.len - 1] == '\n')
+            line[0 .. line.len - 1]
+        else
+            line;
+
+        // Apply horizontal scroll
+        const h_offset = window.viewport.left_col;
+        const start_col = if (h_offset > 0)
+            char_width.displayColumnToByte(line_without_newline, h_offset)
+        else
+            0;
+
+        // Check if match is visible after horizontal scroll
+        if (match.col + match.len <= start_col) continue;
+        if (match.col >= start_col + text_cols) continue;
+
+        // Calculate visible portion of match
+        const visible_start = if (match.col > start_col)
+            match.col - start_col
+        else
+            0;
+        const visible_end = @min(match.col + match.len - start_col, text_cols);
+
+        // Use CurSearch for current match, Search for others
+        const is_current = current_match_index != null and match_idx == current_match_index.?;
+        const bg = if (is_current) cursearch_bg else search_bg;
+        const fg = if (is_current) cursearch_fg else search_fg;
+
+        // Render highlight for each column in the match
+        var col = visible_start;
+        while (col < visible_end) : (col += 1) {
+            const screen_col = region.col + gutter_width + col;
+            if (screen_col >= display.search_layer.grid.width) break;
+
+            display.search_layer.grid.setCell(screen_row, screen_col, .{
+                .char = 0, // Null char = transparent, shows underlying text
+                .bg = bg,
+                .fg = fg,
+            });
+        }
+    }
+
+    display.search_layer.markDirty();
 }
 
 /// Render extmark virtual text to virtual_text_layer

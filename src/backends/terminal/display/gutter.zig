@@ -65,7 +65,8 @@ pub const GutterManager = struct {
     }
 
     /// Calculate total gutter width (sum of enabled columns)
-    pub fn getTotalWidth(self: *GutterManager) usize {
+    /// Note: Takes *const since this is a read-only operation
+    pub fn getTotalWidth(self: *const GutterManager) usize {
         var total: usize = 0;
         for (self.columns.items) |col| {
             if (col.enabled) {

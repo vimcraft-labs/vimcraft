@@ -2,8 +2,6 @@
 
 Guidance for Claude Code when working with the Vimcraft editor codebase.
 
-this is newly added!
-
 ## ⚠️ SACRED FILES - DO NOT MODIFY WITHOUT EXPLICIT APPROVAL
 
 | File | Why Sacred | Modification Risk | Key Functions |
@@ -15,6 +13,8 @@ this is newly added!
 | `vendor/hermes/` | Prebuilt Hermes binaries | 287MB rebuild, version conflicts | DO NOT TOUCH |
 
 ## ⚠️ CRITICAL: Performance Safeguards
+
+newly-added!
 
 **Benchmarks act as safeguards on critical paths. If thresholds are exceeded, builds fail.**
 
@@ -128,6 +128,45 @@ Writing tests?
 | Slow rendering | No fast-path | Check `compositor.zig:341` | 95% cells hit fast-path |
 | Memory leak | Missing defer | Add cleanup in buffer ops | buffer.zig:234 |
 | Visual mode broken | Transaction missing | Wrap in start/endTransaction | visual_ops.zig:89 |
+
+## Rendering Debug Tools
+
+Tools for debugging the multi-layer rendering pipeline. Use in E2E tests.
+
+| Tool | Purpose | Example |
+|------|---------|---------|
+| `vim.e2e.getLayers()` | Layer metadata (id, name, zIndex, enabled, dirty) | `const layers = vim.e2e.getLayers()` |
+| `vim.e2e.getLayerCells(name)` | **All cells from a specific layer** | `vim.e2e.getLayerCells("selection")` |
+| `vim.e2e.pty.getOutput()` | Raw ANSI escape codes | Capture terminal output |
+| `vim.e2e.pty.getFrames()` | Frame-by-frame animation capture | Animation debugging |
+| `get_render_stats` | Timing, cursor codes, compositor stats | Debug protocol |
+
+### Layer Names
+
+| Layer | Z-Index | Contents |
+|-------|---------|----------|
+| `base` | 0 | Buffer text content |
+| `gutter` | 100 | Line numbers, signs |
+| `cursor` | 200 | Cursorline highlight |
+| `float` | 250 | Floating windows |
+| `virtual_text` | 300 | Plugin overlays (extmarks) |
+| `selection` | 400 | Visual mode highlight |
+| `yank` | 450 | Yank flash animation |
+| `search` | 500 | Search match highlights |
+
+### Debug Example
+
+```typescript
+// Debug: "Why is selection highlight wrong at row 5?"
+vim.e2e.keys("Vjjj");  // Enter visual line mode
+vim.e2e.pty.render();
+
+// Check what the selection layer contains
+const cells = vim.e2e.getLayerCells("selection");
+const row5 = cells.filter(c => c.row === 5);
+console.log("Selection at row 5:", row5);
+// → [{ row: 5, col: 4, bg: { r: 80, g: 80, b: 80 } }, ...]
+```
 
 ## Critical Workflows
 

@@ -119,6 +119,57 @@ declare const __aiUtils: {
   estimateTokens(text: string): number;
   getLastError(): string | null;
 } | undefined;
+
+// AI Memory API (vim.ai.mem.*)
+// THE DIFFERENTIATOR: Dynamic memory blocks with temperature-based context budget
+declare const __aiMem: {
+  get(name: string): { content: string; temperature: number; tokens: number; source: string } | null;
+  set(name: string, content: string): boolean;
+  append(name: string, content: string): boolean;
+  delete(name: string): boolean;
+  list(): string[];
+  temperature(name: string): number | null;
+  setTemperature(name: string, temp: number): boolean;
+  loadFile(name: string, path: string): boolean;
+  refresh(name: string): boolean;
+  tokens(name?: string): number;
+  budget(): number;
+  setBudget(tokens: number): boolean;
+  buildContext(): string;
+} | undefined;
+
+// AI LLM API (vim.ai.llm.*)
+// Orchestrates LLM communication with memory-based context
+declare const __aiLlm: {
+  configure(config: { provider: string; apiKey: string; baseUrl?: string }): boolean;
+  buildRequest(model: string, message?: string): string;
+  getEndpoint(): string;
+  getHeaders(): Array<{ name: string; value: string }>;
+  addUserMessage(content: string): boolean;
+  addAssistantMessage(content: string): boolean;
+  clearHistory(): void;
+  getHistoryTokens(): number;
+  setMaxHistoryTokens(tokens: number): boolean;
+  getMemoryTools(): Array<{ name: string; description: string; parameters: string }>;
+} | undefined;
+
+// AI Chat API (vim.ai.chat.*)
+// Manages conversation sessions with auto-summarization
+declare const __aiChat: {
+  createSession(id: string): boolean;
+  getSession(id: string): string | null;
+  deleteSession(id: string): boolean;
+  setActive(id: string): boolean;
+  getActive(): string | null;
+  addUser(content: string): number;
+  addAssistant(content: string): number;
+  list(): string[];
+  export(): string | null;
+  clear(): void;
+  tokens(): number;
+  needsSummary(): boolean;
+} | undefined;
+
 declare const __fs: object | undefined;
 declare const __process: {
   platform: string;
@@ -198,6 +249,9 @@ declare function vimApiWinGetConfig(window: number): object | null;
 declare function vimApiWinHide(window: number): void;
 declare function vimApiWinSetOption(window: number, name: string, value: unknown): void;
 declare function vimApiWinGetOption(window: number, name: string): unknown;
+
+// Feedkeys API native function
+declare function vimApiFeedkeys(keys: string, mode?: string): void;
 
 // Highlight API native functions
 declare function vimApiCreateNamespace(name: string): number;
@@ -618,6 +672,9 @@ interface VimAPI {
   // Mode functions
   getMode(): { mode: string; blocking: boolean };
   getOption(name: string): unknown;
+
+  // Input functions
+  feedkeys(keys: string, mode?: string): void;
 }
 
 const vimApi: VimAPI = {
@@ -917,6 +974,11 @@ const vimApi: VimAPI = {
 
   getOption(name: string) {
     return (vim as any).opt[name];
+  },
+
+  // Input functions
+  feedkeys(keys: string, _mode?: string) {
+    if (typeof vimApiFeedkeys !== 'undefined') vimApiFeedkeys(keys);
   }
 };
 
@@ -1732,6 +1794,54 @@ vim.ai = {
     filetype: () => '',
     filename: () => '',
     lineCount: () => 0,
+  },
+
+  // THE DIFFERENTIATOR: Dynamic memory blocks with temperature-based context budget
+  // Inspired by MemGPT's working memory concept
+  mem: typeof __aiMem !== 'undefined' ? __aiMem : {
+    get: () => null,
+    set: () => false,
+    append: () => false,
+    delete: () => false,
+    list: () => [],
+    temperature: () => null,
+    setTemperature: () => false,
+    loadFile: () => false,
+    refresh: () => false,
+    tokens: () => 0,
+    budget: () => 8192,
+    setBudget: () => false,
+    buildContext: () => '[]',
+  },
+
+  // LLM communication with memory-based context
+  llm: typeof __aiLlm !== 'undefined' ? __aiLlm : {
+    configure: () => false,
+    buildRequest: () => '{}',
+    getEndpoint: () => '',
+    getHeaders: () => [],
+    addUserMessage: () => false,
+    addAssistantMessage: () => false,
+    clearHistory: () => {},
+    getHistoryTokens: () => 0,
+    setMaxHistoryTokens: () => false,
+    getMemoryTools: () => [],
+  },
+
+  // Chat session management with auto-summarization
+  chat: typeof __aiChat !== 'undefined' ? __aiChat : {
+    createSession: () => false,
+    getSession: () => null,
+    deleteSession: () => false,
+    setActive: () => false,
+    getActive: () => null,
+    addUser: () => -1,
+    addAssistant: () => -1,
+    list: () => [],
+    export: () => null,
+    clear: () => {},
+    tokens: () => 0,
+    needsSummary: () => false,
   },
 
   // Storage infrastructure (LMDB + usearch)

@@ -332,4 +332,7 @@ pub fn executeCallback(callback_id: u32) void {
             std.debug.print("[JSI] Keymap callback exception: {s}\n", .{err_msg});
         }
     }
+
+    // Drain microtasks - callback may have triggered async operations
+    _ = c.hermes_drain_microtasks(rt, -1);
 }

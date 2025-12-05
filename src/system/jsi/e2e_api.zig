@@ -61,6 +61,103 @@ pub const E2EContext = struct {
 var global_e2e_ctx: ?*E2EContext = null;
 
 // ============================================================================
+// Vim Key Notation Parser
+// ============================================================================
+
+/// Parse Vim key notation and convert to raw byte sequence
+/// Examples:
+///   "<CR>" -> [13]
+///   "<Esc>" -> [27]
+///   "<C-a>" -> [1]
+///   "<Tab>" -> [9]
+///   "hello<CR>" -> [h, e, l, l, o, 13]
+/// Returns allocated slice that must be freed by caller
+fn parseKeyNotation(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    var result: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer result.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < input.len) {
+        // Check for <...> special key notation
+        if (input[i] == '<' and i + 2 < input.len) {
+            // Find closing >
+            var end: usize = i + 1;
+            while (end < input.len and input[end] != '>') : (end += 1) {}
+
+            if (end < input.len and input[end] == '>') {
+                const key_name = input[i + 1 .. end];
+
+                // Parse the special key
+                if (parseSpecialKey(key_name)) |byte| {
+                    try result.append(allocator, byte);
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+
+        // Regular character
+        try result.append(allocator, input[i]);
+        i += 1;
+    }
+
+    return result.toOwnedSlice(allocator);
+}
+
+/// Parse a special key name (without < >) and return its byte value
+/// Returns null if not recognized
+fn parseSpecialKey(name: []const u8) ?u8 {
+    // Case-insensitive comparison
+    var lower_buf: [32]u8 = undefined;
+    const lower = blk: {
+        if (name.len > lower_buf.len) break :blk name;
+        for (name, 0..) |ch, idx| {
+            lower_buf[idx] = std.ascii.toLower(ch);
+        }
+        break :blk lower_buf[0..name.len];
+    };
+
+    // Control key: <C-a> through <C-z> and <C-[>, <C-\>, <C-]>, etc.
+    if (lower.len >= 3 and lower[0] == 'c' and lower[1] == '-') {
+        const char = std.ascii.toLower(name[2]); // Use original case-normalized char
+        if (char >= 'a' and char <= 'z') {
+            return char - 'a' + 1; // Ctrl+A=1, Ctrl+B=2, ..., Ctrl+Z=26
+        } else if (char == '[') {
+            return 27; // Ctrl+[ = Escape
+        } else if (char == '\\') {
+            return 28; // Ctrl+\
+        } else if (char == ']') {
+            return 29; // Ctrl+]
+        } else if (char == '^') {
+            return 30; // Ctrl+^
+        } else if (char == '_') {
+            return 31; // Ctrl+_
+        }
+    }
+
+    // Named special keys
+    const SpecialKeys = std.StaticStringMap(u8).initComptime(.{
+        .{ "cr", 13 },
+        .{ "return", 13 },
+        .{ "enter", 13 },
+        .{ "esc", 27 },
+        .{ "escape", 27 },
+        .{ "tab", 9 },
+        .{ "bs", 8 },
+        .{ "backspace", 8 },
+        .{ "del", 127 },
+        .{ "delete", 127 },
+        .{ "space", 32 },
+        .{ "lt", '<' },
+        .{ "gt", '>' },
+        .{ "bar", '|' },
+        .{ "bslash", '\\' },
+    });
+
+    return SpecialKeys.get(lower);
+}
+
+// ============================================================================
 // State Query Functions (synchronous)
 // ============================================================================
 
@@ -355,6 +452,146 @@ fn getLayersCmd(
     return result;
 }
 
+/// vim.e2e.getLayerCells(layerName) -> array of cell objects
+/// Returns all non-empty cells from a specific layer for debugging.
+/// Each cell: { row, col, char, fg, bg }
+/// This enables "which layer painted this cell?" debugging.
+fn getLayerCellsCmd(
+    runtime: ?*c.OVHermesRuntime,
+    _: ?*anyopaque,
+    args: [*c]?*c.OVHermesValue,
+    arg_count: usize,
+) callconv(.c) ?*c.OVHermesValue {
+    const ctx = global_e2e_ctx orelse return helpers.returnUndefined(runtime);
+    const display = ctx.display orelse {
+        return c.hermes_array_create(runtime, 0);
+    };
+
+    if (arg_count < 1) {
+        std.debug.print("[E2E] getLayerCells: missing layer name argument\n", .{});
+        return c.hermes_array_create(runtime, 0);
+    }
+
+    // Get layer name from args
+    var name_len: usize = 0;
+    const name_ptr = c.hermes_value_get_string(runtime, args[0], &name_len);
+    if (name_ptr == null or name_len == 0) {
+        std.debug.print("[E2E] getLayerCells: invalid layer name\n", .{});
+        return c.hermes_array_create(runtime, 0);
+    }
+    const layer_name = name_ptr[0..name_len];
+
+    // Find layer by name
+    var target_layer: ?*@import("../../backends/terminal/display/layer.zig").Layer = null;
+    for (display.layer_manager.layers.items) |layer| {
+        if (std.mem.eql(u8, layer.name, layer_name)) {
+            target_layer = layer;
+            break;
+        }
+    }
+
+    if (target_layer == null) {
+        std.debug.print("[E2E] getLayerCells: layer '{s}' not found\n", .{layer_name});
+        return c.hermes_array_create(runtime, 0);
+    }
+
+    const layer = target_layer.?;
+
+    // Count non-empty cells first
+    var cell_count: usize = 0;
+    for (0..layer.grid.height) |row| {
+        for (0..layer.grid.width) |col| {
+            const cell = layer.grid.getCell(row, col) orelse continue;
+            // Include cells with content OR background color (for selection highlighting)
+            if (cell.char != 0 or cell.bg != null) {
+                cell_count += 1;
+            }
+        }
+    }
+
+    // Create result array
+    const result = c.hermes_array_create(runtime, cell_count) orelse return helpers.returnUndefined(runtime);
+
+    // Populate cells
+    var idx: usize = 0;
+    for (0..layer.grid.height) |row| {
+        for (0..layer.grid.width) |col| {
+            const cell = layer.grid.getCell(row, col) orelse continue;
+            if (cell.char == 0 and cell.bg == null) continue;
+
+            const cell_obj = c.hermes_value_create_object(runtime) orelse continue;
+
+            // row
+            if (c.hermes_value_create_number(runtime, @floatFromInt(row))) |v| {
+                c.hermes_value_set_property(runtime, cell_obj, "row", v);
+                c.hermes_value_destroy(v);
+            }
+
+            // col
+            if (c.hermes_value_create_number(runtime, @floatFromInt(col))) |v| {
+                c.hermes_value_set_property(runtime, cell_obj, "col", v);
+                c.hermes_value_destroy(v);
+            }
+
+            // char (as string for readability)
+            if (cell.char != 0) {
+                var char_buf: [4]u8 = undefined;
+                const char_len = std.unicode.utf8Encode(cell.char, &char_buf) catch 0;
+                if (char_len > 0) {
+                    if (c.hermes_value_create_string(runtime, &char_buf, char_len)) |v| {
+                        c.hermes_value_set_property(runtime, cell_obj, "char", v);
+                        c.hermes_value_destroy(v);
+                    }
+                }
+            }
+
+            // fg color
+            if (cell.fg) |fg| {
+                const fg_obj = c.hermes_value_create_object(runtime) orelse continue;
+                if (c.hermes_value_create_number(runtime, @floatFromInt(fg.r))) |v| {
+                    c.hermes_value_set_property(runtime, fg_obj, "r", v);
+                    c.hermes_value_destroy(v);
+                }
+                if (c.hermes_value_create_number(runtime, @floatFromInt(fg.g))) |v| {
+                    c.hermes_value_set_property(runtime, fg_obj, "g", v);
+                    c.hermes_value_destroy(v);
+                }
+                if (c.hermes_value_create_number(runtime, @floatFromInt(fg.b))) |v| {
+                    c.hermes_value_set_property(runtime, fg_obj, "b", v);
+                    c.hermes_value_destroy(v);
+                }
+                c.hermes_value_set_property(runtime, cell_obj, "fg", fg_obj);
+                c.hermes_value_destroy(fg_obj);
+            }
+
+            // bg color
+            if (cell.bg) |bg| {
+                const bg_obj = c.hermes_value_create_object(runtime) orelse continue;
+                if (c.hermes_value_create_number(runtime, @floatFromInt(bg.r))) |v| {
+                    c.hermes_value_set_property(runtime, bg_obj, "r", v);
+                    c.hermes_value_destroy(v);
+                }
+                if (c.hermes_value_create_number(runtime, @floatFromInt(bg.g))) |v| {
+                    c.hermes_value_set_property(runtime, bg_obj, "g", v);
+                    c.hermes_value_destroy(v);
+                }
+                if (c.hermes_value_create_number(runtime, @floatFromInt(bg.b))) |v| {
+                    c.hermes_value_set_property(runtime, bg_obj, "b", v);
+                    c.hermes_value_destroy(v);
+                }
+                c.hermes_value_set_property(runtime, cell_obj, "bg", bg_obj);
+                c.hermes_value_destroy(bg_obj);
+            }
+
+            c.hermes_array_set(runtime, result, idx, cell_obj);
+            c.hermes_value_destroy(cell_obj);
+            idx += 1;
+        }
+    }
+
+    return result;
+}
+
 /// vim.e2e.getLogs(opts?) -> array of log strings
 /// Returns captured console.log entries from current test
 /// opts.level: optional filter by log level (not used for console.log captures)
@@ -391,6 +628,7 @@ fn getLogsCmd(
 
 /// vim.e2e.keys(keys_string) -> void
 /// Simulates keystrokes in the editor (synchronous)
+/// Supports Vim key notation: <CR>, <Esc>, <C-a>, <Tab>, etc.
 fn keysCmd(
     runtime: ?*c.OVHermesRuntime,
     _: ?*anyopaque,
@@ -408,8 +646,16 @@ fn keysCmd(
 
     const keys_str = keys_ptr[0..len];
 
-    // Execute keys via editor
-    ctx.execute_keys_fn(ctx.editor, keys_str) catch |err| {
+    // Parse Vim key notation to raw byte sequence
+    // This converts <CR> -> 13, <Esc> -> 27, <C-a> -> 1, etc.
+    const parsed_keys = parseKeyNotation(ctx.allocator, keys_str) catch |err| {
+        std.debug.print("[E2E] keys() parse error: {}\n", .{err});
+        return helpers.returnUndefined(runtime);
+    };
+    defer ctx.allocator.free(parsed_keys);
+
+    // Execute parsed keys via editor
+    ctx.execute_keys_fn(ctx.editor, parsed_keys) catch |err| {
         std.debug.print("[E2E] keys() error: {}\n", .{err});
         return helpers.returnUndefined(runtime);
     };
@@ -2129,6 +2375,7 @@ pub export fn vimE2EHostObjectGet(
         .{ "getBufferContent", getBufferContent },
         .{ "getLine", getLine },
         .{ "getLayers", getLayersCmd },
+        .{ "getLayerCells", getLayerCellsCmd },
         .{ "getLogs", getLogsCmd },
         // Commands
         .{ "keys", keysCmd },

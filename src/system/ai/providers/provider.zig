@@ -345,15 +345,20 @@ pub const Provider = struct {
     }
 
     /// Get required headers
-    pub fn getHeaders(self: *Self) ![]const Header {
+    /// Caller must use freeHeaders() to properly clean up
+    pub fn getHeaders(self: *Self) ![]Header {
         var headers: std.ArrayList(Header) = .empty;
+        errdefer {
+            for (headers.items) |*h| h.deinit(self.allocator);
+            headers.deinit(self.allocator);
+        }
 
         try headers.append(self.allocator, .{ .name = "Content-Type", .value = "application/json" });
 
         switch (self.config.provider) {
             .openai => {
                 const auth = try std.fmt.allocPrint(self.allocator, "Bearer {s}", .{self.config.api_key});
-                try headers.append(self.allocator, .{ .name = "Authorization", .value = auth });
+                try headers.append(self.allocator, .{ .name = "Authorization", .value = auth, .owned = true });
 
                 if (self.config.organization) |org| {
                     try headers.append(self.allocator, .{ .name = "OpenAI-Organization", .value = org });
@@ -368,7 +373,7 @@ pub const Provider = struct {
             },
             .custom => {
                 const auth = try std.fmt.allocPrint(self.allocator, "Bearer {s}", .{self.config.api_key});
-                try headers.append(self.allocator, .{ .name = "Authorization", .value = auth });
+                try headers.append(self.allocator, .{ .name = "Authorization", .value = auth, .owned = true });
             },
         }
 
@@ -544,7 +549,23 @@ pub const Provider = struct {
 pub const Header = struct {
     name: []const u8,
     value: []const u8,
+    owned: bool = false, // If true, value was allocated and must be freed
+
+    /// Free header value if owned
+    pub fn deinit(self: *Header, allocator: Allocator) void {
+        if (self.owned) {
+            allocator.free(self.value);
+        }
+    }
 };
+
+/// Free a slice of headers (call deinit on each, then free the slice)
+pub fn freeHeaders(allocator: Allocator, headers: []Header) void {
+    for (headers) |*h| {
+        h.deinit(allocator);
+    }
+    allocator.free(headers);
+}
 
 // =============================================================================
 // Token Estimation (fast heuristic)

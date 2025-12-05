@@ -60,6 +60,9 @@ vim.e2e.describe('vim.keymap.set callback support', function() {
     });
 
     vim.e2e.test('callback can modify state', function() {
+        // Ensure we're in normal mode (previous test may leave us in command mode)
+        vim.e2e.keys('<Esc>');
+
         // Test that callbacks can modify state variables
         let stateModified = false;
 
@@ -78,6 +81,9 @@ vim.e2e.describe('vim.keymap.set callback support', function() {
     });
 
     vim.e2e.test('multiple callback mappings work independently', function() {
+        // Ensure we're in normal mode
+        vim.e2e.keys('<Esc>');
+
         let aPressed = false;
         let bPressed = false;
 
@@ -102,6 +108,9 @@ vim.e2e.describe('vim.keymap.set callback support', function() {
     // Tests for control key notation conversion (byteToNotation)
     // Raw terminal bytes (e.g., byte 10 for Ctrl+J) must be converted to Vim notation (<C-j>)
     vim.e2e.test('control key callbacks work with <C-h/j/k/l> (window navigation keys)', function() {
+        // Ensure we're in normal mode
+        vim.e2e.keys('<Esc>');
+
         let ctrlH = false;
         let ctrlJ = false;
         let ctrlK = false;
@@ -127,6 +136,9 @@ vim.e2e.describe('vim.keymap.set callback support', function() {
     });
 
     vim.e2e.test('control key callbacks work across the alphabet', function() {
+        // Ensure we're in normal mode
+        vim.e2e.keys('<Esc>');
+
         // Test a range of control keys to verify byteToNotation handles all cases
         let ctrlE = false;
         let ctrlN = false;
@@ -150,6 +162,24 @@ vim.e2e.describe('vim.keymap.set callback support', function() {
 
         vim.e2e.keys('<C-t>');
         vim.e2e.assert.equal(ctrlT, true, '<C-t> callback should trigger');
+    });
+
+    // Test specifically for <C-f> and <C-a> which are used for git hunk navigation
+    vim.e2e.test('<C-f> and <C-a> callbacks work (git hunk navigation keys)', function() {
+        // Ensure we're in normal mode
+        vim.e2e.keys('<Esc>');
+
+        let ctrlF = false;
+        let ctrlA = false;
+
+        vim.keymap.set('n', '<C-f>', function() { ctrlF = true; });
+        vim.keymap.set('n', '<C-a>', function() { ctrlA = true; });
+
+        vim.e2e.keys('<C-f>');
+        vim.e2e.assert.equal(ctrlF, true, '<C-f> callback should trigger');
+
+        vim.e2e.keys('<C-a>');
+        vim.e2e.assert.equal(ctrlA, true, '<C-a> callback should trigger');
     });
 });
 

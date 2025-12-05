@@ -6,7 +6,9 @@ const protocol = @import("protocol.zig");
 const Buffer = @import("../../editor/buffer/buffer.zig").Buffer;
 const ModeManager = @import("../../editor/mode/mode.zig").ModeManager;
 const VisualState = @import("../../editor/visual/visual.zig").VisualState;
-const Display = @import("../../backends/terminal/display/display.zig").Display;
+const display_mod = @import("../../backends/terminal/display/display.zig");
+const Display = display_mod.Display;
+const ViewportState = display_mod.ViewportState;
 
 /// Context for shared handlers - abstracts away Editor vs EditorContext differences
 pub const HandlerContext = struct {
@@ -33,9 +35,9 @@ pub fn handleGetState(ctx: HandlerContext) !protocol.ResponseResult {
         }
     }
 
-    // Get viewport state from editor's window (canonical source)
+    // Get viewport state from Display (headless mode uses Display.viewport_top)
     const viewport = protocol.ViewportState{
-        .top = ctx.editor.getViewportTop(),
+        .top = ctx.display.viewport_top,
         .left = ctx.display.viewport_left,
         .height = if (ctx.display.terminal_rows > 1)
             ctx.display.terminal_rows - 1
@@ -391,10 +393,14 @@ pub fn handleExecuteKeysWithRenderTrace(
     else
         false;
 
+    // Create ViewportState from Display (headless handlers)
+    const viewport = ViewportState.fromDisplay(ctx.display);
+
     // Update layers from buffer state
     try layer_renderer.updateLayers(
         ctx.display,
         editor,
+        viewport,
         editor.mode_manager().getModeString(),
         editor.highlight_registry(),
         editor.visual_state(),

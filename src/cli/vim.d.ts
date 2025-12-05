@@ -4751,6 +4751,28 @@ export interface E2ELayer {
 }
 
 /**
+ * Individual cell from a compositor layer.
+ *
+ * Used by getLayerCells() for debugging "which layer painted this cell?"
+ *
+ * @example
+ * const cells = vim.e2e.getLayerCells('selection');
+ * const highlighted = cells.filter(c => c.bg !== undefined);
+ */
+export interface E2ELayerCell {
+  /** Row position (0-indexed) */
+  row: number;
+  /** Column position (0-indexed) */
+  col: number;
+  /** Character at this cell (if any) */
+  char?: string;
+  /** Foreground color (if set) */
+  fg?: { r: number; g: number; b: number };
+  /** Background color (if set) */
+  bg?: { r: number; g: number; b: number };
+}
+
+/**
  * Captured animation frame with timestamp and terminal output.
  *
  * Used by the animation frame capture API to record sequences of
@@ -5208,6 +5230,29 @@ export interface E2EAPI {
    * const cursorLayer = layers.find(l => l.name === 'cursor');
    */
   getLayers(): E2ELayer[];
+
+  /**
+   * Get all non-empty cells from a specific layer.
+   *
+   * Enables "which layer painted this cell?" debugging.
+   * Returns cells with content OR background color (for selection highlighting).
+   *
+   * @param layerName - Name of the layer (base, gutter, cursor, selection, etc.)
+   * @returns Array of cells with position and color info
+   *
+   * @example
+   * // Debug selection layer
+   * vim.e2e.keys("Vjjj");  // Enter visual line mode
+   * vim.e2e.pty.render();
+   * const cells = vim.e2e.getLayerCells("selection");
+   * console.log("Selection cells:", cells.length);
+   *
+   * @example
+   * // Check cursorline highlight
+   * const cursorCells = vim.e2e.getLayerCells("cursor");
+   * const row0 = cursorCells.filter(c => c.row === 0);
+   */
+  getLayerCells(layerName: string): E2ELayerCell[];
 
   /**
    * Get recent log entries from the editor.
