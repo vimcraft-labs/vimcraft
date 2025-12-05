@@ -1,178 +1,313 @@
 # Vimcraft AI Specification
 
-**Status:** Implementation Phase
+**Status:** Design Phase
 **Architecture:** Native Zig + JSI exposure
+**Last Updated:** December 2025
 
 ---
 
-## Core Architecture
+## Design Philosophy
 
-All AI primitives are implemented in Zig and exposed to JavaScript via JSI.
+**Simple surface. Rich internals. Timeless design.**
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   JavaScript (Plugin)                        │
-│                                                              │
-│   vim.ai.memory.*        vim.ai.conversation.*              │
-│   vim.ai.prompt.*                                           │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      JSI Bridge                              │
-│                   ai_sdk_api.zig                            │
-└─────────────────────────────────────────────────────────────┘
-                              │
-          ┌───────────────────┼───────────────────┐
-          ▼                   ▼                   ▼
-┌─────────────────┐ ┌─────────────────┐ ┌─────────────────────┐
-│   memory.zig    │ │ conversation.zig│ │    prompt.zig       │
-│                 │ │                 │ │                     │
-│  LMDB + usearch │ │  Read-only view │ │  HTTP + Providers   │
-│  (the truth)    │ │  (projection)   │ │  (communication)    │
-└─────────────────┘ └─────────────────┘ └─────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   ~/.config/vimcraft/ai/                     │
-│   ├── vectors.usearch    # Embeddings (HNSW)                │
-│   └── data/              # LMDB (key-value)                 │
-└─────────────────────────────────────────────────────────────┘
-```
+Informed by research into MemGPT, Aider, and production AI tools. The key insight: most production tools succeed with simple primitives. Complexity should be invisible.
+
+| Principle | Application |
+|-----------|-------------|
+| **YAGNI** | 3 primitives, not 7 |
+| **Proven patterns** | MemGPT core (mem + chat), Aider simplicity |
+| **Invisible power** | Rich interaction data, auto-managed |
+| **Extensible** | MCP, vectors can be added later |
 
 ---
 
 ## The 3 Primitives
 
-### 1. `vim.ai.memory` - Vector-native AI State
-
-The source of truth. LLM-native storage using embeddings and graph relationships.
-
-```typescript
-namespace vim.ai.memory {
-  // Insert
-  add(content: string, embedding?: number[], tags?: string[]): string;  // returns id
-
-  // Query
-  search(query: string, k?: number): MemoryItem[];           // semantic search
-  searchByEmbedding(embedding: number[], k?: number): MemoryItem[];
-  get(id: string): MemoryItem | null;
-  findByTag(tag: string): MemoryItem[];
-
-  // Edit
-  update(id: string, content: string, embedding?: number[]): boolean;
-  delete(id: string): boolean;
-  addEdge(from: string, relation: string, to: string): boolean;
-
-  // Graph traversal
-  outgoing(id: string, relation?: string): Edge[];
-  incoming(id: string, relation?: string): Edge[];
-}
-
-type MemoryItem = {
-  id: string;
-  content: string;
-  embedding: number[];
-  tags: string[];
-  timestamp: number;
-  similarity?: number;  // when from search
-};
-
-type Edge = {
-  from: string;
-  relation: string;
-  to: string;
-  metadata?: any;
-};
 ```
-
-**Implementation:** LMDB for content/metadata, usearch for vector similarity.
+┌─────────────────────────────────────────────────────────────────┐
+│                        LLM Context Window                        │
+│                                                                   │
+│   ┌───────────────────────────────────────────────────────────┐ │
+│   │  System Prompt + vim.ai.mem                                │ │
+│   │  [persona] You are a helpful coding assistant...          │ │
+│   │  [user] Prefers async/await, uses TypeScript, 2-space     │ │
+│   │  [project] React + Next.js, Tailwind CSS                  │ │
+│   └───────────────────────────────────────────────────────────┘ │
+│                                                                   │
+│   ┌───────────────────────────────────────────────────────────┐ │
+│   │  vim.ai.chat                                               │ │
+│   │  [user] Fix the auth bug                                   │ │
+│   │  [assistant] I'll check the middleware...                  │ │
+│   │  [user] Also add tests                                     │ │
+│   │  [assistant] Sure, I'll write tests for...                │ │
+│   └───────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        vim.ai.llm                                │
+│                     (SDK / API call)                             │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-### 2. `vim.ai.conversation` - Human-readable Projection
+### 1. `vim.ai.mem` - Dynamic Memory Blocks (THE DIFFERENTIATOR)
 
-Read-only view of memory, projected into familiar conversation format. Maps directly to LLM context window.
+While `chat` and `llm` are standard (like Claude CLI, Codex), **`mem` is where the magic happens**.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      vim.ai.mem                                  │
+│                                                                   │
+│   ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐ │
+│   │   Static    │  │  Learned    │  │      Auto-generated     │ │
+│   │             │  │             │  │                         │ │
+│   │  persona    │  │  user       │  │  repo (tree-sitter)     │ │
+│   │             │  │  patterns   │  │  context (current file) │ │
+│   └─────────────┘  └─────────────┘  └─────────────────────────┘ │
+│                              │                                   │
+│                              ▼                                   │
+│   ┌─────────────────────────────────────────────────────────┐   │
+│   │              Temperature (context budget)                │   │
+│   │                                                          │   │
+│   │  Decides how much of each block goes into ai.chat       │   │
+│   │  Based on: relevance, token budget, recency             │   │
+│   └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ```typescript
-namespace vim.ai.conversation {
-  // List conversations (projected from memory graph)
-  list(): ConversationSummary[];
+namespace vim.ai.mem {
+  // Block operations
+  get(block: string): string | null;
+  set(block: string, content: string): boolean;
+  append(block: string, content: string): boolean;
+  delete(block: string): boolean;
+  list(): string[];
 
-  // Get conversation messages (projected from memory)
-  get(id: string): Message[];
+  // Temperature: how much of each block to include (0.0 - 1.0)
+  temperature(block: string): number;
+  setTemperature(block: string, temp: number): boolean;
 
-  // Get as context window (ready for LLM)
-  toContext(id: string, maxTokens?: number): Message[];
+  // File sync (for AI.md)
+  loadFile(block: string, path: string): boolean;  // Load file into block
+  watchFile(block: string, path: string): boolean; // Auto-sync on change
 
-  // Current active conversation
-  current(): string | null;
-  setCurrent(id: string): void;
+  // Auto-refresh a block (e.g., repo map)
+  refresh(block: string): Promise<void>;
+
+  // Token counts
+  tokens(block?: string): number;  // specific or total
+  budget(): number;                // max tokens for mem
+  setBudget(tokens: number): void;
+}
+```
+
+**Block Types:**
+
+| Block | Type | Updated By | Temperature |
+|-------|------|------------|-------------|
+| `persona` | Static | User/LLM | 1.0 (always full) |
+| `user` | Learned | LLM observes preferences | 0.8 (high priority) |
+| `project` | File-synced | AI.md file | 0.7 |
+| `repo` | Auto-generated | Tree-sitter analysis | 0.3-0.6 (summarized) |
+| `context` | Auto-generated | Current file, selection | 1.0 (always current) |
+| `patterns` | Learned | Background pattern detection | 0.5 |
+
+**AI.md vs CLAUDE.md:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    CLAUDE.md (Claude Code)                       │
+│                                                                   │
+│   - Always fully included in system prompt                       │
+│   - Static: entire file dumped at conversation start             │
+│   - Wastes tokens on irrelevant sections                         │
+│   - Cannot be compressed or summarized                           │
+│   - LLM cannot update it                                         │
+└─────────────────────────────────────────────────────────────────┘
+
+                              vs
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    AI.md (Vimcraft)                              │
+│                                                                   │
+│   - Lives in vim.ai.mem as `project` block                       │
+│   - Dynamic: temperature controls inclusion                       │
+│   - Compressed when context is tight                             │
+│   - LLM can append learned project knowledge                     │
+│   - Auto-syncs when file changes                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**How AI.md Works:**
+
+```
+~/.config/vimcraft/AI.md (or project root)
+  ↓
+Auto-loaded into mem.project block
+  ↓
+Temperature 0.7 → 70% included by default
+  ↓
+When context tight → summarized/compressed
+  ↓
+LLM learns patterns → appends to block
+  ↓
+Next session: richer project understanding
+```
+
+The key insight: project instructions should be **dynamic context**, not **static overhead**.
+
+**How Temperature Works:**
+
+```
+Token budget: 4000 tokens for mem
+
+Block contents:
+  persona:  500 tokens  × temp 1.0 = 500 included
+  user:     300 tokens  × temp 0.8 = 240 included
+  project:  400 tokens  × temp 0.7 = 280 included
+  repo:    2000 tokens  × temp 0.4 = 800 included (summarized)
+  context:  800 tokens  × temp 1.0 = 800 included
+  patterns: 600 tokens  × temp 0.5 = 300 included
+                                    ─────
+                              Total: 2920 tokens → fits budget
+```
+
+When over budget, lower-temperature blocks get compressed first.
+
+**Auto-generated Blocks:**
+
+| Block | Source | Like |
+|-------|--------|------|
+| `repo` | Tree-sitter code map | Aider's RepoMap |
+| `context` | Current buffer, selection, cursor | IDE context |
+| `patterns` | Observed user behaviors | Voyager learning |
+
+**The Self-Editing Loop (MemGPT):**
+```
+User: "I prefer tabs over spaces"
+  ↓
+LLM calls: mem_append("user", "Prefers tabs")
+  ↓
+Future prompts include this (at user block's temperature)
+```
+
+**Characteristics:**
+- Dynamic blocks (some static, some auto-updated)
+- Temperature controls inclusion
+- Tree-sitter integration for repo understanding
+- Background learning for patterns
+- All invisible to user, but configurable via API
+
+---
+
+### 2. `vim.ai.chat` - Conversation History (Standard)
+
+Standard conversation log, like any CLI. The "normal" part - insert messages, compress when long.
+
+```typescript
+namespace vim.ai.chat {
+  // Get messages
+  messages(limit?: number): Message[];
+
+  // Add a message
+  add(role: Role, content: string): void;
+
+  // Clear conversation
+  clear(): void;
+
+  // Get/set current session
+  session(): string;
+  setSession(id: string): void;
+
+  // List all sessions
+  sessions(): SessionSummary[];
+
+  // Summarize old messages (auto-called, but exposed)
+  summarize(): void;
+
+  // Token count
+  tokens(): number;
 }
 
-type ConversationSummary = {
+type Role = 'user' | 'assistant' | 'system';
+
+type Message = {
+  role: Role;
+  content: string;
+  timestamp: number;
+};
+
+type SessionSummary = {
   id: string;
   title: string;
   messageCount: number;
   lastActivity: number;
 };
-
-type Message = {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  timestamp: number;
-};
 ```
 
-**Key insight:** Conversations don't store data. They project from `vim.ai.memory`.
+**Auto-summarization (like Aider):**
+```
+When chat gets too long:
+  1. Keep recent messages intact
+  2. Summarize older messages
+  3. Replace old messages with summary
 
-When you call `vim.ai.conversation.get("conv-123")`:
-1. Queries memory for items with edge `conversation:conv-123`
-2. Projects into Message[] format
-3. Returns read-only view
+User sees: Continuous conversation
+Behind scenes: Compressed history
+```
+
+**Characteristics:**
+- Large (~10K tokens before summarization)
+- Session-based (multiple conversations)
+- Auto-summarizes when context limit approached
+- Persisted per session
 
 ---
 
-### 3. `vim.ai.prompt` - Universal LLM Interface
+### 3. `vim.ai.llm` - SDK / API Call
 
-SDK to communicate with any LLM backend. Native Zig HTTP with provider adapters.
+Pure communication layer. No state management.
 
 ```typescript
-namespace vim.ai.prompt {
+namespace vim.ai.llm {
   // Configure provider
   configure(config: ProviderConfig): boolean;
 
-  // Send prompt (auto-persists to memory)
-  send(request: PromptRequest): Promise<PromptResponse>;
+  // Send message (uses mem + chat automatically)
+  send(request: SendRequest): Promise<SendResponse>;
 
   // Stream response
-  stream(request: PromptRequest): AsyncIterator<StreamChunk>;
+  stream(request: SendRequest): AsyncIterator<StreamChunk>;
 
   // Get last error
-  getLastError(): string | null;
+  error(): string | null;
 }
 
 type ProviderConfig = {
-  provider: 'openai' | 'anthropic' | 'ollama' | 'custom';
+  provider: 'anthropic' | 'openai' | 'ollama' | 'custom';
   apiKey?: string;
   baseUrl?: string;
   model?: string;
 };
 
-type PromptRequest = {
-  conversation?: string;           // conversation id (optional)
-  message: string;                 // user message
-  systemPrompt?: string;           // override system prompt
-  contextFromMemory?: boolean;     // auto-retrieve relevant context
+type SendRequest = {
+  message: string;              // User message
+
+  // Options (all have smart defaults)
+  includeMem?: boolean;         // Include mem blocks (default: true)
+  includeChat?: boolean;        // Include chat history (default: true)
+  systemPrompt?: string;        // Override system prompt
   maxTokens?: number;
   temperature?: number;
 };
 
-type PromptResponse = {
+type SendResponse = {
   content: string;
   model: string;
-  usage: { promptTokens: number; completionTokens: number };
-  memoryId: string;                // ID in memory (auto-persisted)
+  usage: { prompt: number; completion: number };
 };
 
 type StreamChunk = {
@@ -181,95 +316,158 @@ type StreamChunk = {
 };
 ```
 
-**Data flow:**
-1. JS calls `vim.ai.prompt.send({ message: "Fix the bug" })`
-2. Zig retrieves context from memory (if enabled)
-3. Zig builds request via provider adapter
-4. Zig makes HTTP call (libuv async)
-5. Zig persists response to memory
-6. Zig returns result to JS
+**Built-in memory tools (auto-registered):**
+
+When calling `vim.ai.llm.send()`, these tools are available to the LLM:
+
+| Tool | Purpose |
+|------|---------|
+| `mem_get` | Read a memory block |
+| `mem_set` | Replace a memory block |
+| `mem_append` | Add to a memory block |
+
+The LLM can call these to update memory based on conversation.
 
 ---
 
-## Data Flow Example
+## Data Flow
 
 ```
-User: "Fix the auth bug"
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ vim.ai.prompt.send({ message: "Fix the auth bug" })        │
-└─────────────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ prompt.zig:                                                  │
-│   1. Query memory for similar context (semantic search)     │
-│   2. Build prompt with retrieved context                    │
-│   3. Format for provider (OpenAI/Anthropic/Ollama)         │
-└─────────────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ fetch_api.zig: HTTP POST to LLM API (async via libuv)      │
-└─────────────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ On response:                                                 │
-│   1. Parse response                                         │
-│   2. Store in memory (user msg + assistant response)        │
-│   3. Add conversation edge                                  │
-│   4. Compute embedding (optional)                           │
-│   5. Return to JS                                           │
-└─────────────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ vim.ai.conversation.get("conv-123")                         │
-│   → Projects stored memory into Message[] for display       │
-└─────────────────────────────────────────────────────────────┘
+vim.ai.llm.send({ message: "Remember I use TypeScript" })
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Build prompt:                                                    │
+│   1. System prompt + vim.ai.mem blocks                          │
+│   2. vim.ai.chat messages                                        │
+│   3. Memory tool definitions                                     │
+│   4. User message                                                │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ LLM API call (Anthropic/OpenAI/Ollama)                          │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Handle response:                                                 │
+│   1. If tool call → execute (e.g., mem_append)                  │
+│   2. Add user message to chat                                    │
+│   3. Add assistant response to chat                              │
+│   4. Return response                                             │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## File Structure
+## System Architecture
 
 ```
-src/system/ai/
-├── memory.zig              # vim.ai.memory implementation
-├── conversation.zig        # vim.ai.conversation (projection)
-├── prompt.zig              # vim.ai.prompt (LLM communication)
-├── storage/
-│   ├── lmdb.zig           # Key-value storage
-│   └── vectors.zig        # usearch/HNSW bindings
-└── providers/
-    └── provider.zig       # Provider abstraction
-
-src/system/jsi/
-└── ai_sdk_api.zig         # JSI bindings for all 3 primitives
+┌─────────────────────────────────────────────────────────────────┐
+│                   JavaScript (Plugin Layer)                      │
+│                                                                   │
+│         vim.ai.mem          vim.ai.chat          vim.ai.llm     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      JSI Bridge                                  │
+│                   ai_api.zig                                     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                ┌─────────────┼─────────────┐
+                ▼             ▼             ▼
+┌───────────────────┐ ┌─────────────┐ ┌─────────────────────────┐
+│     mem.zig       │ │  chat.zig   │ │       llm.zig           │
+│                   │ │             │ │                         │
+│  Block storage    │ │  Messages   │ │  HTTP client            │
+│  (JSON file)      │ │  Sessions   │ │  Provider adapters      │
+│                   │ │  Summarizer │ │  Tool dispatch          │
+└───────────────────┘ └─────────────┘ └─────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   Storage                                        │
+│                                                                   │
+│   ~/.config/vimcraft/                                           │
+│   ├── AI.md                 # Global project instructions        │
+│   └── ai/                                                        │
+│       ├── mem.json          # Memory blocks (cached)            │
+│       └── chat/             # Session histories                  │
+│           ├── session-001.json                                   │
+│           └── session-002.json                                   │
+│                                                                   │
+│   <project-root>/                                                │
+│   └── AI.md                 # Project-specific (overrides)       │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Storage Schema
 
+### Memory (`mem.json`)
+```json
+{
+  "blocks": {
+    "persona": {
+      "content": "You are a helpful coding assistant who writes clean, tested code.",
+      "temperature": 1.0,
+      "source": "manual"
+    },
+    "user": {
+      "content": "Prefers TypeScript\nUses async/await\nLikes 2-space indentation",
+      "temperature": 0.8,
+      "source": "learned"
+    },
+    "project": {
+      "content": "# Vimcraft\n\nZig editor with Hermes JS...",
+      "temperature": 0.7,
+      "source": "file",
+      "file": "/Users/le/vimcraft/editor/AI.md",
+      "lastSync": 1701792000
+    }
+  },
+  "budget": 4000
+}
 ```
-MEMORY ITEMS
-────────────────────────────────────────────────────────
-mem:{id}                        → {content, embedding, tags, timestamp}
-idx:tag:{tag}:{id}              → "" (tag index)
-vec:{id}                        → {vector_key} (usearch reference)
 
-EDGES (Graph)
-────────────────────────────────────────────────────────
-edge:{from}:{relation}:{to}     → {metadata}
-redge:{to}:{relation}:{from}    → "" (reverse index)
+### AI.md (Project Instructions)
+```markdown
+# Project Name
 
-CONVERSATIONS (via edges)
-────────────────────────────────────────────────────────
-edge:{mem_id}:conversation:{conv_id}  → {order: n}
-conv:{conv_id}                        → {title, created, lastActivity}
+Brief description of the project.
+
+## Architecture
+- Key component 1
+- Key component 2
+
+## Conventions
+- Coding style preferences
+- Testing approach
+
+## Important Notes
+- Critical information for AI to know
+```
+
+**Auto-sync behavior:**
+- On editor start: load AI.md into `project` block
+- On file change: re-sync (if `watchFile` enabled)
+- LLM can append learned patterns to block
+- Cached in mem.json for faster startup
+
+### Chat Session (`chat/session-001.json`)
+```json
+{
+  "id": "session-001",
+  "title": "Auth bug fix",
+  "created": 1701792000,
+  "messages": [
+    { "role": "user", "content": "Fix the auth bug", "timestamp": 1701792000 },
+    { "role": "assistant", "content": "I'll check...", "timestamp": 1701792005 }
+  ]
+}
 ```
 
 ---
@@ -278,21 +476,70 @@ conv:{conv_id}                        → {title, created, lastActivity}
 
 | Primitive | Zig Implementation | JSI Binding | Status |
 |-----------|-------------------|-------------|--------|
-| `vim.ai.memory` | `memory.zig` | `ai_sdk_api.zig` | 🚧 Partial |
-| `vim.ai.conversation` | `conversation.zig` | `ai_sdk_api.zig` | 📅 Planned |
-| `vim.ai.prompt` | `prompt.zig` | `ai_sdk_api.zig` | 📅 Planned |
+| `vim.ai.mem` | `mem.zig` | `ai_api.zig` | 📅 Planned |
+| `vim.ai.chat` | `chat.zig` | `ai_api.zig` | 📅 Planned |
+| `vim.ai.llm` | `llm.zig` | `ai_api.zig` | 📅 Planned |
 
 **Existing infrastructure:**
-- ✅ LMDB bindings (`storage/lmdb.zig`)
-- ✅ usearch bindings (`storage/vectors.zig`)
 - ✅ Provider abstraction (`providers/provider.zig`)
 - ✅ Async HTTP (`fetch_api.zig`)
+- ✅ LMDB bindings (can use for chat if needed)
 
 ---
 
-## Key Principles
+## Future Extensions
 
-1. **Memory is truth** - All AI state lives in `vim.ai.memory`
-2. **Conversations are projections** - Read-only views, not separate storage
-3. **Zig owns the data** - No state management in JavaScript
-4. **Native performance** - Zero-copy, memory-mapped, async I/O
+When proven necessary, these can be added:
+
+| Extension | What | When |
+|-----------|------|------|
+| **vim.ai.mcp** | External tools via MCP | When tool integrations needed |
+| **vim.ai.archive** | Long-term vector memory | When cross-session search needed |
+| **Local embeddings** | Fast pattern detection | For JIT-style optimization |
+
+These are NOT in v1. Start simple, extend when needed.
+
+---
+
+## Design Principles
+
+| Principle | Rationale |
+|-----------|-----------|
+| **3 primitives** | Minimum viable MemGPT |
+| **LLM edits memory** | Self-editing loop, not pre-configuration |
+| **Auto-summarize** | Conversation scales infinitely |
+| **Session-based chat** | Multiple conversations, easy management |
+| **Zig owns data** | Native performance, no JS state |
+
+---
+
+## Research References
+
+| Source | Key Insight | Applied |
+|--------|-------------|---------|
+| **MemGPT/Letta** | Core memory + self-editing loop | `vim.ai.mem` |
+| **Aider** | Conversation history + auto-summarize | `vim.ai.chat` |
+| **Production tools** | Simple beats complex | 3 primitives, not 7 |
+
+---
+
+## File Structure
+
+```
+src/system/ai/
+├── mem.zig                 # Memory block storage
+├── chat.zig                # Conversation management
+├── llm.zig                 # LLM communication
+└── providers/
+    ├── provider.zig        # Provider abstraction
+    ├── anthropic.zig       # Claude API
+    ├── openai.zig          # OpenAI API
+    └── ollama.zig          # Local models
+
+src/system/jsi/
+└── ai_api.zig              # JSI bindings for all 3 primitives
+
+~/.config/vimcraft/ai/
+├── mem.json                # Memory blocks
+└── chat/                   # Session histories
+```

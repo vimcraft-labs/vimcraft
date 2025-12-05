@@ -208,28 +208,21 @@ pub fn initJSI(
     }
 
     // Register motion API (vim.motion.* functions)
-    // Register for both Editor and EditorContext
+    // MotionContext stores *Editor directly for dynamic buffer/viewport access
     if (T == *Editor) {
         const motion_ctx = allocator.create(motion_api.MotionContext) catch @panic("Failed to allocate MotionContext");
-        // TODO: This is problematic - buffer pointer becomes stale when user switches buffers
-        // Need to refactor MotionContext to store *Editor instead and call getCurrentBuffer()
-        const current_buffer = editor_or_context.getCurrentBuffer() orelse @panic("No current buffer for motion API");
         motion_ctx.* = motion_api.MotionContext{
-            .buffer = current_buffer,
-            .viewport_top = &editor_or_context.viewport_top,
+            .editor = editor_or_context,
             .viewport_height = if (display) |d| d.terminal_rows - 1 else 24,
-            .js_state_dirty = &editor_or_context.js_state_dirty,
         };
         global_motion_ctx = motion_ctx;
         motion_api.register(runtime, motion_ctx);
     } else if (T == *EditorContext) {
-        // EditorContext - use accessor methods for buffer/viewport
+        // EditorContext wraps Editor - use the inner editor
         const motion_ctx = allocator.create(motion_api.MotionContext) catch @panic("Failed to allocate MotionContext");
         motion_ctx.* = motion_api.MotionContext{
-            .buffer = editor_or_context.buffer(),
-            .viewport_top = &editor_or_context.display.viewport_top,
+            .editor = &editor_or_context.editor,
             .viewport_height = if (display) |d| d.terminal_rows - 1 else 24,
-            .js_state_dirty = null, // EditorContext doesn't need dirty tracking
         };
         global_motion_ctx = motion_ctx;
         motion_api.register(runtime, motion_ctx);
@@ -414,6 +407,7 @@ pub fn initJSI(
             .execute_keys_fn = &executeKeysWrapper,
             .js_state_dirty = &editor_or_context.js_state_dirty,
             .display = display, // Wire display for PTY capture
+            .get_editor_fn = &getEditorWrapper,
         };
         global_e2e_ctx = e2e_ctx;
         e2e_api.register(runtime, e2e_ctx);
@@ -430,6 +424,7 @@ pub fn initJSI(
             .execute_keys_fn = &executeKeysWrapperContext,
             .js_state_dirty = null, // EditorContext doesn't need dirty tracking
             .display = &editor_or_context.display, // Wire display for PTY capture
+            .get_editor_fn = &getEditorWrapperContext,
         };
         global_e2e_ctx = e2e_ctx;
         e2e_api.register(runtime, e2e_ctx);
@@ -505,6 +500,17 @@ fn getCurrentBufferWrapper(editor_ptr: *anyopaque) ?*Buffer {
 fn getCurrentBufferWrapperContext(ctx_ptr: *anyopaque) ?*Buffer {
     const ctx: *EditorContext = @ptrCast(@alignCast(ctx_ptr));
     return ctx.buffer();
+}
+
+/// Wrapper function to get Editor from *Editor (identity function)
+fn getEditorWrapper(editor_ptr: *anyopaque) *Editor {
+    return @ptrCast(@alignCast(editor_ptr));
+}
+
+/// Wrapper function to get inner Editor from *EditorContext
+fn getEditorWrapperContext(ctx_ptr: *anyopaque) *Editor {
+    const ctx: *EditorContext = @ptrCast(@alignCast(ctx_ptr));
+    return &ctx.editor;
 }
 
 /// Re-register console.log with debugger pointer

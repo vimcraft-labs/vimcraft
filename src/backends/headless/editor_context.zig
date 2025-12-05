@@ -143,18 +143,22 @@ pub const EditorContext = struct {
             else
                 1;
 
+            // Use Editor's window viewport as the canonical source
+            var viewport_top = self.editor.getViewportTop();
+
             // CRITICAL FIX: Update viewport_top BEFORE using it (same as terminal backend)
             // This prevents race condition where we use stale viewport_top from previous frame
-            if (buf.cursor.row < self.display.viewport_top) {
-                self.display.viewport_top = buf.cursor.row;
-            } else if (buf.cursor.row >= self.display.viewport_top + text_rows) {
+            if (buf.cursor.row < viewport_top) {
+                viewport_top = buf.cursor.row;
+                self.editor.setViewportTop(viewport_top);
+            } else if (buf.cursor.row >= viewport_top + text_rows) {
                 // CRITICAL: Use saturating arithmetic to prevent underflow
-                self.display.viewport_top = buf.cursor.row -| text_rows +| 1;
+                viewport_top = buf.cursor.row -| text_rows +| 1;
+                self.editor.setViewportTop(viewport_top);
             }
 
             // NOW execute with fresh viewport_top
             const viewport_height = text_rows;
-            const viewport_top = self.display.viewport_top;
 
             // Get 'startofline' option - default is false (preserve sticky column)
             const start_of_line = if (self.editor.options_manager) |opts_mgr|
@@ -188,11 +192,20 @@ pub const EditorContext = struct {
                 'z' => movement.centerLineInViewport(cursor_row, text_rows, buffer_line_count), // zz
                 't' => movement.moveLineToViewportTop(cursor_row, buffer_line_count, text_rows), // zt
                 'b' => movement.moveLineToViewportBottom(cursor_row, text_rows, buffer_line_count), // zb
-                else => self.display.viewport_top,
+                else => self.editor.getViewportTop(),
             };
 
-            // Update viewport and clear the adjustment flag
-            self.display.viewport_top = new_viewport_top;
+            // Update viewport using Editor's canonical setter
+            self.editor.setViewportTop(new_viewport_top);
+
+            // Also update Window viewport to match
+            if (self.editor.getCurrentWindow()) |win| {
+                win.viewport.top_line = new_viewport_top;
+            }
+
+            // CRITICAL: Set flag to skip ensureCursorVisible in render
+            self.editor.skip_ensure_cursor_visible = true;
+
             self.editor.viewport_adjustment = null;
             return true;
         }
@@ -262,29 +275,23 @@ pub const EditorContext = struct {
         // This handles the case where H/M/L was the LAST key pressed
         _ = self.executeViewportCommand();
 
-        // CRITICAL FIX: Update viewport_top to keep cursor visible (simulates terminal backend render)
+        // Update viewport to keep cursor visible (simulates terminal backend render)
+        // This is safe because ensureCursorVisibleInViewport only adjusts viewport
+        // if cursor is outside visible bounds - it won't override zz/zt/zb centering
+        // if the cursor is already visible in the centered position
         self.updateViewportForCursor();
     }
 
     /// Update viewport_top to keep cursor visible within viewport bounds
     /// This simulates what happens in terminal backend's render() function
     fn updateViewportForCursor(self: *EditorContext) void {
-        const buf = self.buffer();
         const text_rows = if (self.display.terminal_rows > 1)
             self.display.terminal_rows - 1
         else
             1;
 
-        // Scroll down if cursor is below viewport
-        if (buf.cursor.row >= self.display.viewport_top + text_rows) {
-            // Use saturating arithmetic to prevent underflow
-            self.display.viewport_top = buf.cursor.row -| text_rows +| 1;
-        }
-
-        // Scroll up if cursor is above viewport
-        if (buf.cursor.row < self.display.viewport_top) {
-            self.display.viewport_top = buf.cursor.row;
-        }
+        // Use Editor's canonical ensureCursorVisibleInViewport
+        self.editor.ensureCursorVisibleInViewport(text_rows);
     }
 
     /// Load file and detect filetype (delegates to Editor)

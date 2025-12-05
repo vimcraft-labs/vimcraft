@@ -17,6 +17,7 @@ const c_api = @import("c_api.zig");
 const c = c_api.c;
 const helpers = @import("helpers.zig");
 const Buffer = @import("../../editor/buffer/buffer.zig").Buffer;
+const Editor = @import("../../editor/editor.zig").Editor;
 const ModeManager = @import("../../editor/mode/mode.zig").ModeManager;
 const VisualState = @import("../../editor/visual/visual.zig").VisualState;
 const RegisterManager = @import("../../editor/register/register.zig").RegisterManager;
@@ -32,7 +33,7 @@ pub const E2EContext = struct {
     mode_manager: *ModeManager,
     visual_state: *VisualState,
     register_mgr: *RegisterManager,
-    /// Editor reference for executeKeys and getCurrentBuffer
+    /// Editor or EditorContext reference for executeKeys
     editor: *anyopaque,
     /// Function pointer to execute keys on editor
     execute_keys_fn: *const fn (*anyopaque, []const u8) anyerror!void,
@@ -40,11 +41,19 @@ pub const E2EContext = struct {
     js_state_dirty: ?*bool,
     /// Display reference for PTY capture (optional for backwards compatibility)
     display: ?*Display = null,
+    /// Function pointer to get inner Editor (works for both Editor and EditorContext)
+    /// Used by pty.render() which needs direct Editor access for window methods
+    get_editor_fn: *const fn (*anyopaque) *Editor = undefined,
 
     /// Get the current buffer (dynamically fetched, not cached)
     /// Returns null if no buffer is active
     pub fn getCurrentBuffer(self: *E2EContext) ?*Buffer {
         return self.get_current_buffer_fn(self.editor);
+    }
+
+    /// Get the inner Editor pointer (works for both Editor and EditorContext)
+    pub fn getEditor(self: *E2EContext) *Editor {
+        return self.get_editor_fn(self.editor);
     }
 };
 
@@ -1220,13 +1229,11 @@ fn ptyRender(
         return null;
     };
 
-    // Get the Editor pointer - ctx.editor is *Editor (not *EditorContext!)
-    // In test.zig, jsi_api.initJSI is called with &editor_ctx.editor which is *Editor
-    const Editor = @import("../../editor/editor.zig").Editor;
+    // Get the Editor pointer using function pointer (works for both Editor and EditorContext)
     const ListChars = @import("../../editor/config/listchars.zig").ListChars;
 
-    // Cast editor back to *Editor (NOT *EditorContext!)
-    const editor: *Editor = @ptrCast(@alignCast(ctx.editor));
+    // Get Editor through function pointer (handles both Editor and EditorContext)
+    const editor: *Editor = ctx.getEditor();
 
     // Get default listchars
     var listchars = ListChars{};

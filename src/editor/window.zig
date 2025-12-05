@@ -1,6 +1,7 @@
 const std = @import("std");
 const c_api = @import("../system/jsi/c_api.zig");
 const c = c_api.c;
+const Buffer = @import("buffer/buffer.zig").Buffer;
 
 /// Buffer identifier - must match editor.BufferId exactly
 /// (cannot import editor.zig due to circular dependency)
@@ -343,7 +344,6 @@ pub const Window = struct {
     /// Ensure cursor is visible in viewport, scrolling if necessary
     pub fn ensureCursorVisible(self: *Window) void {
         const scrolloff = self.options.scrolloff;
-        const old_top_line = self.viewport.top_line;
 
         // Vertical scrolling
         if (self.height > 0) {
@@ -357,18 +357,6 @@ pub const Window = struct {
             }
         }
 
-        // DEBUG: Log when viewport actually scrolls
-        if (self.viewport.top_line != old_top_line) {
-            std.log.debug("VIEWPORT_SCROLL: window.ensureCursorVisible: top_line {d} -> {d}, cursor_row={d}, height={d}, scrolloff={d}, is_float={}", .{
-                old_top_line,
-                self.viewport.top_line,
-                self.cursor.row,
-                self.height,
-                scrolloff,
-                self.isFloating(),
-            });
-        }
-
         // Horizontal scrolling (if wrap is disabled)
         if (!self.options.wrap and self.width > 0) {
             const sidescrolloff = self.options.sidescrolloff;
@@ -379,6 +367,48 @@ pub const Window = struct {
                     0;
             } else if (self.cursor.col >= self.viewport.left_col + self.width - sidescrolloff) {
                 self.viewport.left_col = self.cursor.col -| (self.width -| sidescrolloff -| 1);
+            }
+        }
+
+        // Update cursor screen position
+        self.viewport.cursor_screen_row = self.cursor.row -| self.viewport.top_line;
+        self.viewport.cursor_screen_col = self.cursor.col -| self.viewport.left_col;
+    }
+
+    /// Ensure cursor is visible in viewport with explicit height and buffer.
+    /// This is the canonical implementation - all viewport scrolling should go through here.
+    ///
+    /// Parameters:
+    /// - buffer: Used to clamp cursor to buffer bounds
+    /// - visible_height: The actual visible height (may differ from self.height when statusline hidden)
+    ///
+    /// This method:
+    /// 1. Syncs window cursor from buffer cursor
+    /// 2. Clamps cursor to buffer bounds
+    /// 3. Scrolls viewport to keep cursor visible (respecting scrolloff)
+    /// 4. Updates cursor screen position
+    pub fn ensureCursorVisibleWithHeight(self: *Window, buffer: *const Buffer, visible_height: usize) void {
+        const scrolloff = self.options.scrolloff;
+
+        // Sync window cursor from buffer cursor (buffer is the source of truth for editing)
+        self.cursor.row = buffer.cursor.row;
+        self.cursor.col = buffer.cursor.col;
+
+        // Clamp cursor to buffer bounds
+        const max_row = if (buffer.lineCount() > 0) buffer.lineCount() - 1 else 0;
+        if (self.cursor.row > max_row) {
+            self.cursor.row = max_row;
+        }
+
+        // Vertical scrolling
+        if (visible_height > 0) {
+            if (self.cursor.row < self.viewport.top_line + scrolloff) {
+                self.viewport.top_line = if (self.cursor.row > scrolloff)
+                    self.cursor.row - scrolloff
+                else
+                    0;
+            } else if (self.cursor.row >= self.viewport.top_line + visible_height - scrolloff) {
+                self.viewport.top_line = self.cursor.row -| (visible_height -| scrolloff -| 1);
             }
         }
 

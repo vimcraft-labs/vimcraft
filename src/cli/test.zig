@@ -368,8 +368,10 @@ pub fn execute(allocator: std.mem.Allocator, sandbox_path: []const u8, verbose: 
     defer c.hermes_runtime_destroy(runtime);
 
     // Initialize full JSI API (vim.motion, vim.cursor, vim.buffer, vim.e2e, etc.)
-    // CRITICAL: Pass &editor_ctx.editor (not &editor_ctx) to enable vim.cursor API
-    jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &options_mgr, &editor_ctx.editor, &editor_ctx.display);
+    // CRITICAL: Pass &editor_ctx (not &editor_ctx.editor) to enable viewport commands (H/M/L, zz/zt/zb)
+    // EditorContext.executeKeys() handles viewport_movement and viewport_adjustment flags
+    // that are set by these commands and require terminal dimensions to calculate correctly
+    jsi_api.initJSI(allocator, @ptrCast(runtime), &highlight_config, &options_mgr, &editor_ctx, &editor_ctx.display);
     defer jsi_api.deinitJSI();
 
     // Initialize timer system for async tests

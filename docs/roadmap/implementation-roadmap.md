@@ -15,8 +15,8 @@ Vimcraft aims to create a **Neovim-compatible text editor** with:
 - **Bridge**: Zero-copy JSI integration
 - **Goal**: Seamless migration for Neovim users with better startup performance
 
-**Current Status**: Phase 1+2+3 Complete ✅ (Text display, Navigation, Editing)
-**Next**: Phase 4 (Plugin System - vim.opt, vim.keymap, autocommands)
+**Current Status**: Phase 1-7 Complete ✅ (Substitute shipped Dec 4, 2025)
+**Next**: Phase 8 (Macros & Block Visual)
 
 ---
 
@@ -129,76 +129,101 @@ Vimcraft aims to create a **Neovim-compatible text editor** with:
 **Phase 3 Completed**: December 2025
 **Key Achievement**: Full text editing with proper undo/redo and visual mode
 
-### Phase 4: Plugin System (6-8 weeks)
+### Phase 4: Plugin System ✅ COMPLETE
 
-| Feature | Priority | Complexity | Est. Time |
-|---------|----------|------------|-----------|
-| **vim.opt Interface** | CRITICAL | High | 2 weeks |
-| - Options manager (Zig) | HIGH | High | 1 week |
-| - vim.opt proxy (JS) | HIGH | Medium | 3 days |
-| - vim.opt_local/opt_global | MED | Medium | 2 days |
-| - Type conversion layer | HIGH | High | 3 days |
-| **vim.api Core Functions** | CRITICAL | High | 2 weeks |
-| - Buffer functions | HIGH | High | 1 week |
-| - Window functions | MED | Medium | 3 days |
-| - Option get/set | HIGH | Medium | 2 days |
-| - Variable get/set | MED | Low | 2 days |
-| **vim.keymap** | CRITICAL | High | 1 week |
-| - Keymap registry (Zig) | HIGH | High | 4 days |
-| - vim.keymap.set/del (JS) | HIGH | Medium | 2 days |
-| - Mode-specific maps | HIGH | Medium | 2 days |
-| **Autocommands** | HIGH | High | 2 weeks |
-| - Event system (Zig) | HIGH | High | 1 week |
-| - vim.api.nvim_create_autocmd | HIGH | Medium | 3 days |
-| - Augroups | MED | Medium | 2 days |
-| - Event firing | HIGH | High | 3 days |
-| **User Commands** | MED | Medium | 1 week |
-| - Command registry | MED | Medium | 3 days |
-| - vim.api.nvim_create_user_command | MED | Medium | 3 days |
-| - Argument parsing | MED | Low | 2 days |
-| **vim.fn Bridge** | MED | Medium | 1 week |
-| - Function call proxy | MED | Medium | 3 days |
-| - Essential functions | MED | Medium | 4 days |
+| Feature | Status | Implementation |
+|---------|--------|----------------|
+| **vim.opt Interface** | ✅ Complete | src/system/jsi/config_api.zig |
+| **vim.api Core Functions** | ✅ Complete | api_buffer.zig, api_window.zig |
+| **vim.keymap** | ✅ Complete | src/system/jsi/keymap_api.zig |
+| **Autocommands** | ✅ Complete | src/system/jsi/autocmd_api.zig |
+| **User Commands** | ✅ Complete | src/system/jsi/usercommand_api.zig |
+| **vim.fn Bridge** | ✅ Complete | runtime.ts vim.fn module |
+| **vim.cmd Module** | ✅ Complete | runtime.ts vim.cmd module |
+| **Namespace/Extmark** | ✅ Complete | src/system/jsi/namespace_api.zig |
 
-**Phase 4 Total**: 6-8 weeks
+### Phase 5: Advanced Features ✅ SUBSTANTIALLY COMPLETE
 
-### Phase 5: Advanced Features (8-12 weeks)
+| Feature | Status | Implementation |
+|---------|--------|----------------|
+| **Tree-sitter Integration** | ✅ Complete | src/system/jsi/treesitter_api.zig |
+| - Syntax highlighting | ✅ Complete | Full highlight queries |
+| - Language injection | ✅ Complete | Markdown code blocks, etc. |
+| - In-memory caching | ✅ Complete | Rapid response |
+| **LSP Integration** | ✅ Complete | runtime.ts vim.lsp module |
+| - Hover with popups | ✅ Complete | Markdown rendering |
+| - Definition jumping | ✅ Complete | Go to definition |
+| **Diagnostics** | ✅ Complete | src/system/jsi/diagnostic_api.zig |
+| **Split Windows** | ✅ Complete | vsplit, hsplit working |
+| **Floating Windows** | ✅ Complete | For LSP hover, popups |
+| **Network Transports** | ✅ Complete | http, stdio, tcp, websocket |
+| **Process Spawn** | ✅ Complete | Secure process API |
 
-| Feature | Priority | Complexity | Est. Time |
-|---------|----------|------------|-----------|
-| **Search/Replace** | HIGH | High | 2 weeks |
-| - / and ? search | HIGH | High | 1 week |
-| - n/N navigation | MED | Low | 2 days |
-| - :s substitute | HIGH | Very High | 1 week |
-| - Search highlighting | MED | Medium | 2 days |
-| **Command Mode** | HIGH | High | 2 weeks |
-| - : command parser | HIGH | High | 1 week |
-| - Ex commands (:w, :q, :e) | HIGH | Medium | 1 week |
-| - Range support | MED | High | 3 days |
-| **Syntax Highlighting** | MED | Very High | 3 weeks |
-| - Tree-sitter integration | MED | Very High | 2 weeks |
-| - Highlight application | MED | High | 1 week |
-| **Split Windows** | MED | Very High | 2 weeks |
-| - Window management | MED | Very High | 1 week |
-| - vsplit/hsplit | MED | High | 1 week |
-| **Tab Pages** | LOW | High | 1 week |
-| **Macros (q/@)** | MED | High | 1 week |
-| **LSP Integration** | MED | Very High | 4 weeks |
-| **Diagnostics** | MED | High | 2 weeks |
+### Phase 6: Search ✅ COMPLETE (Dec 3-4, 2025)
 
-**Phase 5 Total**: 8-12 weeks
+| Feature | Status | Implementation |
+|---------|--------|----------------|
+| **Search** | ✅ Complete | `editor.zig`, `search_api.zig` |
+| - / and ? search | ✅ Complete | Forward/backward search mode |
+| - n/N navigation | ✅ Complete | `searchNext()`, `searchPrevious()` |
+| - Search highlighting | ✅ Complete | `layer_renderer.zig:444-538` |
+| - * and # word search | ✅ Complete | `searchWordUnderCursor()` |
+| - g* and g# (no boundaries) | ✅ Complete | Whole word toggle |
+| - vim.fn.getReg('/') | ✅ Complete | `runtime.ts:1222` |
+| - vim.fn.setReg('/', pattern) | ✅ Complete | `runtime.ts:1233` |
+| - vim.cmd.nohlsearch() | ✅ Complete | `runtime.ts:1442` |
+| - hlSearch option wired | ✅ Complete | `editor.zig:3139-3146` |
+| - incSearch option wired | ✅ Complete | `editor.zig:2857-2878` (Dec 4) |
+| - wrapScan option wired | ✅ Complete | `editor.zig:3050-3133` (Dec 4) |
+| - ignoreCase option wired | ✅ Complete | `editor.zig:2922-2942` (Dec 4) |
+| - smartCase option wired | ✅ Complete | `editor.zig:2922-2942` (Dec 4) |
+| - Search/CurSearch highlights | ✅ Complete | `layer_renderer.zig` |
 
-### Phase 6: Performance & Polish (Ongoing)
+### Phase 7: Substitute ✅ COMPLETE (Dec 4, 2025)
+
+| Feature | Priority | Status |
+|---------|----------|--------|
+| **Substitute** | HIGH | ✅ Complete |
+| - :s/pattern/replacement/ | HIGH | ✅ Complete |
+| - Flags (g, c, i, n) | MED | ✅ Complete |
+| - Range support | MED | ✅ Complete |
+| - Special replacements (\1, &) | LOW | ✅ Complete |
+| **Search Polish** | MED | ✅ COMPLETE |
+| - Wire incSearch option | MED | ✅ Complete (Dec 4, 2025) |
+| - Wire wrapScan option | MED | ✅ Complete (Dec 4, 2025) |
+| - Wire ignoreCase option | MED | ✅ Complete (Dec 4, 2025) |
+| - Wire smartCase option | MED | ✅ Complete (Dec 4, 2025) |
+| - Regex pattern support | LOW | ✅ Complete |
+
+### Command Mode ✅ COMPLETE
+
+| Feature | Status | Commands |
+|---------|--------|----------|
+| **File Operations** | ✅ | :w, :q, :wq, :e |
+| **Buffer Commands** | ✅ | :bn, :bp, :bd, :ls, :b N, :bo |
+| **Window Commands** | ✅ | :sp, :vs, :close, :only |
+| **Directory Commands** | ✅ | :cd, :pwd |
+| **User Commands** | ✅ | vim.api.createUserCmd support |
+
+### Phase 8: Macros & Block Visual 📅 NEXT
 
 | Feature | Priority | Complexity |
 |---------|----------|------------|
-| Rope data structure | HIGH | Very High |
+| **Macros (q/@)** | HIGH | High |
+| **Block Visual (Ctrl+V)** | HIGH | High |
+| **Tab Pages** | MED | High |
+
+### Phase 9: Performance & Polish (Ongoing)
+
+| Feature | Priority | Complexity |
+|---------|----------|------------|
+| ~~Rope data structure~~ | ~~HIGH~~ | ✅ Complete |
 | Incremental rendering | HIGH | Very High |
 | Large file handling (>100MB) | MED | High |
 | Memory optimization | HIGH | High |
 | Benchmark suite | HIGH | Medium |
 
-### Phase 7: Neovim Compatibility (Ongoing)
+### Phase 10: Neovim Compatibility (Ongoing)
 
 | Feature | Priority | Complexity |
 |---------|----------|------------|
@@ -212,57 +237,83 @@ Vimcraft aims to create a **Neovim-compatible text editor** with:
 
 ### What Works Today
 
-**Editor Core** (Phase 1+2+3):
+**Editor Core** (Phase 1-3):
 - ✅ Text buffer management (ArrayList-based)
 - ✅ Terminal rendering with ANSI codes
 - ✅ Full Vim navigation (hjkl, w/b/e, gg/G, 0/$, Ctrl+D/U)
 - ✅ Mode system (Normal/Insert/Visual)
-- ✅ **Delete operators (x, dd, dw, d{motion})** ✨ NEW
-- ✅ **Change operators (c{motion}, cc, C)** ✨ NEW
-- ✅ **Yank/paste (y{motion}, yy, p, P)** ✨ NEW
-- ✅ **Bracketed paste (Cmd+V/Ctrl+V)** ✨ NEW
-- ✅ **Register system (39 registers)** ✨ NEW
-- ✅ **Undo/redo (u, Ctrl+R)** ✨ NEW
-- ✅ **Transaction-based undo** ✨ NEW
-- ✅ **Visual mode (v, V with d/c/y operators)** ✨ NEW
-- ✅ **Visual paste replace** ✨ NEW
+- ✅ Delete operators (x, dd, dw, d{motion})
+- ✅ Change operators (c{motion}, cc, C)
+- ✅ Yank/paste (y{motion}, yy, p, P)
+- ✅ Bracketed paste (Cmd+V/Ctrl+V)
+- ✅ Register system (39 registers)
+- ✅ Undo/redo (u, Ctrl+R)
+- ✅ Transaction-based undo
+- ✅ Visual mode (v, V with d/c/y operators)
 - ✅ Status line display
 - ✅ File loading and saving
 
+**Plugin System** (Phase 4):
+- ✅ vim.opt interface
+- ✅ vim.keymap.set/del
+- ✅ Autocommands (create, delete, groups)
+- ✅ User commands
+- ✅ vim.fn module
+- ✅ vim.cmd module
+- ✅ Namespace/Extmark API
+
+**Advanced Features** (Phase 5):
+- ✅ Tree-sitter syntax highlighting
+- ✅ Tree-sitter language injection
+- ✅ Tree-sitter in-memory caching
+- ✅ LSP integration (vim.lsp module)
+- ✅ LSP hover with floating windows
+- ✅ Markdown rendering in popups
+- ✅ vim.diagnostic
+- ✅ Window splits (vsplit, hsplit)
+- ✅ Floating windows
+- ✅ Network transports (http, stdio, tcp, websocket)
+- ✅ Process spawn API
+- ✅ PTY spawn for testing
+
 **JavaScript Integration**:
 - ✅ Hermes engine integration
-- ✅ JSI zero-copy bridge (demos working)
+- ✅ JSI zero-copy bridge
 - ✅ console.log() to Chrome DevTools
 - ✅ setTimeout/setInterval/clearTimeout/clearInterval
 - ✅ Config hot reload (automatic on file save)
 - ✅ vim.highlight() API
-- ✅ vim.opt.cursorLine (basic implementation)
-- ✅ vim.g/b/w/t/v/env variable scopes (stub)
-
-**TypeScript Types**:
-- ✅ @vimcraft/types package v0.3.0
-- ✅ Full vim.api.* types (150+ functions)
-- ✅ vim.opt interface (80+ options)
-- ✅ vim.keymap types
-- ✅ Autocommand types
-- ✅ Diagnostic types
-- ✅ IDE autocomplete support
 
 ### What's Next (Priority Order)
 
-**CRITICAL (Phase 4 - Plugin System)**:
-1. vim.opt full implementation (80+ options)
-2. vim.keymap.set/del (key mapping system)
-3. vim.api buffer functions (nvim_buf_*)
-4. Autocommand system (event firing)
-5. User command registration
+**Phase 6: Search** ✅ COMPLETE (Dec 3, 2025)
+- ✅ Search (/, ?) with highlighting
+- ✅ Search navigation (n, N)
+- ✅ Word search (*, #, g*, g#)
+- ✅ vim.fn.getReg('/') / setReg('/', pattern)
+- ✅ vim.cmd.nohlsearch()
 
-**HIGH (Phase 5 - Advanced Features)**:
-1. Search and replace (/, ?, :s)
-2. Command mode (: parser)
-3. Ex commands (:w, :q, :e)
-4. Tree-sitter syntax highlighting
-5. vim.diagnostic implementation
+**Phase 7: Substitute** ✅ COMPLETE (Dec 4, 2025)
+- ✅ Substitute command (:s/pattern/replacement/)
+- ✅ Substitute flags (g, c, i, n)
+- ✅ Range support
+- ✅ Wire incSearch, wrapScan options
+- ✅ Wire ignoreCase, smartCase options
+
+**Command Mode** ✅ ALREADY COMPLETE:
+- Ex commands (:w, :q, :e, :wq, :sp, :vs, :close, :only)
+- Buffer commands (:bn, :bp, :bd, :ls, :b N, :bo)
+- Directory commands (:cd, :pwd)
+- User commands (vim.api.createUserCmd)
+
+**HIGH (Phase 8 - Next)**:
+1. Macros (q, @) - Recording/playback
+2. Block visual (Ctrl+V) - Column editing
+3. Tab pages - Multiple workspaces
+
+**MEDIUM (Future)**:
+1. Neovim API compatibility layer
+2. Large file optimizations (100MB+)
 
 ---
 
@@ -358,76 +409,62 @@ src/
 
 ---
 
-## Next Steps (Week-by-Week)
+## Completed: Phase 6-7
 
-### Week 1-2: Delete & Change Operators
+### Phase 6: Search ✅ COMPLETE (Dec 3, 2025)
 
-**Goals**:
-- Implement x, dd, dw, d{motion}
-- Implement c, cc, cw, c{motion}
-- Transaction system for changes
+**Implemented**:
+- ✅ `/` (forward search) and `?` (backward search)
+- ✅ `n/N` (next/previous match)
+- ✅ `*/#` and `g*/g#` (word search)
+- ✅ Search highlighting (Search, CurSearch highlight groups)
+- ✅ `vim.fn.getReg('/')` / `vim.fn.setReg('/', pattern)`
+- ✅ `vim.cmd.nohlsearch()` / `vim.cmd.noh()`
+- ✅ `hlsearch` option wired to highlighting
 
-**Deliverables**:
-- `src/buffer/edit.zig` - Edit operations
-- `src/undo/transaction.zig` - Change tracking
-- Unit tests for operators
-- Demo config with operator bindings
+**Key Files**:
+- `src/editor/editor.zig:2071-2113` - Search mode handling
+- `src/editor/editor.zig:3029-3230` - Search functions
+- `src/system/jsi/search_api.zig` - JavaScript API
+- `src/backends/terminal/display/layer_renderer.zig:444-538` - Search highlighting
 
-### Week 3-4: Yank/Paste & Registers
+### Phase 7: Substitute ✅ COMPLETE (Dec 4, 2025)
 
-**Goals**:
-- Implement register system
-- Yank operations (y, yy, y{motion})
-- Paste operations (p, P)
-- Unnamed + named registers
+**Implemented**:
+- ✅ `:s/pattern/replacement/` basic substitute
+- ✅ Flags (g, c, i, n)
+- ✅ Range support (`:1,10s/...`)
+- ✅ Special replacements (\1, &, etc.)
+- ✅ Integration with undo system
 
-**Deliverables**:
-- `src/register/register.zig` - Register manager
-- Integration with delete/change operators
-- Clipboard support (optional)
-- Register inspection (:reg)
+**All Search Options Wired**:
+- ✅ `hlSearch` - Highlight search matches - `editor.zig:3139-3146`
+- ✅ `incSearch` - Show match while typing - `editor.zig:2857-2878`
+- ✅ `wrapScan` - Wrap at end of file - `editor.zig:3050-3133`
+- ✅ `ignoreCase` - Case-insensitive search - `editor.zig:2922-2942`
+- ✅ `smartCase` - Smart case override - `editor.zig:2922-2942`
 
-### Week 5-6: Undo/Redo System
+---
 
-**Goals**:
-- Implement undo tree
-- u (undo) command
-- Ctrl+R (redo) command
-- Transaction boundaries
+## Next Steps: Phase 8 - Macros & Block Visual
 
-**Deliverables**:
-- `src/undo/undo_tree.zig` - Undo tree structure
-- Integration with all edit operations
-- Persistent undo (optional)
-- Undo tree visualization (optional)
+### Goals
+- Implement macro recording (`q{register}`)
+- Implement macro playback (`@{register}`, `@@`)
+- Implement block visual mode (`Ctrl+V`)
+- Tab pages for workspace management
 
-### Week 7-8: Visual Mode Completion
+### Command Mode ✅ COMPLETE
 
-**Goals**:
-- Character visual mode
-- Line visual mode (V)
-- Visual operators (d, c, y on selection)
-- Visual mode highlighting
+The following Ex commands are already implemented in `src/editor/editor.zig:handleCommandMode()`:
 
-**Deliverables**:
-- Visual selection in buffer
-- Visual mode operators
-- Visual mode highlighting
-- Demo config showing visual operations
-
-### Week 9-10: vim.opt Implementation
-
-**Goals**:
-- Options manager in Zig
-- vim.opt proxy in JavaScript
-- All Phase 3 options working
-- Type conversion layer
-
-**Deliverables**:
-- `src/config/options.zig` - Options manager
-- `src/config/option_defs.zig` - Option metadata
-- JavaScript proxy for vim.opt
-- Unit tests for option system
+| Category | Commands |
+|----------|----------|
+| **File** | :w, :q, :wq, :e file.txt |
+| **Buffer** | :bn, :bp, :bd, :bd!, :ls, :buffers, :b N, :bo, :bonly |
+| **Window** | :sp, :split, :vs, :vsplit, :close, :clo, :only, :on |
+| **Directory** | :cd path, :pwd |
+| **User** | Custom commands via vim.api.createUserCmd |
 
 ---
 
@@ -456,8 +493,9 @@ src/
 
 ### Key Technical Choices
 
-**Buffer Storage**: ArrayList (Phase 1-3) → Rope (Phase 6)
-- Reason: Simplicity first, optimize later
+**Buffer Storage**: Rope ✅
+- Tree-based O(log n) insert/delete
+- Reference-counted nodes for efficient undo
 
 **Rendering**: ANSI escape codes (current) → Virtual terminal (future)
 - Reason: Works today, optimize for large files later
@@ -491,11 +529,33 @@ src/
 
 ### Phase 5+ Success (Advanced Features)
 
-- ✅ Search and replace works for complex patterns
 - ✅ Syntax highlighting via Tree-sitter
 - ✅ LSP diagnostics display correctly
-- ✅ Split windows and tabs functional
-- ✅ Macros can be recorded and replayed
+- ✅ Split windows functional
+- ✅ Floating windows for popups
+
+### Phase 6 Success ✅ ACHIEVED (Dec 3, 2025)
+
+- ✅ Search (/, ?) with highlighting
+- ✅ Search navigation (n, N)
+- ✅ Word search (*, #, g*, g#)
+- ✅ vim.fn.getReg('/') / setReg('/', pattern)
+- ✅ vim.cmd.nohlsearch()
+- ✅ hlsearch option wired
+
+### Phase 7 Success ✅ ACHIEVED (Dec 4, 2025)
+
+- [x] :s/pattern/replacement/ works
+- [x] Flags (g, c, i, n) supported
+- [x] Range support
+- [x] Special replacements (\1, &)
+
+### Phase 8 Success (Macros & Block Visual - In Progress)
+
+- [ ] Macros can be recorded (`q{register}`)
+- [ ] Macros can be replayed (`@{register}`, `@@`)
+- [ ] Block visual mode works (`Ctrl+V`)
+- [ ] Tab pages functional
 
 ---
 
@@ -503,25 +563,25 @@ src/
 
 ### 6 Months
 
-- ✅ Phase 3-4 complete
-- ✅ Basic text editing with plugin system
-- ✅ Users can write simple plugins
+- ✅ Phase 3-7 complete
+- ✅ Full text editing with search & replace
+- ✅ Users can write plugins with vim.* API
 - ✅ Config migration guide from Neovim
 
 ### 1 Year
 
-- ✅ Phase 5 mostly complete
+- ✅ Phase 5 complete (LSP, Tree-sitter, Diagnostics)
 - ✅ LSP integration working
 - ✅ Tree-sitter syntax highlighting
-- ✅ Most Neovim plugins can be ported
+- 🚧 Macros and block visual
 - ✅ Performance better than Neovim
 
 ### 2 Years
 
-- ✅ Full Neovim API parity
-- ✅ Rich plugin ecosystem
-- ✅ Remote plugin support
-- ✅ Considered a viable Neovim alternative
+- 🚧 Full Neovim API parity
+- 🚧 Rich plugin ecosystem
+- 📅 Remote plugin support
+- 🚧 Considered a viable Neovim alternative
 
 ---
 
@@ -628,8 +688,8 @@ npm run watch:config
 
 ---
 
-**Last Updated**: December 2025
-**Current Phase**: Phase 4 (Plugin System)
-**Previous Milestone**: Phase 3 Complete ✅ (Text Editing with full undo/redo)
-**Next Milestone**: vim.opt + vim.keymap implementation (6-8 weeks)
+**Last Updated**: December 4, 2025
+**Current Phase**: Phase 7 Complete ✅ (Substitute shipped Dec 4, 2025)
+**Previous Milestones**: Phase 3 (Text Editing) ✅, Phase 4 (Plugin System) ✅, Phase 5 (Advanced Features) ✅, Phase 6 (Search) ✅, Phase 7 (Substitute) ✅
+**Next Milestone**: Phase 8 - Macros & Block Visual
 **Long-term Goal**: Neovim-compatible editor with better performance

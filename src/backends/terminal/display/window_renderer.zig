@@ -92,13 +92,12 @@ pub fn renderWindow(
 ) !void {
     const window = ctx.window;
     const buffer = ctx.buffer;
-    const region = ctx.region;
 
     // Calculate gutter width for this window
     const gutter_width = calculateWindowGutterWidth(window, buffer);
 
-    // Ensure window cursor is visible in viewport
-    ensureCursorVisible(window, buffer, region.height);
+    // NOTE: ensureCursorVisibleWithHeight is called ONCE in renderAllWindows() before this
+    // Do NOT call it again here - calling with different height causes viewport jumping
 
     // Render base layer (text content)
     try renderWindowBaseLayer(display, ctx, gutter_width);
@@ -128,52 +127,8 @@ pub fn renderWindow(
     window.needs_redraw = false;
 }
 
-/// Ensure cursor is visible within window viewport (public version for display.zig)
-/// This is the single source of truth for viewport scrolling calculations.
-pub fn ensureCursorVisibleWithHeight(window: *Window, buffer: *const Buffer, visible_height: usize) void {
-    ensureCursorVisible(window, buffer, visible_height);
-}
-
-/// Ensure cursor is visible within window viewport
-fn ensureCursorVisible(window: *Window, buffer: *const Buffer, visible_height: usize) void {
-    const scrolloff = window.options.scrolloff;
-    const cursor_row = window.cursor.row;
-    const old_top_line = window.viewport.top_line;
-
-    // Clamp cursor to buffer bounds
-    const max_row = if (buffer.lineCount() > 0) buffer.lineCount() - 1 else 0;
-    if (window.cursor.row > max_row) {
-        window.cursor.row = max_row;
-    }
-
-    // Vertical scrolling
-    if (visible_height > 0) {
-        if (cursor_row < window.viewport.top_line + scrolloff) {
-            window.viewport.top_line = if (cursor_row > scrolloff)
-                cursor_row - scrolloff
-            else
-                0;
-        } else if (cursor_row >= window.viewport.top_line + visible_height - scrolloff) {
-            window.viewport.top_line = cursor_row -| (visible_height -| scrolloff -| 1);
-        }
-    }
-
-    // DEBUG: Log when viewport actually scrolls
-    if (window.viewport.top_line != old_top_line) {
-        std.log.debug("VIEWPORT_SCROLL: window_renderer.ensureCursorVisible: top_line {d} -> {d}, cursor_row={d}, visible_height={d}, scrolloff={d}, is_float={}", .{
-            old_top_line,
-            window.viewport.top_line,
-            cursor_row,
-            visible_height,
-            scrolloff,
-            window.isFloating(),
-        });
-    }
-
-    // Update cursor screen position
-    window.viewport.cursor_screen_row = cursor_row -| window.viewport.top_line;
-    window.viewport.cursor_screen_col = window.cursor.col -| window.viewport.left_col;
-}
+// NOTE: ensureCursorVisible logic has been consolidated into Window.ensureCursorVisibleWithHeight
+// It's called ONCE in renderAllWindows() BEFORE renderWindow() - do NOT call it again here
 
 /// Calculate gutter width for a specific window
 /// Uses window-specific options including numberwidth for minimum line number field width

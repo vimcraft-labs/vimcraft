@@ -281,6 +281,7 @@ pub const Editor = struct {
     // Separate from pending_cmd to allow immediate execution during keymap strings
     viewport_movement: ?u8 = null, // H/M/L - move cursor to viewport top/middle/bottom
     viewport_adjustment: ?u8 = null, // zz/zt/zb - adjust viewport to center/top/bottom current line
+    skip_ensure_cursor_visible: bool = false, // Set after zz/zt/zb to prevent ensureCursorVisible from overriding
 
     // Keymap recursion protection (Neovim E223: recursive mapping)
     // Tracks depth to prevent infinite loops from self-referencing mappings
@@ -943,6 +944,34 @@ pub const Editor = struct {
         const win_id = self.current_window_id orelse return null;
         const win_ptr = self.windows.get(win_id) orelse return null;
         return win_ptr;
+    }
+
+    /// Get current window's viewport top line
+    /// This is the canonical source of viewport state
+    pub fn getViewportTop(self: *Editor) usize {
+        if (self.getCurrentWindow()) |win| {
+            return win.viewport.top_line;
+        }
+        return 0;
+    }
+
+    /// Set current window's viewport top line
+    /// This is the canonical way to update viewport state
+    pub fn setViewportTop(self: *Editor, top: usize) void {
+        if (self.getCurrentWindow()) |win| {
+            win.viewport.top_line = top;
+        }
+    }
+
+    /// Ensure cursor is visible within current window's viewport
+    /// Updates viewport.top_line if cursor is outside visible area
+    /// Delegates to Window.ensureCursorVisibleWithHeight (single source of truth)
+    pub fn ensureCursorVisibleInViewport(self: *Editor, visible_height: usize) void {
+        const win = self.getCurrentWindow() orelse return;
+        const buf = self.getCurrentBuffer() orelse return;
+
+        // Delegate to Window's canonical implementation
+        win.ensureCursorVisibleWithHeight(buf, visible_height);
     }
 
     /// Get window by handle (0 = current window, positive = WindowId.id)

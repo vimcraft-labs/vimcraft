@@ -283,6 +283,16 @@ pub const TerminalBackend = struct {
 
                             // Update display viewport
                             self.display.viewport_top = new_viewport_top;
+
+                            // Also update Window viewport to match
+                            if (self.editor.getCurrentWindow()) |win| {
+                                win.viewport.top_line = new_viewport_top;
+                            }
+
+                            // CRITICAL: Set flag to skip ensureCursorVisible in render
+                            // This prevents ensureCursorVisible from overriding zz/zt/zb
+                            self.editor.skip_ensure_cursor_visible = true;
+
                             needs_render.* = true;
                         }
                     }

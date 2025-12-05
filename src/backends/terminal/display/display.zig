@@ -704,16 +704,16 @@ pub const Display = struct {
         self.updateGutterCache(buffer);
 
         // Adjust viewport to keep cursor visible
-        self.adjustViewport(buffer);
-
-        // BIDIRECTIONAL SYNC: Keep Window.viewport.top_line in sync with Display.viewport_top
-        // This ensures switching between single-window and multi-window render doesn't cause jumps
+        // NOTE: For Editor type, ensureCursorVisibleWithHeight is called ONCE in renderAllWindows()
+        // with the correct effective_height. Do NOT call it here with a different height (text_rows)
+        // as that causes viewport jumping when the two heights differ (e.g., statusline visibility).
         if (T == *Editor) {
-            if (editor.getCurrentWindow()) |win| {
-                if (!win.isFloating()) {
-                    win.viewport.top_line = self.viewport_top;
-                }
-            }
+            // Just copy window viewport to Display for layer_renderer compatibility
+            // The actual viewport adjustment happens in renderAllWindows() with correct effective_height
+            self.viewport_top = editor.getViewportTop();
+        } else {
+            // Non-Editor types: use Display.viewport_top directly
+            self.adjustViewport(buffer);
         }
 
         // CRITICAL FIX: Sync gutter_manager with window options BEFORE calculating gutter_width
@@ -1000,60 +1000,40 @@ pub const Display = struct {
 
         if (active_window) |win| {
             if (editor.buffers.get(win.buffer_id)) |buffer| {
-                win.cursor.row = buffer.cursor.row;
-                win.cursor.col = buffer.cursor.col;
+                // CRITICAL: Skip ensureCursorVisible if a viewport adjustment (zz/zt/zb) just happened
+                // This prevents ensureCursorVisible from overriding the user's explicit viewport positioning
+                if (!editor.skip_ensure_cursor_visible) {
+                    // Calculate effective height for ensureCursorVisible
+                    // CRITICAL: This must match the render_height used in window_renderer
+                    // to avoid viewport jumping when floating windows change statusline visibility
+                    const effective_height = if (show_per_window_statusline or win.isFloating())
+                        win.height
+                    else
+                        // Statusline hidden, so we have extra row for content
+                        @min(win.height + 1, self.terminal_rows -| win.screen_row -| 1);
 
-                // CRITICAL FIX: Sync window viewport from display viewport!
-                // When switching from single-window render (display.render) to multi-window render
-                // (display.renderAllWindows), the window's viewport.top_line may be stale (still 0).
-                // Single-window render uses Display.viewport_top, multi-window uses Window.viewport.top_line.
-                // Without this sync, opening a floating window causes viewport to jump back to top briefly.
-                // Only sync for non-floating windows - floating windows have their own viewport.
-                if (!win.isFloating() and win.viewport.top_line == 0 and self.viewport_top > 0) {
-                    win.viewport.top_line = self.viewport_top;
-                    std.log.debug("VIEWPORT_SYNC: synced window.viewport.top_line from display.viewport_top: {d}", .{self.viewport_top});
+                    // Use Window's canonical ensureCursorVisibleWithHeight
+                    // This syncs cursor from buffer, clamps to bounds, and scrolls viewport
+                    win.ensureCursorVisibleWithHeight(buffer, effective_height);
+                } else {
+                    // Still need to sync cursor position from buffer
+                    win.cursor.row = buffer.cursor.row;
+                    win.cursor.col = buffer.cursor.col;
+                    win.viewport.cursor_screen_row = win.cursor.row -| win.viewport.top_line;
+                    win.viewport.cursor_screen_col = win.cursor.col -| win.viewport.left_col;
                 }
 
-                // Calculate effective height for ensureCursorVisible
-                // CRITICAL: This must match the render_height used in window_renderer
-                // to avoid viewport jumping when floating windows change statusline visibility
-                const effective_height = if (show_per_window_statusline or win.isFloating())
-                    win.height
-                else
-                    // Statusline hidden, so we have extra row for content
-                    @min(win.height + 1, self.terminal_rows -| win.screen_row -| 1);
-
-                // DEBUG: Log before ensureCursorVisible
-                const old_top = win.viewport.top_line;
-                std.log.debug("RENDER_START: win_id={d}, is_float={}, cursor={d}, top_line={d}, win.height={d}, effective_height={d}, has_floats={}", .{
-                    win.id.id,
-                    win.isFloating(),
-                    win.cursor.row,
-                    win.viewport.top_line,
-                    win.height,
-                    effective_height,
-                    has_floating_windows,
-                });
-
-                // Use effective_height instead of win.height for consistent viewport calculation
-                window_renderer.ensureCursorVisibleWithHeight(win, buffer, effective_height);
-
-                if (win.viewport.top_line != old_top) {
-                    std.log.debug("VIEWPORT_SCROLL: display.zig ensureCursorVisible: top_line {d} -> {d}, cursor={d}, effective_height={d}", .{
-                        old_top,
-                        win.viewport.top_line,
-                        win.cursor.row,
-                        effective_height,
-                    });
-                }
-
-                // BIDIRECTIONAL SYNC: Keep Display.viewport_top in sync with Window.viewport.top_line
-                // This ensures switching between multi-window and single-window render doesn't cause jumps
+                // Keep Display.viewport_top in sync with Window.viewport.top_line
+                // This is needed because layer_renderer still reads from Display.viewport_top.
+                // TODO: Pass viewport as parameter to layer_renderer to eliminate this dependency.
                 if (!win.isFloating()) {
                     self.viewport_top = win.viewport.top_line;
                 }
             }
         }
+
+        // Clear the skip flag after render (one-shot flag)
+        editor.skip_ensure_cursor_visible = false;
 
         // TWO-PASS RENDERING: Regular windows first, then floating windows
         // This ensures floating windows render ON TOP of regular windows.

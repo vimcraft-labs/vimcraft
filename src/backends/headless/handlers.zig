@@ -33,9 +33,9 @@ pub fn handleGetState(ctx: HandlerContext) !protocol.ResponseResult {
         }
     }
 
-    // Get viewport state from display
+    // Get viewport state from editor's window (canonical source)
     const viewport = protocol.ViewportState{
-        .top = ctx.display.viewport_top,
+        .top = ctx.editor.getViewportTop(),
         .left = ctx.display.viewport_left,
         .height = if (ctx.display.terminal_rows > 1)
             ctx.display.terminal_rows - 1

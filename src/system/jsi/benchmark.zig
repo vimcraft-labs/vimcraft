@@ -16,6 +16,7 @@ const c = c_api.c;
 const motion_api = @import("motion_api.zig");
 const host_object_builder = @import("host_object_builder.zig");
 const Buffer = @import("../../editor/buffer/buffer.zig").Buffer;
+const Editor = @import("../../editor/editor.zig").Editor;
 
 const WARMUP_ITERATIONS: usize = 10_000;
 const BENCHMARK_ITERATIONS: usize = 1_000_000;
@@ -39,18 +40,15 @@ const BenchmarkResult = struct {
 
 /// Benchmark 1: HostObject property lookup (via C API)
 fn benchmarkHostObjectPropertyLookup(runtime: *c.OVHermesRuntime, allocator: std.mem.Allocator) !BenchmarkResult {
-    // Setup
-    var buffer = Buffer.init(allocator);
-    defer buffer.deinit();
+    // Setup - use real Editor for proper context
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+    const buffer = editor.getCurrentBuffer() orelse return error.NoBuffer;
     try buffer.content.insert(0, "test\n");
 
-    var viewport_top: usize = 0;
-    var js_state_dirty: bool = false;
     var ctx = motion_api.MotionContext{
-        .buffer = &buffer,
-        .viewport_top = &viewport_top,
+        .editor = &editor,
         .viewport_height = 24,
-        .js_state_dirty = &js_state_dirty,
     };
 
     // Build HostObject VTable manually for direct C API benchmarking
@@ -110,18 +108,15 @@ fn benchmarkHostObjectPropertyLookup(runtime: *c.OVHermesRuntime, allocator: std
 
 /// Benchmark 2: Property enumeration speed
 fn benchmarkPropertyEnumeration(runtime: *c.OVHermesRuntime, allocator: std.mem.Allocator) !BenchmarkResult {
-    // Setup
-    var buffer = Buffer.init(allocator);
-    defer buffer.deinit();
+    // Setup - use real Editor for proper context
+    var editor = try Editor.init(allocator);
+    defer editor.deinit();
+    const buffer = editor.getCurrentBuffer() orelse return error.NoBuffer;
     try buffer.content.insert(0, "test\n");
 
-    var viewport_top: usize = 0;
-    var js_state_dirty: bool = false;
     var ctx = motion_api.MotionContext{
-        .buffer = &buffer,
-        .viewport_top = &viewport_top,
+        .editor = &editor,
         .viewport_height = 24,
-        .js_state_dirty = &js_state_dirty,
     };
 
     var builder = try host_object_builder.HostObjectBuilder.initComptime("motion", allocator);

@@ -51,9 +51,9 @@ fn setViewportSize(ctx: *EditorContext, height: usize, width: usize) void {
     ctx.display.terminal_cols = width;
 }
 
-/// Get current viewport top line
+/// Get current viewport top line (from editor's canonical window viewport)
 fn getViewportTop(ctx: *EditorContext) usize {
-    return ctx.display.viewport_top;
+    return ctx.editor.getViewportTop();
 }
 
 /// Get effective text rows (viewport height minus status line)

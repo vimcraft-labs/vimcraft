@@ -3,6 +3,7 @@
 /// Allows plugins to programmatically trigger cursor movement
 const std = @import("std");
 const Buffer = @import("../../editor/buffer/buffer.zig").Buffer;
+const Editor = @import("../../editor/editor.zig").Editor;
 const movement = @import("../../editor/movement/movement.zig");
 
 // Import shared Hermes C API
@@ -10,17 +11,24 @@ const c_api = @import("c_api.zig");
 const c = c_api.c;
 
 /// Context for motion API (passed to all motion functions)
+/// Stores pointer to Editor for accessing current buffer and viewport dynamically
 pub const MotionContext = struct {
-    buffer: *Buffer,
-    viewport_top: *usize, // Pointer to display's viewport_top
+    editor: *Editor,
     viewport_height: usize,
-    js_state_dirty: ?*bool, // Pointer to editor's js_state_dirty flag (null for EditorContext)
+
+    /// Get current buffer (always fresh, handles buffer switches)
+    pub fn getBuffer(self: *const MotionContext) ?*Buffer {
+        return self.editor.getCurrentBuffer();
+    }
+
+    /// Get viewport top from window (canonical source)
+    pub fn getViewportTop(self: *const MotionContext) usize {
+        return self.editor.getViewportTop();
+    }
 
     /// Mark editor state as dirty (triggers re-render in main loop)
-    inline fn markDirty(self: *const MotionContext) void {
-        if (self.js_state_dirty) |dirty_flag| {
-            dirty_flag.* = true;
-        }
+    pub fn markDirty(self: *const MotionContext) void {
+        self.editor.js_state_dirty = true;
     }
 };
 
@@ -39,8 +47,9 @@ pub export fn moveLeft(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    _ = movement.moveLeft(ctx.buffer);
+    _ = movement.moveLeft(buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -56,8 +65,9 @@ pub export fn moveRight(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    _ = movement.moveRight(ctx.buffer);
+    _ = movement.moveRight(buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -73,8 +83,9 @@ pub export fn moveUp(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    _ = movement.moveUp(ctx.buffer);
+    _ = movement.moveUp(buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -90,8 +101,9 @@ pub export fn moveDown(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    _ = movement.moveDown(ctx.buffer);
+    _ = movement.moveDown(buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -111,8 +123,9 @@ pub export fn moveToLineStart(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    movement.moveToLineStart(ctx.buffer);
+    movement.moveToLineStart(buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -128,8 +141,9 @@ pub export fn moveToLineEnd(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    movement.moveToLineEnd(ctx.buffer);
+    movement.moveToLineEnd(buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -145,8 +159,9 @@ pub export fn moveToFirstNonBlank(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    movement.moveToFirstNonBlank(ctx.buffer);
+    movement.moveToFirstNonBlank(buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -166,8 +181,9 @@ pub export fn moveWordForward(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    movement.moveWordForward(ctx.buffer);
+    movement.moveWordForward(buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -183,8 +199,9 @@ pub export fn moveWordBackward(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    movement.moveWordBackward(ctx.buffer);
+    movement.moveWordBackward(buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -200,8 +217,9 @@ pub export fn moveWordEnd(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    movement.moveWordEnd(ctx.buffer);
+    movement.moveWordEnd(buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -221,8 +239,9 @@ pub export fn moveToFileStart(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    movement.moveToFileStart(ctx.buffer);
+    movement.moveToFileStart(buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -238,8 +257,9 @@ pub export fn moveToFileEnd(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    movement.moveToFileEnd(ctx.buffer);
+    movement.moveToFileEnd(buffer);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -250,7 +270,7 @@ pub export fn moveToFileEnd(
 
 /// Move to top of viewport (H)
 /// Note: Uses start_of_line=false (preserve sticky column) - modern preferred behavior
-/// TODO: Add options_manager to MotionContext for full 'startofline' option support
+/// Uses Editor's window viewport as canonical source
 pub export fn moveToViewportTop(
     runtime_nullable: ?*c.OVHermesRuntime,
     context: ?*anyopaque,
@@ -261,8 +281,9 @@ pub export fn moveToViewportTop(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    movement.moveToViewportTop(ctx.buffer, ctx.viewport_top.*, false);
+    movement.moveToViewportTop(buffer, ctx.getViewportTop(), false);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -279,8 +300,9 @@ pub export fn moveToViewportMiddle(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    movement.moveToViewportMiddle(ctx.buffer, ctx.viewport_top.*, ctx.viewport_height, false);
+    movement.moveToViewportMiddle(buffer, ctx.getViewportTop(), ctx.viewport_height, false);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -297,8 +319,9 @@ pub export fn moveToViewportBottom(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    movement.moveToViewportBottom(ctx.buffer, ctx.viewport_top.*, ctx.viewport_height, false);
+    movement.moveToViewportBottom(buffer, ctx.getViewportTop(), ctx.viewport_height, false);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -318,8 +341,9 @@ pub export fn scrollHalfPageDown(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    movement.scrollHalfPageDown(ctx.buffer, ctx.viewport_height);
+    movement.scrollHalfPageDown(buffer, ctx.viewport_height);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
@@ -335,8 +359,9 @@ pub export fn scrollHalfPageUp(
     _ = arg_count;
     const runtime = runtime_nullable orelse return null;
     const ctx = @as(*MotionContext, @ptrCast(@alignCast(context.?)));
+    const buffer = ctx.getBuffer() orelse return c.hermes_value_create_undefined(runtime);
 
-    movement.scrollHalfPageUp(ctx.buffer, ctx.viewport_height);
+    movement.scrollHalfPageUp(buffer, ctx.viewport_height);
     ctx.markDirty();
     return c.hermes_value_create_undefined(runtime);
 }
